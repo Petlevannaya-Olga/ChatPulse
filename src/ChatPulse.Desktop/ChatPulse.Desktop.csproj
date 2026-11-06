@@ -3,8 +3,12 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Resources\ChatPulse.ico</ApplicationIcon>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Resources\ChatPulse.ico" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ChatPulse.Application\ChatPulse.Application.csproj" />
     <ProjectReference Include="..\ChatPulse.Infrastructure\ChatPulse.Infrastructure.csproj" />
