@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\ChatPulse.Contracts\ChatPulse.Contracts.csproj" />
+    <ProjectReference Include="..\ChatPulse.Domain\ChatPulse.Domain.csproj" />
+    <ProjectReference Include="..\ChatPulse.Shared\ChatPulse.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
+    <PackageReference Include="Scrutor" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+</Project>

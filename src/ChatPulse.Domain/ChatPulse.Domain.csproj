@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\ChatPulse.Shared\ChatPulse.Shared.csproj" />
+  </ItemGroup>
+</Project>

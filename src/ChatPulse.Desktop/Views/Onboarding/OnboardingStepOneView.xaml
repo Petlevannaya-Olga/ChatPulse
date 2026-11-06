@@ -1,0 +1,15 @@
+<UserControl x:Class="ChatPulse.Desktop.Views.Onboarding.OnboardingStepOneView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Пока намеренно пустой первый экран онбординга.
+         Поля и переходы появятся на следующем шаге разработки. -->
+    <Grid>
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Offset="0" Color="#FBF8FF" />
+                <GradientStop Offset="0.55" Color="#F5ECFF" />
+                <GradientStop Offset="1" Color="#FBE8F6" />
+            </LinearGradientBrush>
+        </Grid.Background>
+    </Grid>
+</UserControl>

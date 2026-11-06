@@ -1,0 +1,63 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Domain", "src\ChatPulse.Domain\ChatPulse.Domain.csproj", "{30558684-8E38-4533-88CF-7CB899C60772}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Application", "src\ChatPulse.Application\ChatPulse.Application.csproj", "{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Infrastructure", "src\ChatPulse.Infrastructure\ChatPulse.Infrastructure.csproj", "{8FF05FD5-EE93-46A1-884C-13FD78924066}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Desktop", "src\ChatPulse.Desktop\ChatPulse.Desktop.csproj", "{7D47A557-C8C0-4FC3-8441-5ACD67E07580}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{279FA96F-A257-49E0-A4FD-370B4142E290}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution items", "Solution items", "{4833DF09-E317-4538-B8F2-132A7CB2AFE1}"
+	ProjectSection(SolutionItems) = preProject
+		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
+		.editorconfig = .editorconfig
+		.globalconfig = .globalconfig
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Shared", "src\ChatPulse.Shared\ChatPulse.Shared.csproj", "{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Contracts", "src\ChatPulse.Contracts\ChatPulse.Contracts.csproj", "{92476A67-6F46-4882-AC52-B5E74AFA3065}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{30558684-8E38-4533-88CF-7CB899C60772}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{30558684-8E38-4533-88CF-7CB899C60772}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{30558684-8E38-4533-88CF-7CB899C60772}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{30558684-8E38-4533-88CF-7CB899C60772}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8FF05FD5-EE93-46A1-884C-13FD78924066}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8FF05FD5-EE93-46A1-884C-13FD78924066}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8FF05FD5-EE93-46A1-884C-13FD78924066}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8FF05FD5-EE93-46A1-884C-13FD78924066}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D47A557-C8C0-4FC3-8441-5ACD67E07580}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D47A557-C8C0-4FC3-8441-5ACD67E07580}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D47A557-C8C0-4FC3-8441-5ACD67E07580}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D47A557-C8C0-4FC3-8441-5ACD67E07580}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27}.Release|Any CPU.Build.0 = Release|Any CPU
+		{92476A67-6F46-4882-AC52-B5E74AFA3065}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{92476A67-6F46-4882-AC52-B5E74AFA3065}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{92476A67-6F46-4882-AC52-B5E74AFA3065}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{92476A67-6F46-4882-AC52-B5E74AFA3065}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{7D47A557-C8C0-4FC3-8441-5ACD67E07580} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+		{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+		{30558684-8E38-4533-88CF-7CB899C60772} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+		{8FF05FD5-EE93-46A1-884C-13FD78924066} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+		{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+		{92476A67-6F46-4882-AC52-B5E74AFA3065} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+	EndGlobalSection
+EndGlobal

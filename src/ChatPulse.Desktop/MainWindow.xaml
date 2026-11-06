@@ -1,0 +1,18 @@
+<Window x:Class="ChatPulse.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:onboarding="clr-namespace:ChatPulse.Desktop.Views.Onboarding"
+        Title="ChatPulse — Пульс ваших чатов"
+        Width="1440" Height="900"
+        MinWidth="950" MinHeight="620"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+    <Grid>
+        <onboarding:WelcomeView x:Name="WelcomeScreen"
+                                StartRequested="WelcomeScreen_OnStartRequested" />
+        <onboarding:OnboardingStepOneView x:Name="FirstStepScreen"
+                                         Visibility="Collapsed" />
+    </Grid>
+</Window>

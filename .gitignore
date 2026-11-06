@@ -1,0 +1,11 @@
+bin/
+obj/
+/packages/
+.idea/
+.env
+.env.*
+!.env.example
+riderModule.iml
+/_ReSharper.Caches/
+*.user
+*.suo
