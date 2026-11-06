@@ -1,6 +1,7 @@
 using ChatPulse.Application.Services;
 using ChatPulse.Infrastructure.Persistence;
 using ChatPulse.Infrastructure.Services;
+using ChatPulse.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -18,6 +19,8 @@ public static class DependencyInjection
             options.UseSqlite($"Data Source={databasePath}"));
 
         services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
+        services.AddSingleton<ITelegramAuthenticationClient>(
+            _ => new WTelegramAuthenticationClient(Path.GetDirectoryName(databasePath)!));
 
         return services;
     }

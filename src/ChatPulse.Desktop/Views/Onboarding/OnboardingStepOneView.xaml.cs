@@ -20,6 +20,11 @@ public partial class OnboardingStepOneView : UserControl
 
     public string DisplayName => _viewModel.Name.Trim();
 
+    public void RestoreName(string? savedName)
+    {
+        _viewModel.Name = savedName ?? string.Empty;
+    }
+
     public void FocusName()
     {
         Dispatcher.BeginInvoke(new Action(() => NameInput.Focus()));

@@ -21,7 +21,11 @@
                                          Visibility="Collapsed" />
         <onboarding:OnboardingStepTwoView x:Name="SecondStepScreen"
                                          BackRequested="SecondStepScreen_OnBackRequested"
+                                         ContinueRequested="SecondStepScreen_OnContinueRequested"
                                          Visibility="Collapsed" />
+        <onboarding:OnboardingStepThreeView x:Name="ThirdStepScreen"
+                                           BackRequested="ThirdStepScreen_OnBackRequested"
+                                           Visibility="Collapsed" />
 
         <!-- Затемнение родительского окна, как в Mnemora. -->
         <Border x:Name="DialogOverlay"

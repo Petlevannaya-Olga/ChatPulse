@@ -217,7 +217,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <Border Grid.Row="0" MaxWidth="720" Height="362" Margin="0,8,0,0"
+            <Border Grid.Row="0" MaxWidth="720" Height="384" Margin="0,8,0,0"
                     Background="White" CornerRadius="22"
                     HorizontalAlignment="Stretch" VerticalAlignment="Center">
             <Border.Effect>
@@ -228,7 +228,7 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <StackPanel Grid.Row="0" Margin="48,14,48,0">
+                <StackPanel Grid.Row="0" Margin="48,20,48,0">
                         <Grid Width="72" Height="72" HorizontalAlignment="Center">
                             <Ellipse Fill="#F5EEFF" Stroke="#A74BF0" StrokeThickness="2.5" />
                             <!-- Пока имя не введено — нейтральная иконка пользователя вместо «?». -->
@@ -307,7 +307,7 @@
                                    Margin="0,10,0,0" />
                 </StackPanel>
                 <Border Grid.Row="1" BorderBrush="#E6DFF3" BorderThickness="0,1,0,0"
-                        Padding="42,12">
+                        Padding="42,20">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
