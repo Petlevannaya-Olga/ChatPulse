@@ -21,6 +21,29 @@ public partial class MainWindow : Window
         Title = "ChatPulse — Онбординг: шаг 1";
     }
 
+    private void FirstStepScreen_OnBackRequested(object sender, EventArgs e)
+    {
+        FirstStepScreen.Visibility = Visibility.Collapsed;
+        WelcomeScreen.Visibility = Visibility.Visible;
+        Title = "ChatPulse — Пульс ваших чатов";
+    }
+
+    private void FirstStepScreen_OnContinueRequested(object sender, EventArgs e)
+    {
+        // Имя сохраняется в ViewModel первого шага до завершения работы окна.
+        // Telegram будет подключаться на следующем этапе разработки.
+        FirstStepScreen.Visibility = Visibility.Collapsed;
+        SecondStepScreen.Visibility = Visibility.Visible;
+        Title = "ChatPulse — Онбординг: шаг 2";
+    }
+
+    private void SecondStepScreen_OnBackRequested(object sender, EventArgs e)
+    {
+        SecondStepScreen.Visibility = Visibility.Collapsed;
+        FirstStepScreen.Visibility = Visibility.Visible;
+        Title = "ChatPulse — Онбординг: шаг 1";
+    }
+
     // Будущий последний шаг онбординга вызовет этот метод после успешного
     // сохранения профиля, авторизации Telegram и подключения хотя бы одного чата.
     public void MarkOnboardingCompleted()

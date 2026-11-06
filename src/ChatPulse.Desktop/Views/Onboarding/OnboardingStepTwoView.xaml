@@ -1,0 +1,31 @@
+<UserControl x:Class="ChatPulse.Desktop.Views.Onboarding.OnboardingStepTwoView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <!-- Шаг 2 пока заглушка. Подключение Telegram будет отдельным патчем. -->
+    <Grid>
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0.2" EndPoint="1,0.8">
+                <GradientStop Offset="0" Color="#171038" />
+                <GradientStop Offset="0.48" Color="#26144E" />
+                <GradientStop Offset="1" Color="#401365" />
+            </LinearGradientBrush>
+        </Grid.Background>
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="650">
+            <TextBlock Text="Шаг 2 из 3 — Telegram" Foreground="White"
+                       FontWeight="SemiBold" FontSize="28" TextAlignment="Center" />
+            <TextBlock Text="Подключение Telegram добавим на следующем этапе."
+                       FontSize="17" Foreground="#E4DEFF" TextAlignment="Center"
+                       Margin="0,18,0,28" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button Content="← Назад" Width="150" Height="48"
+                        Click="BackButton_OnClick" Cursor="Hand" FontSize="16"
+                        Background="#874DE9" Foreground="White" BorderThickness="0"
+                        Margin="0,0,16,0" />
+                <Button Content="Выйти" Width="150" Height="48"
+                        Click="ExitButton_OnClick" Cursor="Hand" FontSize="16"
+                        Background="#46276F" Foreground="White" BorderThickness="0" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</UserControl>

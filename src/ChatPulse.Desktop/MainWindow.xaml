@@ -16,6 +16,11 @@
         <onboarding:WelcomeView x:Name="WelcomeScreen"
                                 StartRequested="WelcomeScreen_OnStartRequested" />
         <onboarding:OnboardingStepOneView x:Name="FirstStepScreen"
+                                         BackRequested="FirstStepScreen_OnBackRequested"
+                                         ContinueRequested="FirstStepScreen_OnContinueRequested"
+                                         Visibility="Collapsed" />
+        <onboarding:OnboardingStepTwoView x:Name="SecondStepScreen"
+                                         BackRequested="SecondStepScreen_OnBackRequested"
                                          Visibility="Collapsed" />
 
         <!-- Затемнение родительского окна, как в Mnemora. -->
