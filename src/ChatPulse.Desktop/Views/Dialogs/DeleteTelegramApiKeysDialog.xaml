@@ -1,0 +1,86 @@
+<Window x:Class="ChatPulse.Desktop.Views.Dialogs.DeleteTelegramApiKeysDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Удаление API-ключей — ChatPulse"
+        Width="600" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner" FontFamily="Segoe UI"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <Style x:Key="DialogButton" TargetType="Button">
+            <Setter Property="Height" Value="46"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.75"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid Margin="24">
+        <Border Background="White" CornerRadius="20" Padding="32,28">
+            <Border.Effect>
+                <DropShadowEffect Color="#18083A" BlurRadius="28" ShadowDepth="8" Opacity="0.32"/>
+            </Border.Effect>
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="48" Height="48" Background="#FFF0F4" CornerRadius="24">
+                        <TextBlock Text="!" FontSize="25" FontWeight="Bold"
+                                   Foreground="#B54865" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="15,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="Удалить API-ключи?" Foreground="#24154C"
+                                   FontSize="21" FontWeight="Bold"/>
+                        <TextBlock Text="Подтвердите удаление локальных данных"
+                                   Foreground="#796C98" FontSize="14" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Grid>
+                <TextBlock Margin="0,21,0,0" FontSize="15" LineHeight="22"
+                           Foreground="#39295F" TextWrapping="Wrap"
+                           Text="ChatPulse удалит сохранённые API ID, API Hash и локальную Telegram-сессию. Для нового подключения потребуется снова ввести ключи и пройти вход в Telegram."/>
+                <TextBlock Margin="0,11,0,0" FontSize="13" Foreground="#796C98"
+                           TextWrapping="Wrap"
+                           Text="Это удаление только на компьютере. Завершить действующую сессию на стороне Telegram можно в Telegram → Настройки → Устройства."/>
+                <Grid Margin="0,23,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Отмена" IsDefault="True"
+                            Background="#F5F0FF" Foreground="#39235C"
+                            BorderThickness="0" Style="{StaticResource DialogButton}"
+                            Click="Cancel_OnClick"/>
+                    <Button Grid.Column="2" Content="Удалить ключи"
+                            Background="#BB496A" Foreground="White"
+                            BorderThickness="0" Style="{StaticResource DialogButton}"
+                            Click="Delete_OnClick"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

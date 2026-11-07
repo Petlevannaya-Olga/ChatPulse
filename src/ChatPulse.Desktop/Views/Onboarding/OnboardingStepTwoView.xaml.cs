@@ -1,8 +1,10 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
+using ChatPulse.Desktop.Settings;
 using ChatPulse.Desktop.ViewModels;
 using ChatPulse.Desktop.Views.Dialogs;
 
@@ -13,10 +15,23 @@ public partial class OnboardingStepTwoView : UserControl
     private const int LocalPhoneLength = 10;
     private string _localDigits = string.Empty;
     private bool _isFormattingPhone;
+    private TelegramOnboardingPage _currentPage = TelegramOnboardingPage.ApiCredentials;
+    private readonly DispatcherTimer _resendTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
     public OnboardingStepTwoView()
     {
         InitializeComponent();
+        _resendTimer.Tick += (_, _) =>
+        {
+            if (DataContext is not TelegramSetupViewModel vm) return;
+            vm.RefreshResendCountdown();
+            if (vm.CanResendCode || !vm.HasResendOption) _resendTimer.Stop();
+        };
+        Loaded += (_, _) =>
+        {
+            if (DataContext is TelegramSetupViewModel vm) UpdateResendTimer(vm);
+        };
+        Unloaded += (_, _) => _resendTimer.Stop();
         DataObject.AddPastingHandler(PhoneInput, PhoneInput_OnPasting);
         DataObject.AddPastingHandler(ApiIdInput, ApiIdInput_OnPasting);
         DataContextChanged += (_, args) =>
@@ -32,6 +47,7 @@ public partial class OnboardingStepTwoView : UserControl
                     : string.Empty;
                 SetPhoneDigits(stored[..Math.Min(stored.Length, LocalPhoneLength)], stored.Length);
                 UpdatePanels(vm);
+                RefreshApiCredentialsSaveState();
             }
         };
         RefreshPhonePlaceholder();
@@ -39,6 +55,37 @@ public partial class OnboardingStepTwoView : UserControl
 
     public event EventHandler? BackRequested;
     public event EventHandler? ContinueRequested;
+    public event Action<TelegramOnboardingPage>? TelegramPageRequested;
+
+    public void ShowTelegramPage(TelegramOnboardingPage page)
+    {
+        if (DataContext is not TelegramSetupViewModel vm) return;
+
+        _currentPage = page == TelegramOnboardingPage.Phone && !vm.IsApiConfigured
+            ? TelegramOnboardingPage.ApiCredentials : page;
+
+        // Навигация не должна открывать редактирование сохранённых секретов.
+        vm.CancelEditApiCredentials();
+        ApiIdInput.Clear();
+        ApiHashInput.Clear();
+        RefreshApiCredentialsSaveState();
+        UpdatePanels(vm);
+    }
+
+    // Both fields use the same FluentValidation rules as the command decorator.
+    // The password is read only to evaluate the draft and is not retained by the ViewModel.
+    private void ApiIdInput_OnTextChanged(object sender, TextChangedEventArgs e)
+        => RefreshApiCredentialsSaveState();
+
+    private void ApiHashInput_OnPasswordChanged(object sender, RoutedEventArgs e)
+        => RefreshApiCredentialsSaveState();
+
+    private void RefreshApiCredentialsSaveState()
+    {
+        if (ApiIdInput is null || ApiHashInput is null) return;
+        if (DataContext is TelegramSetupViewModel vm)
+            vm.UpdateApiCredentialsDraftValidity(ApiIdInput.Text, ApiHashInput.Password);
+    }
 
     // Restrict what the TextBox accepts; semantic API ID validation remains in FluentValidation.
     private void ApiIdInput_OnPreviewTextInput(object sender, TextCompositionEventArgs e)
@@ -224,6 +271,14 @@ public partial class OnboardingStepTwoView : UserControl
         UpdatePanels(vm);
     }
 
+    private async void ResendCodeButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm || !vm.CanResendCode) return;
+        ConfirmationInput.Clear();
+        await vm.ResendCodeAsync();
+        UpdatePanels(vm);
+    }
+
     private void ViewModel_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (sender is TelegramSetupViewModel vm &&
@@ -241,31 +296,97 @@ public partial class OnboardingStepTwoView : UserControl
     private void UpdatePanels(TelegramSetupViewModel vm)
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => UpdatePanels(vm)); return; }
-        var showApi = !vm.IsApiConfigured || vm.IsEditingApiCredentials;
+        var showApi = _currentPage == TelegramOnboardingPage.ApiCredentials || !vm.IsApiConfigured;
         ApiKeysPanel.Visibility = showApi ? Visibility.Visible : Visibility.Collapsed;
+        ApiCredentialsEntryPanel.Visibility = !vm.IsApiConfigured || vm.IsEditingApiCredentials
+            ? Visibility.Visible : Visibility.Collapsed;
+        ApiSavedPanel.Visibility = vm.IsApiConfigured && !vm.IsEditingApiCredentials
+            ? Visibility.Visible : Visibility.Collapsed;
         PhonePanel.Visibility = !showApi && !vm.IsAwaitingInput && !vm.IsAuthorized
             ? Visibility.Visible : Visibility.Collapsed;
         ConfirmPanel.Visibility = !showApi && vm.IsAwaitingInput
             ? Visibility.Visible : Visibility.Collapsed;
         ConnectedPanel.Visibility = !showApi && vm.IsAuthorized
             ? Visibility.Visible : Visibility.Collapsed;
-        PhoneEditApiButton.Visibility = vm.CanEditApiCredentials
-            ? Visibility.Visible : Visibility.Collapsed;
         ApiCancelButton.Visibility = vm.IsApiConfigured && vm.IsEditingApiCredentials
             ? Visibility.Visible : Visibility.Collapsed;
         PasswordInput.Visibility = vm.IsPasswordRequired ? Visibility.Visible : Visibility.Collapsed;
         ConfirmationInput.Visibility = vm.IsPasswordRequired ? Visibility.Collapsed : Visibility.Visible;
+        TelegramHelpButton.Visibility = !showApi && !vm.IsAuthorized ? Visibility.Visible : Visibility.Collapsed;
+        // Один переход «Продолжить» для двух подэтапов:
+        // сохранённые ключи -> номер Telegram; успешный вход -> первый чат.
+        TelegramContinueButton.IsEnabled = !vm.IsBusy &&
+            (showApi
+                ? vm.IsApiConfigured && !vm.IsEditingApiCredentials
+                : vm.IsAuthorized);
+        UpdateResendTimer(vm);
+    }
+
+    private void UpdateResendTimer(TelegramSetupViewModel vm)
+    {
+        if (_currentPage == TelegramOnboardingPage.Phone && IsLoaded &&
+            vm.HasResendOption && !vm.CanResendCode && !vm.IsBusy)
+        {
+            _resendTimer.Start();
+        }
+        else
+        {
+            _resendTimer.Stop();
+        }
+        vm.RefreshResendCountdown();
     }
 
     private async void ApiKeysSaveButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
+        // Замена ключей сбрасывает действующую сессию. Сначала спрашиваем согласие,
+        // при отмене оставляем введённые значения и действующую авторизацию.
+        if (vm.IsAuthorized &&
+            !ShowModal(new TelegramSessionActionDialog(TelegramSessionAction.ChangeApiKeys)))
+            return;
+
         var saved = await vm.SaveApiCredentialsAsync(ApiIdInput.Text, ApiHashInput.Password);
         if (saved)
         {
             ApiIdInput.Clear();
             ApiHashInput.Clear();
+            TelegramPageRequested?.Invoke(TelegramOnboardingPage.Phone);
         }
+        UpdatePanels(vm);
+    }
+
+    private async void ApiKeysDeleteButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm || !vm.CanDeleteApiCredentials)
+            return;
+
+        if (!ShowModal(new DeleteTelegramApiKeysDialog())) return;
+
+        if (!await vm.DeleteApiCredentialsAsync()) return;
+
+        ApiIdInput.Clear();
+        ApiHashInput.Clear();
+        vm.CancelEditApiCredentials();
+        TelegramPageRequested?.Invoke(TelegramOnboardingPage.ApiCredentials);
+        UpdatePanels(vm);
+    }
+
+    private async void ResetTelegramSessionButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm || !vm.CanResetTelegramSession)
+            return;
+
+        if (!ShowModal(new TelegramSessionActionDialog(TelegramSessionAction.ResetSession)))
+            return;
+
+        if (!await vm.ResetTelegramSessionAsync())
+        {
+            UpdatePanels(vm);
+            return;
+        }
+
+        ConfirmationInput.Clear();
+        PasswordInput.Clear();
         UpdatePanels(vm);
     }
 
@@ -297,7 +418,9 @@ public partial class OnboardingStepTwoView : UserControl
         ShowHelp(new TelegramHelpDialog());
     }
 
-    private void ShowHelp(Window dialog)
+    private void ShowHelp(Window dialog) => ShowModal(dialog);
+
+    private bool ShowModal(Window dialog)
     {
         var owner = Window.GetWindow(this);
         dialog.Owner = owner;
@@ -305,25 +428,50 @@ public partial class OnboardingStepTwoView : UserControl
         if (owner is MainWindow mainWindow)
         {
             mainWindow.ShowDialogOverlay();
-
-            try
-            {
-                dialog.ShowDialog();
-            }
-            finally
-            {
-                mainWindow.HideDialogOverlay();
-            }
-
-            return;
+            try { return dialog.ShowDialog() == true; }
+            finally { mainWindow.HideDialogOverlay(); }
         }
 
-        dialog.ShowDialog();
+        return dialog.ShowDialog() == true;
     }
 
     private void BackButton_OnClick(object sender, RoutedEventArgs e)
-        => BackRequested?.Invoke(this, EventArgs.Empty);
+    {
+        if (DataContext is not TelegramSetupViewModel vm || vm.IsBusy) return;
+
+        if (_currentPage == TelegramOnboardingPage.Phone)
+        {
+            // При незавершённой проверке кода нельзя тихо показывать поле номера:
+            // состояние авторизации осталось бы активным в WTelegramClient.
+            if (vm.IsAwaitingInput)
+            {
+                ShowModal(new TelegramLoginInProgressDialog());
+                return;
+            }
+            TelegramPageRequested?.Invoke(TelegramOnboardingPage.ApiCredentials);
+            return;
+        }
+
+        // На странице ключей «Назад» всегда возвращает к имени.
+        // Черновик секретов очищаем, сохранённые ключи при этом не меняются.
+        ApiIdInput.Clear();
+        ApiHashInput.Clear();
+        vm.CancelEditApiCredentials();
+        BackRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     private void ContinueButton_OnClick(object sender, RoutedEventArgs e)
-        => ContinueRequested?.Invoke(this, EventArgs.Empty);
+    {
+        if (DataContext is not TelegramSetupViewModel vm || vm.IsBusy) return;
+
+        if (_currentPage == TelegramOnboardingPage.ApiCredentials)
+        {
+            if (vm.IsApiConfigured && !vm.IsEditingApiCredentials)
+                TelegramPageRequested?.Invoke(TelegramOnboardingPage.Phone);
+            return;
+        }
+
+        if (_currentPage == TelegramOnboardingPage.Phone && vm.IsAuthorized)
+            ContinueRequested?.Invoke(this, EventArgs.Empty);
+    }
 }

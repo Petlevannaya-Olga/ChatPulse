@@ -55,7 +55,13 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         {
             settings.UserName = userName.Trim();
             settings.CurrentOnboardingStep = step;
+            if (step == OnboardingStep.Telegram)
+                settings.CurrentTelegramPage = TelegramOnboardingPage.ApiCredentials;
         }, cancellationToken);
+
+    public Task SaveTelegramPageAsync(
+        TelegramOnboardingPage page, CancellationToken cancellationToken = default)
+        => UpdateAsync(settings => settings.CurrentTelegramPage = page, cancellationToken);
 
     public Task CompleteOnboardingAsync(CancellationToken cancellationToken = default)
         => UpdateAsync(settings => settings.IsOnboardingCompleted = true, cancellationToken);

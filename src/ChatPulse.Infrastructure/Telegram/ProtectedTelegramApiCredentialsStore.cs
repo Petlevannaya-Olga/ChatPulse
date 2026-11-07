@@ -83,4 +83,16 @@ public sealed class ProtectedTelegramApiCredentialsStore(string dataDirectory)
         }
         finally { _gate.Release(); }
     }
+
+    public async Task DeleteAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Local deletion only: Telegram-side revocation is a different operation.
+            File.Delete(_path);
+            File.Delete(_path + ".tmp");
+        }
+        finally { _gate.Release(); }
+    }
 }

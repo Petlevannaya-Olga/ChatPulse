@@ -14,6 +14,7 @@ public partial class MainWindow : Window
     private readonly ISettingsService _settings;
     private readonly TelegramSetupViewModel _telegramSetup;
     private readonly ILogger<MainWindow> _logger;
+    private TelegramOnboardingPage _telegramPage = TelegramOnboardingPage.ApiCredentials;
     private bool _isCloseConfirmed;
     private bool _isOnboardingCompleted;
 
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
         _telegramSetup = telegramSetup;
         _logger = logger;
         SecondStepScreen.DataContext = telegramSetup;
+        SecondStepScreen.TelegramPageRequested += SecondStepScreen_OnTelegramPageRequested;
     }
 
     /// <summary>
@@ -47,6 +49,19 @@ public partial class MainWindow : Window
                 "Не удалось прочитать сохранённые Telegram API-ключи. Проверьте учётную запись Windows.",
                 "ChatPulse — Ключи Telegram", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        // API-ключи и пользовательская сессия независимы. Восстанавливаем
+        // подтверждённую авторизацию до выбора экрана онбординга.
+        await _telegramSetup.RestoreSessionAsync(cancellationToken);
+
+        _telegramPage = Enum.IsDefined(settings.CurrentTelegramPage)
+            ? settings.CurrentTelegramPage : TelegramOnboardingPage.ApiCredentials;
+        if (!_telegramSetup.IsApiConfigured && _telegramPage == TelegramOnboardingPage.Phone)
+        {
+            // Нельзя восстановить ввод номера, если API-ключи отсутствуют.
+            _telegramPage = TelegramOnboardingPage.ApiCredentials;
+            await _settings.SaveTelegramPageAsync(_telegramPage, cancellationToken);
+        }
+
         _isOnboardingCompleted = settings.IsOnboardingCompleted;
         FirstStepScreen.RestoreName(settings.UserName);
 
@@ -63,8 +78,28 @@ public partial class MainWindow : Window
             step = OnboardingStep.Profile;
         }
 
-        // Главный экран будет реализован после настройки чатов. Пока онбординг
-        // можно завершить только будущим сценарием сохранения первого чата.
+        // Не предлагаем заново войти в Telegram после успешного восстановления.
+        // На шаге 3 пока остаётся заглушка для настройки первого чата.
+        if (_telegramSetup.IsAuthorized)
+        {
+            _telegramPage = TelegramOnboardingPage.Phone;
+            if (settings.CurrentTelegramPage != TelegramOnboardingPage.Phone)
+                await _settings.SaveTelegramPageAsync(_telegramPage, cancellationToken);
+
+            if (step == OnboardingStep.Telegram)
+            {
+                step = OnboardingStep.FirstChat;
+                await _settings.SaveOnboardingStepAsync(step, cancellationToken);
+            }
+        }
+        else if (step == OnboardingStep.FirstChat)
+        {
+            // Пока авторизация не проверена, не пропускаем обязательный шаг.
+            step = OnboardingStep.Telegram;
+            await _settings.SaveOnboardingStepAsync(step, cancellationToken);
+        }
+
+        // Главный экран будет реализован после настройки чатов.
         ShowStep(step);
     }
 
@@ -78,6 +113,9 @@ public partial class MainWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         ThirdStepScreen.Visibility = step == OnboardingStep.FirstChat
             ? Visibility.Visible : Visibility.Collapsed;
+
+        if (step == OnboardingStep.Telegram)
+            SecondStepScreen.ShowTelegramPage(_telegramPage);
 
         Title = step switch
         {
@@ -117,7 +155,27 @@ public partial class MainWindow : Window
         {
             await _settings.SaveUserNameAndStepAsync(
                 FirstStepScreen.DisplayName, OnboardingStep.Telegram);
+            // После перехода из «О себе» начинаем с API-ключей, даже если они сохранены:
+            // тогда предлагаем продолжить без повторного ввода секрета.
+            _telegramPage = TelegramOnboardingPage.ApiCredentials;
             ShowStep(OnboardingStep.Telegram);
+        }
+        catch (Exception exception) when (IsSettingsError(exception))
+        {
+            ShowSettingsError(exception);
+        }
+    }
+
+    private async void SecondStepScreen_OnTelegramPageRequested(TelegramOnboardingPage page)
+    {
+        if (page == TelegramOnboardingPage.Phone && !_telegramSetup.IsApiConfigured)
+            return;
+
+        try
+        {
+            await _settings.SaveTelegramPageAsync(page);
+            _telegramPage = page;
+            SecondStepScreen.ShowTelegramPage(page);
         }
         catch (Exception exception) when (IsSettingsError(exception))
         {

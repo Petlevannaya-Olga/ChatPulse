@@ -8,4 +8,5 @@ public interface ITelegramApiCredentialsStore
     Task<bool> IsConfiguredAsync(CancellationToken cancellationToken = default);
     Task<TelegramApiCredentials?> LoadAsync(CancellationToken cancellationToken = default);
     Task SaveAsync(TelegramApiCredentials credentials, CancellationToken cancellationToken = default);
+    Task DeleteAsync(CancellationToken cancellationToken = default);
 }

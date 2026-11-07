@@ -1,0 +1,83 @@
+<Window x:Class="ChatPulse.Desktop.Views.Dialogs.TelegramLoginInProgressDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ChatPulse — Подключение Telegram"
+        Width="560" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner" FontFamily="Segoe UI"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <LinearGradientBrush x:Key="PrimaryBrush" StartPoint="0,0" EndPoint="1,0.1">
+            <GradientStop Offset="0" Color="#7545F9" />
+            <GradientStop Offset="0.53" Color="#BA35E8" />
+            <GradientStop Offset="1" Color="#FB239D" />
+        </LinearGradientBrush>
+        <Style x:Key="PrimaryDialogButton" TargetType="Button">
+            <Setter Property="Height" Value="48" />
+            <Setter Property="Width" Value="180" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9"
+                                Background="{StaticResource PrimaryBrush}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.75" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid Margin="24">
+        <Border Background="White" CornerRadius="20" Padding="30,28">
+            <Border.Effect>
+                <DropShadowEffect Color="#18083A" BlurRadius="28"
+                                  ShadowDepth="8" Opacity="0.32" />
+            </Border.Effect>
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="48" Height="48" CornerRadius="24"
+                            Background="#F5EEFF" BorderBrush="#A74BF0"
+                            BorderThickness="1.5">
+                        <TextBlock Text="i" FontSize="25" FontWeight="Bold"
+                                   Foreground="#8241D8" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="15,0,0,0"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="Подключение Telegram" FontSize="21"
+                                   FontWeight="Bold" Foreground="#24154C" />
+                        <TextBlock Text="Авторизация не завершена" FontSize="14"
+                                   Foreground="#796C98" Margin="0,4,0,0" />
+                    </StackPanel>
+                </Grid>
+                <TextBlock Text="Вход в Telegram ещё не завершён. Сначала подтвердите вход кодом."
+                           FontSize="15" LineHeight="22" TextWrapping="Wrap"
+                           Foreground="#39295F" Margin="0,20,0,0" />
+                <TextBlock Text="Возможность отменить начатую авторизацию добавим отдельно."
+                           FontSize="13" TextWrapping="Wrap"
+                           Foreground="#796C98" Margin="0,10,0,0" />
+                <Button Content="Понятно" Style="{StaticResource PrimaryDialogButton}"
+                        HorizontalAlignment="Right" Margin="0,24,0,0"
+                        IsDefault="True" Click="CloseButton_OnClick" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

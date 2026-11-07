@@ -11,5 +11,8 @@ public interface ISettingsService
         string userName, OnboardingStep step,
         CancellationToken cancellationToken = default);
 
+    Task SaveTelegramPageAsync(
+        TelegramOnboardingPage page, CancellationToken cancellationToken = default);
+
     Task CompleteOnboardingAsync(CancellationToken cancellationToken = default);
 }
