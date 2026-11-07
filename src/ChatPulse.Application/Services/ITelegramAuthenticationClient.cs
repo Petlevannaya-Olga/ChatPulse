@@ -7,4 +7,5 @@ public interface ITelegramAuthenticationClient
 {
     Task<TelegramLoginProgress> BeginLoginAsync(string phoneNumber, CancellationToken cancellationToken);
     Task<TelegramLoginProgress> ContinueLoginAsync(string input, CancellationToken cancellationToken);
+    Task ResetSessionAsync(CancellationToken cancellationToken);
 }

@@ -270,7 +270,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <Border Grid.Row="0" MaxWidth="720" Height="516" Margin="0,8,0,0"
+            <Border Grid.Row="0" MaxWidth="720" Height="564" Margin="0,8,0,0"
                     Background="White" CornerRadius="22"
                     HorizontalAlignment="Stretch" VerticalAlignment="Center">
                 <Border.Effect>
@@ -294,6 +294,60 @@
                         <TextBlock Text="Один аккаунт для всех ваших чатов" FontSize="17"
                                    Foreground="{StaticResource TextSecondary}" TextAlignment="Center"
                                    Margin="0,2,0,0" />
+
+                        <!-- Личные API-параметры: отдельный этап внутри шага 2.
+                             В settings.json не храним секреты. -->
+                        <StackPanel x:Name="ApiKeysPanel" Margin="0,9,0,0" Visibility="Visible">
+                            <!-- Help is a link next to API configuration, not a second button below the form. -->
+                            <Button Click="ApiKeysHelpButton_OnClick" Background="Transparent"
+                                    BorderThickness="0" Margin="0,0,0,8"
+                                    HorizontalAlignment="Center" Cursor="Hand"
+                                    FocusVisualStyle="{x:Null}"
+                                    ToolTip="Пошаговая инструкция по получению API ID и API Hash">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <!-- Simple open-book outline, consistent with the violet ChatPulse accents. -->
+                                            <Path Data="M 12,6 C 9,4 6,4 2,4 L 2,18 C 6,18 9,18 12,20 M 12,6 C 15,4 18,4 22,4 L 22,18 C 18,18 15,18 12,20 M 12,6 L 12,20"
+                                                  Width="19" Height="19" Stretch="Uniform"
+                                                  Stroke="#7A32C8" StrokeThickness="1.8"
+                                                  StrokeLineJoin="Round" StrokeStartLineCap="Round"
+                                                  StrokeEndLineCap="Round"
+                                                  Margin="0,0,7,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="HelpLinkText"
+                                                       Text="Как получить API ID и API Hash?"
+                                                       Foreground="#7A32C8" FontSize="14"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="HelpLinkText" Property="TextDecorations" Value="Underline" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <TextBlock Text="API ID" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" />
+                            <TextBox x:Name="ApiIdInput" Style="{StaticResource ProfileTextBox}"
+                                     Padding="12,0,12,0" MaxLength="10"
+                                     InputMethod.IsInputMethodEnabled="False"
+                                     PreviewTextInput="ApiIdInput_OnPreviewTextInput"
+                                     ToolTip="Только цифры. API ID выдаёт Telegram." />
+                            <TextBlock Text="API Hash" FontSize="15" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}" Margin="0,9,0,4" />
+                            <PasswordBox x:Name="ApiHashInput" Style="{StaticResource ProfilePasswordBox}"
+                                         MaxLength="32" />
+                            <TextBlock Text="Ключи сохраняются только на этом компьютере."
+                                       Foreground="{StaticResource TextSecondary}" FontSize="13"
+                                       Margin="0,5,0,0" />
+                            <Button Content="Сохранить ключи" Click="ApiKeysSaveButton_OnClick"
+                                    Style="{StaticResource ContinueButtonStyle}" IsEnabled="{Binding CanSaveApiCredentials}"
+                                    HorizontalAlignment="Stretch" Margin="0,9,0,0" />
+                            <Button x:Name="ApiCancelButton" Content="Отмена" Click="ApiKeysCancelButton_OnClick"
+                                    Style="{StaticResource OutlineBackButton}" Margin="0,3,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed" />
+                        </StackPanel>
 
                         <!-- Each state replaces the previous one; no duplicate phone/code inputs. -->
                         <StackPanel x:Name="PhonePanel" Margin="0,10,0,0">
@@ -356,6 +410,11 @@
                                     Style="{StaticResource ContinueButtonStyle}"
                                     HorizontalAlignment="Stretch" Margin="0,8,0,0"
                                     Content="Получить код" />
+                            <Button x:Name="PhoneEditApiButton" Content="Изменить API-ключи"
+                                    Click="ApiKeysEditButton_OnClick"
+                                    Background="Transparent" BorderThickness="0" Foreground="#7A32C8"
+                                    FontSize="13" Cursor="Hand" FocusVisualStyle="{x:Null}"
+                                    HorizontalAlignment="Center" Margin="0,6,0,0" />
                         </StackPanel>
 
                         <StackPanel x:Name="ConfirmPanel" Margin="0,10,0,0"
@@ -396,12 +455,25 @@
                                            Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}" />
                             </ScrollViewer>
                         </Border>
-                        <!-- Plain help link: no colored panel, system button border or focus outline. -->
+                        <!-- Старая инструкция остаётся для этапа телефона. -->
                         <Button Click="HelpButton_OnClick" Background="Transparent"
                                 BorderThickness="0" Margin="0,6,0,0"
                                 HorizontalAlignment="Center" Cursor="Hand"
                                 FocusVisualStyle="{x:Null}"
                                 Content="Как подключить Telegram?">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsApiConfigured}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsEditingApiCredentials}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <TextBlock x:Name="HelpText"

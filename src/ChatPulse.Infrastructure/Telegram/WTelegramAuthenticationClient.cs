@@ -9,7 +9,9 @@ namespace ChatPulse.Infrastructure.Telegram;
 /// Управляет одной пользовательской MTProto-сессией. Сохранённая сессия дополнительно
 /// защищена Windows DPAPI (CurrentUser). Пароли и коды никогда не записываются на диск.
 /// </summary>
-public sealed class WTelegramAuthenticationClient(string dataDirectory) : ITelegramAuthenticationClient, IDisposable
+public sealed class WTelegramAuthenticationClient(
+    string dataDirectory, ITelegramApiCredentialsStore credentialsStore)
+    : ITelegramAuthenticationClient, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Client? _client;
@@ -25,7 +27,7 @@ public sealed class WTelegramAuthenticationClient(string dataDirectory) : ITeleg
             ThrowIfDisposed();
             if (_client is null)
             {
-                _client = CreateClient();
+                _client = await CreateClientAsync(cancellationToken);
             }
 
             // Вход здесь начинается с номера. При повторном входе с той же сессией
@@ -34,6 +36,11 @@ public sealed class WTelegramAuthenticationClient(string dataDirectory) : ITeleg
             return ToProgress(next);
         }
         catch (TelegramAuthenticationException) { throw; }
+        catch (InvalidDataException)
+        {
+            throw new TelegramAuthenticationException("telegram.configuration_invalid",
+                "Не удалось прочитать API-ключи. Проверьте локальное хранилище ключей.");
+        }
         catch (Exception)
         {
             throw new TelegramAuthenticationException("telegram.login_failed",
@@ -67,16 +74,26 @@ public sealed class WTelegramAuthenticationClient(string dataDirectory) : ITeleg
         finally { _gate.Release(); }
     }
 
-    private Client CreateClient()
+    public async Task ResetSessionAsync(CancellationToken cancellationToken)
     {
-        var idText = Environment.GetEnvironmentVariable("CHATPULSE_TELEGRAM_API_ID");
-        var hash = Environment.GetEnvironmentVariable("CHATPULSE_TELEGRAM_API_HASH");
-        if (!int.TryParse(idText, out var apiId) || apiId <= 0 ||
-            hash is null || hash.Length != 32 || !hash.All(Uri.IsHexDigit))
+        await _gate.WaitAsync(cancellationToken);
+        try
         {
-            throw new TelegramAuthenticationException("telegram.configuration_missing",
-                "Перед первым входом разработчик должен настроить CHATPULSE_TELEGRAM_API_ID и CHATPULSE_TELEGRAM_API_HASH. См. TELEGRAM_SETUP.md.");
+            ThrowIfDisposed();
+            _client?.Dispose();
+            _client = null;
+            _awaitingInput = null;
+            var session = Path.Combine(dataDirectory, "telegram.session.dpapi");
+            if (File.Exists(session)) File.Delete(session);
         }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<Client> CreateClientAsync(CancellationToken cancellationToken)
+    {
+        var credentials = await credentialsStore.LoadAsync(cancellationToken)
+            ?? throw new TelegramAuthenticationException("telegram.configuration_missing",
+                "Сначала сохраните API ID и API Hash на экране подключения Telegram.");
 
         Directory.CreateDirectory(dataDirectory);
         var sessionPath = Path.Combine(dataDirectory, "telegram.session.dpapi");
@@ -98,8 +115,8 @@ public sealed class WTelegramAuthenticationClient(string dataDirectory) : ITeleg
         return new Client(
             what => what switch
             {
-                "api_id" => apiId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "api_hash" => hash,
+                "api_id" => credentials.ApiId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "api_hash" => credentials.ApiHash,
                 _ => null
             },
             storedSession,

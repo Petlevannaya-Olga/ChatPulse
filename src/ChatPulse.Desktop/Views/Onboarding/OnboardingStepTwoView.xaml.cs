@@ -18,6 +18,7 @@ public partial class OnboardingStepTwoView : UserControl
     {
         InitializeComponent();
         DataObject.AddPastingHandler(PhoneInput, PhoneInput_OnPasting);
+        DataObject.AddPastingHandler(ApiIdInput, ApiIdInput_OnPasting);
         DataContextChanged += (_, args) =>
         {
             if (args.OldValue is TelegramSetupViewModel oldVm)
@@ -38,6 +39,36 @@ public partial class OnboardingStepTwoView : UserControl
 
     public event EventHandler? BackRequested;
     public event EventHandler? ContinueRequested;
+
+    // Restrict what the TextBox accepts; semantic API ID validation remains in FluentValidation.
+    private void ApiIdInput_OnPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (e.Text.Length == 0 || !e.Text.All(IsAsciiDigit))
+            e.Handled = true;
+    }
+
+    private void ApiIdInput_OnPasting(object sender, DataObjectPastingEventArgs e)
+    {
+        var value = e.DataObject.GetData(DataFormats.UnicodeText) as string
+                    ?? e.DataObject.GetData(DataFormats.Text) as string;
+        if (value is null)
+        {
+            e.CancelCommand();
+            return;
+        }
+
+        // Trim incidental whitespace from copied Telegram values, but reject mixed content.
+        var digits = value.Trim();
+        if (digits.Length == 0 || !digits.All(IsAsciiDigit) ||
+            ApiIdInput.Text.Length - ApiIdInput.SelectionLength + digits.Length > ApiIdInput.MaxLength)
+        {
+            e.CancelCommand();
+            return;
+        }
+
+        e.CancelCommand();
+        ApiIdInput.SelectedText = digits;
+    }
 
     // UI input mask only: +7 is non-editable and WTelegram receives +7 plus exactly 10 digits.
     // The actual input validation is performed by FluentValidation through ValidationDecorator.
@@ -196,7 +227,10 @@ public partial class OnboardingStepTwoView : UserControl
     private void ViewModel_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (sender is TelegramSetupViewModel vm &&
-            e.PropertyName is nameof(TelegramSetupViewModel.IsAwaitingInput) or
+            e.PropertyName is nameof(TelegramSetupViewModel.IsApiConfigured) or
+                              nameof(TelegramSetupViewModel.IsEditingApiCredentials) or
+                              nameof(TelegramSetupViewModel.IsBusy) or
+                              nameof(TelegramSetupViewModel.IsAwaitingInput) or
                               nameof(TelegramSetupViewModel.IsPasswordRequired) or
                               nameof(TelegramSetupViewModel.IsAuthorized))
         {
@@ -207,15 +241,66 @@ public partial class OnboardingStepTwoView : UserControl
     private void UpdatePanels(TelegramSetupViewModel vm)
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => UpdatePanels(vm)); return; }
-        PhonePanel.Visibility = vm.IsAwaitingInput || vm.IsAuthorized ? Visibility.Collapsed : Visibility.Visible;
+        var showApi = !vm.IsApiConfigured || vm.IsEditingApiCredentials;
+        ApiKeysPanel.Visibility = showApi ? Visibility.Visible : Visibility.Collapsed;
+        PhonePanel.Visibility = !showApi && !vm.IsAwaitingInput && !vm.IsAuthorized
+            ? Visibility.Visible : Visibility.Collapsed;
+        ConfirmPanel.Visibility = !showApi && vm.IsAwaitingInput
+            ? Visibility.Visible : Visibility.Collapsed;
+        ConnectedPanel.Visibility = !showApi && vm.IsAuthorized
+            ? Visibility.Visible : Visibility.Collapsed;
+        PhoneEditApiButton.Visibility = vm.CanEditApiCredentials
+            ? Visibility.Visible : Visibility.Collapsed;
+        ApiCancelButton.Visibility = vm.IsApiConfigured && vm.IsEditingApiCredentials
+            ? Visibility.Visible : Visibility.Collapsed;
         PasswordInput.Visibility = vm.IsPasswordRequired ? Visibility.Visible : Visibility.Collapsed;
         ConfirmationInput.Visibility = vm.IsPasswordRequired ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    private async void ApiKeysSaveButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm) return;
+        var saved = await vm.SaveApiCredentialsAsync(ApiIdInput.Text, ApiHashInput.Password);
+        if (saved)
+        {
+            ApiIdInput.Clear();
+            ApiHashInput.Clear();
+        }
+        UpdatePanels(vm);
+    }
+
+    private void ApiKeysEditButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm) return;
+        ApiIdInput.Clear();
+        ApiHashInput.Clear();
+        vm.BeginEditApiCredentials();
+        UpdatePanels(vm);
+    }
+
+    private void ApiKeysCancelButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm) return;
+        ApiIdInput.Clear();
+        ApiHashInput.Clear();
+        vm.CancelEditApiCredentials();
+        UpdatePanels(vm);
+    }
+
+    private void ApiKeysHelpButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        ShowHelp(new TelegramApiKeysHelpDialog());
+    }
+
     private void HelpButton_OnClick(object sender, RoutedEventArgs e)
     {
+        ShowHelp(new TelegramHelpDialog());
+    }
+
+    private void ShowHelp(Window dialog)
+    {
         var owner = Window.GetWindow(this);
-        var dialog = new TelegramHelpDialog { Owner = owner };
+        dialog.Owner = owner;
 
         if (owner is MainWindow mainWindow)
         {

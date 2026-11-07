@@ -12,6 +12,7 @@ namespace ChatPulse.Desktop;
 public partial class MainWindow : Window
 {
     private readonly ISettingsService _settings;
+    private readonly TelegramSetupViewModel _telegramSetup;
     private readonly ILogger<MainWindow> _logger;
     private bool _isCloseConfirmed;
     private bool _isOnboardingCompleted;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _settings = settings;
+        _telegramSetup = telegramSetup;
         _logger = logger;
         SecondStepScreen.DataContext = telegramSetup;
     }
@@ -33,6 +35,18 @@ public partial class MainWindow : Window
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         var settings = await _settings.LoadAsync(cancellationToken);
+        try
+        {
+            await _telegramSetup.LoadApiCredentialsStatusAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            // Не падаем при испорченном защищённом файле; предлагаем повторную настройку.
+            _logger.LogWarning("Не удалось прочитать локальные API-ключи ChatPulse");
+            MessageBox.Show(this,
+                "Не удалось прочитать сохранённые Telegram API-ключи. Проверьте учётную запись Windows.",
+                "ChatPulse — Ключи Telegram", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         _isOnboardingCompleted = settings.IsOnboardingCompleted;
         FirstStepScreen.RestoreName(settings.UserName);
 
