@@ -11,11 +11,21 @@ namespace ChatPulse.Infrastructure.Telegram;
 /// защищена Windows DPAPI (CurrentUser). Пароли и коды никогда не записываются на диск.
 /// </summary>
 public sealed class WTelegramAuthenticationClient(
-    string dataDirectory, ITelegramApiCredentialsStore credentialsStore)
+    string dataDirectory, ITelegramApiCredentialsStore credentialsStore,
+    ITelegramCredentialChangeJournal? changeJournal = null,
+    TelegramAuthorizationEvents? authorizationEvents = null)
     : ITelegramAuthenticationClient, IDisposable
 {
+    private static readonly TimeSpan RemoteRequestTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(5);
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _sessionFileLock = new();
+    private readonly ITelegramCredentialChangeJournal _changeJournal =
+        changeJournal ?? new FileTelegramCredentialChangeJournal(dataDirectory);
+    private readonly TelegramAuthorizationEvents _authorizationEvents = authorizationEvents ?? new();
+    private long _sessionGeneration;
     private Client? _client;
+    private Func<TL.IObject, Task>? _notificationObserver;
     private string? _awaitingInput;
     private TelegramCodeDeliveryKind _codeDelivery = TelegramCodeDeliveryKind.Unknown;
     private DateTimeOffset? _resendAvailableAtUtc;
@@ -33,6 +43,9 @@ public sealed class WTelegramAuthenticationClient(
         try
         {
             ThrowIfDisposed();
+            // A crash during credential rotation must never reuse an old session.
+            if (await RecoverInterruptedCredentialsUpdateAsync(cancellationToken))
+                return new TelegramLoginProgress(TelegramLoginInputKind.None);
             var sessionPath = Path.Combine(dataDirectory, "telegram.session.dpapi");
             if (!File.Exists(sessionPath))
                 return new TelegramLoginProgress(TelegramLoginInputKind.None);
@@ -51,7 +64,8 @@ public sealed class WTelegramAuthenticationClient(
             _resumeUsingStoredUserId = true;
             try
             {
-                user = await _client.LoginUserIfNeeded(reloginOnFailedResume: false);
+                user = await AwaitRemoteAsync(
+                    _client.LoginUserIfNeeded(reloginOnFailedResume: false), cancellationToken);
             }
             finally
             {
@@ -63,11 +77,14 @@ public sealed class WTelegramAuthenticationClient(
             Debug.WriteLine("[ChatPulse][TelegramAuth] RestoreSession: authorized session verified");
             return AuthorizedProgress(user);
         }
-        catch (TL.RpcException exception) when (exception.Code == 401)
+        catch (TL.RpcException exception) when (IsAuthorizationLost(exception))
         {
-            // Сессия могла быть отозвана на стороне Telegram. Не удаляем её молча.
-            Debug.WriteLine("[ChatPulse][TelegramAuth] RestoreSession: Telegram rejected saved authorization");
-            return new TelegramLoginProgress(TelegramLoginInputKind.None);
+            // Не удаляем защищённый файл без согласия пользователя.
+            await DetachClientAsync();
+            _authorizationEvents.ReportAuthorizationLost();
+            Debug.WriteLine("[ChatPulse][TelegramAuth] RestoreSession: saved authorization rejected");
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram отклонил сохранённую сессию. Очистите локальную сессию и войдите заново.");
         }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -87,6 +104,7 @@ public sealed class WTelegramAuthenticationClient(
         try
         {
             ThrowIfDisposed();
+            await RecoverInterruptedCredentialsUpdateAsync(cancellationToken);
             if (_client is null)
             {
                 _client = await CreateClientAsync(cancellationToken);
@@ -101,16 +119,23 @@ public sealed class WTelegramAuthenticationClient(
 
             // Вход здесь начинается с номера. При повторном входе с той же сессией
             // WTelegramClient возвращает авторизованного пользователя без нового кода.
-            var next = await _client.Login(phoneNumber);
+            var next = await AwaitRemoteAsync(_client.Login(phoneNumber), cancellationToken);
             Debug.WriteLine($"[ChatPulse][TelegramAuth] BeginLogin: next={SafeLoginStep(next)}, delivery={_codeDelivery}");
             return ToProgress(next);
         }
         catch (TelegramAuthenticationException) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TL.RpcException ex) when (IsAuthorizationLost(ex))
+        {
+            await RejectRevokedAuthorizationAsync();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram отклонил текущую сессию. Очистите локальную сессию и выполните вход заново.");
+        }
         catch (TL.RpcException ex)
         {
             Debug.WriteLine($"[ChatPulse][TelegramAuth] BeginLogin: RPC error={SafeRpcError(ex.Message)}, code={ex.Code}");
             throw new TelegramAuthenticationException("telegram.login_rpc_error",
-                "Telegram отклонил запрос кода. Причина записана в окно Output отладчика Visual Studio без персональных данных.");
+                TelegramRpcErrorMessages.ForBegin(ex.Message));
         }
         catch (InvalidDataException)
         {
@@ -133,6 +158,7 @@ public sealed class WTelegramAuthenticationClient(
         try
         {
             ThrowIfDisposed();
+            await RecoverInterruptedCredentialsUpdateAsync(cancellationToken);
             if (_client is null || _awaitingInput is null)
             {
                 throw new TelegramAuthenticationException("telegram.login_not_started",
@@ -140,30 +166,25 @@ public sealed class WTelegramAuthenticationClient(
             }
 
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ContinueLogin: submitting step={SafeLoginStep(_awaitingInput)}");
-            var next = await _client.Login(input);
+            var next = await AwaitRemoteAsync(_client.Login(input), cancellationToken);
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ContinueLogin: next={SafeLoginStep(next)}");
             return ToProgress(next);
         }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TL.RpcException ex) when (IsAuthorizationLost(ex))
+        {
+            await RejectRevokedAuthorizationAsync();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram отклонил текущую сессию. Очистите локальную сессию и выполните вход заново.");
+        }
         catch (TL.RpcException ex)
         {
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ContinueLogin: RPC error={SafeRpcError(ex.Message)}, code={ex.Code}");
             // Показываем только заранее определённые сообщения. Не передаём
             // в интерфейс текст исключения, который может содержать детали запроса.
-            throw new TelegramAuthenticationException("telegram.rpc_login_error", ex.Message switch
-            {
-                "PHONE_CODE_INVALID" => "Неверный код Telegram. Проверьте код из последнего сообщения.",
-                "PHONE_CODE_EXPIRED" => "Срок действия кода Telegram истёк. Понадобится новый код.",
-                "PHONE_CODE_EMPTY" => "Код подтверждения пустой.",
-                "PHONE_CODE_HASH_INVALID" => "Telegram больше не принимает этот запрос подтверждения. Потребуется начать вход заново.",
-                "PASSWORD_HASH_INVALID" => "Неверный пароль двухэтапной проверки Telegram.",
-                "CODE_INVALID" or "EMAIL_TOKEN_INVALID" => "Неверный код подтверждения электронной почты.",
-                "API_ID_INVALID" => "Telegram отклонил API ID или API Hash.",
-                var message when message.StartsWith("FLOOD_WAIT_", StringComparison.Ordinal) =>
-                    "Telegram временно ограничил запросы. Не повторяйте вход до снятия ограничения.",
-                _ => $"Telegram отклонил подтверждение входа (код ошибки {ex.Code})."
-            });
+            throw new TelegramAuthenticationException("telegram.rpc_login_error",
+                TelegramRpcErrorMessages.ForConfirmation(ex.Message, ex.Code));
         }
         catch (IOException)
         {
@@ -195,6 +216,7 @@ public sealed class WTelegramAuthenticationClient(
         try
         {
             ThrowIfDisposed();
+            await RecoverInterruptedCredentialsUpdateAsync(cancellationToken);
             if (_client is null || _awaitingInput != "verification_code")
             {
                 throw new TelegramAuthenticationException("telegram.code_not_pending",
@@ -212,26 +234,23 @@ public sealed class WTelegramAuthenticationClient(
             }
 
             Debug.WriteLine("[ChatPulse][TelegramAuth] ResendCode: requested after server timeout");
-            var next = await _client.Login(string.Empty);
+            var next = await AwaitRemoteAsync(_client.Login(string.Empty), cancellationToken);
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ResendCode: next={SafeLoginStep(next)}, delivery={_codeDelivery}");
             return ToProgress(next);
         }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TL.RpcException ex) when (IsAuthorizationLost(ex))
+        {
+            await RejectRevokedAuthorizationAsync();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram отклонил текущую сессию. Очистите локальную сессию и выполните вход заново.");
+        }
         catch (TL.RpcException ex)
         {
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ResendCode: RPC error={SafeRpcError(ex.Message)}, code={ex.Code}");
-            throw new TelegramAuthenticationException("telegram.resend_failed", ex.Message switch
-            {
-                "SEND_CODE_UNAVAILABLE" => "Telegram не разрешает ещё одну отправку для этого номера.",
-                "PHONE_CODE_EXPIRED" or "PHONE_CODE_HASH_INVALID" =>
-                    "Срок действия запроса истёк. Нужно начать вход заново.",
-                "PHONE_NUMBER_FLOOD" =>
-                    "Telegram ограничил частоту запросов кода. Повторите позже.",
-                var message when message.StartsWith("FLOOD_WAIT_", StringComparison.Ordinal) =>
-                    "Telegram временно ограничил запросы кода. Дождитесь снятия ограничения.",
-                _ => $"Не удалось повторно запросить код (ошибка Telegram {ex.Code})."
-            });
+            throw new TelegramAuthenticationException("telegram.resend_failed",
+                TelegramRpcErrorMessages.ForResend(ex.Message, ex.Code));
         }
         catch (Exception ex)
         {
@@ -242,45 +261,117 @@ public sealed class WTelegramAuthenticationClient(
         finally { _gate.Release(); }
     }
 
+    public async Task CancelLoginAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (_awaitingInput is null)
+                throw new TelegramAuthenticationException("telegram.login_not_pending",
+                    "Нет незавершённого входа для отмены.");
+            // Та же безопасная локальная очистка, что и при ручном сбросе.
+            // Секреты API и настройки других аккаунтов не затрагиваем.
+            ResetLocalSessionCore();
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task ResetSessionAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
-            _client?.Dispose();
-            _client = null;
-            _awaitingInput = null;
-            _codeDelivery = TelegramCodeDeliveryKind.Unknown;
-            _hasResendOption = false;
-            _resendAvailableAtUtc = null;
-            var session = Path.Combine(dataDirectory, "telegram.session.dpapi");
-            File.Delete(session);
-            // Remove leftover temporary session writes from an interrupted save as well.
-            File.Delete(session + ".tmp");
+            ResetLocalSessionCore();
         }
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Invalidates callbacks from an old WTelegram.Client BEFORE disposing it.
+    /// A late session-save callback cannot resurrect a session after reset.
+    /// Must be called while holding _gate.
+    /// </summary>
+    private void ResetLocalSessionCore()
+    {
+        Client? oldClient;
+        Func<TL.IObject, Task>? oldObserver;
+        lock (_sessionFileLock)
+        {
+            _sessionGeneration++;
+            oldClient = _client;
+            oldObserver = _notificationObserver;
+            _client = null;
+            _notificationObserver = null;
+            _awaitingInput = null;
+            _codeDelivery = TelegramCodeDeliveryKind.Unknown;
+            _hasResendOption = false;
+            _resendAvailableAtUtc = null;
+            _resumeUsingStoredUserId = false;
+        }
+
+        Exception? disposeFailure = null;
+        try
+        {
+            if (oldClient is not null)
+            {
+                if (oldObserver is not null)
+                    oldClient.OnOther -= oldObserver;
+                oldClient.Dispose();
+            }
+        }
+        catch (Exception ex) { disposeFailure = ex; }
+
+        // A failing Dispose must not prevent deletion of the session file.
+        Exception? deleteFailure = null;
+        try
+        {
+            var session = Path.Combine(dataDirectory, "telegram.session.dpapi");
+            lock (_sessionFileLock)
+            {
+                File.Delete(session);
+                File.Delete(session + ".tmp");
+            }
+        }
+        catch (Exception ex) { deleteFailure = ex; }
+
+        if (disposeFailure is not null && deleteFailure is not null)
+            throw new AggregateException(disposeFailure, deleteFailure);
+        if (disposeFailure is not null) throw disposeFailure;
+        if (deleteFailure is not null) throw deleteFailure;
+    }
+
+    /// <summary>
+    /// Recovery is intentionally conservative: an interrupted credential update
+    /// invalidates the session even if the old keys were later restored.
+    /// </summary>
+    private async Task<bool> RecoverInterruptedCredentialsUpdateAsync(CancellationToken cancellationToken)
+    {
+        if (!await _changeJournal.IsPendingAsync(cancellationToken)) return false;
+
+        // If deletion fails, keep the marker: a later attempt must retry.
+        ResetLocalSessionCore();
+        await _changeJournal.ClearPendingAsync(CancellationToken.None);
+        Debug.WriteLine("[ChatPulse][TelegramAuth] Interrupted credential update recovered");
+        return true;
+    }
+
     /// <summary>Читает список доступных групп и каналов без загрузки истории сообщений.</summary>
-    public async Task<IReadOnlyList<TelegramChatOption>> GetChatsAsync(CancellationToken cancellationToken)
+    public async Task<TelegramChatsSnapshot> GetChatsAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
-            if (_client is null || _client.UserId == 0)
-            {
-                throw new TelegramAuthenticationException("telegram.not_authorized",
-                    "Telegram не подключён. Вернитесь к шагу авторизации.");
-            }
+            await RecoverInterruptedCredentialsUpdateAsync(cancellationToken);
+            var telegramUserId = GetVerifiedUserId();
 
-            var dialogs = await _client.Messages_GetAllDialogs();
-            cancellationToken.ThrowIfCancellationRequested();
+            var dialogs = await AwaitRemoteAsync(_client!.Messages_GetAllDialogs(), cancellationToken);
 
             // ID в Telegram не глобально уникален между Chat и Channel:
             // сохраняем также тип peer, а не только числовой идентификатор.
-            return dialogs.dialogs
+            var chats = dialogs.dialogs
                 .Select(dialog => dialogs.UserOrChat(dialog))
                 .OfType<TL.ChatBase>()
                 .Where(chat => chat.IsActive)
@@ -297,9 +388,31 @@ public sealed class WTelegramAuthenticationClient(
                 .DistinctBy(chat => (chat.PeerType, chat.PeerId))
                 .OrderBy(chat => chat.Title, StringComparer.CurrentCultureIgnoreCase)
                 .ToArray();
+            return new TelegramChatsSnapshot(telegramUserId, chats);
+        }
+        catch (TelegramAuthenticationException exception) when (exception.Code == "telegram.request_timeout")
+        {
+            // После таймаута старый клиент отсоединён. До новой проверки не утверждаем,
+            // что ранее подтверждённый пользователь по-прежнему подключён.
+            _authorizationEvents.ReportVerificationRequired();
+            throw;
         }
         catch (TelegramAuthenticationException) { throw; }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancellation of an in-flight RPC detaches the WTelegram client.
+            // Do not keep the old account badge verified until session restore.
+            if (_client is null)
+                _authorizationEvents.ReportVerificationRequired();
+            throw;
+        }
+        catch (TL.RpcException exception) when (IsAuthorizationLost(exception))
+        {
+            await DetachClientAsync();
+            _authorizationEvents.ReportAuthorizationLost();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram завершил эту авторизацию. Очистите локальную сессию и войдите снова.");
+        }
         catch (TL.RpcException exception)
         {
             Debug.WriteLine($"[ChatPulse][TelegramChats] GetChats: rpcCode={exception.Code}");
@@ -313,6 +426,82 @@ public sealed class WTelegramAuthenticationClient(
                 "Не удалось получить список Telegram-чатов. Повторите попытку.");
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>Нельзя использовать UserId из неподтверждённого файла сессии.</summary>
+    public async Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            await RecoverInterruptedCredentialsUpdateAsync(cancellationToken);
+            return GetVerifiedUserId();
+        }
+        finally { _gate.Release(); }
+    }
+
+    private long GetVerifiedUserId()
+    {
+        var user = _client?.User;
+        if (user is null || user.id <= 0)
+        {
+            throw new TelegramAuthenticationException("telegram.not_authorized",
+                "Telegram не подключён. Вернитесь к шагу авторизации.");
+        }
+        return user.id;
+    }
+
+    private static bool IsAuthorizationLost(TL.RpcException exception)
+        => TelegramAuthorizationFailure.IsLost(exception.Code, exception.Message);
+
+    // Shared recovery for RPC failures during login, confirmation, and resend.
+    // The protected session file remains until the user confirms local cleanup.
+    private async Task RejectRevokedAuthorizationAsync()
+    {
+        await DetachClientAsync();
+        _authorizationEvents.ReportAuthorizationLost();
+    }
+
+    // Библиотека не принимает CancellationToken для этих вызовов напрямую.
+    // После прерывания старый Client изолируется, но запрос на сервере может завершиться позже.
+    private Task<T> AwaitRemoteAsync<T>(Task<T> request, CancellationToken cancellationToken)
+        => TelegramRemoteAwait.AwaitAsync(request, RemoteRequestTimeout,
+            cancellationToken, DetachClientAsync);
+
+    /// <summary>Отсоединяет устаревший клиент, не удаляя локальную сессию.</summary>
+    private async Task DetachClientAsync()
+    {
+        Client? stale;
+        Func<TL.IObject, Task>? oldObserver;
+        lock (_sessionFileLock)
+        {
+            _sessionGeneration++;
+            stale = _client;
+            oldObserver = _notificationObserver;
+            _client = null;
+            _notificationObserver = null;
+            _awaitingInput = null;
+            _codeDelivery = TelegramCodeDeliveryKind.Unknown;
+            _hasResendOption = false;
+            _resendAvailableAtUtc = null;
+            _resumeUsingStoredUserId = false;
+        }
+
+        if (stale is null) return;
+        if (oldObserver is not null)
+            stale.OnOther -= oldObserver;
+        try
+        {
+            // Даже если DisposeAsync зависнет, старый callback уже изолирован generation.
+            await stale.DisposeAsync().AsTask().WaitAsync(DisposeTimeout);
+        }
+        catch (Exception exception)
+        {
+            // После detach устаревший клиент уже не может вернуть состояние авторизации.
+            // Ошибка Dispose не должна маскировать исходную ошибку RPC или таймаут.
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] Dispose of stale client: {exception.GetType().Name}");
+        }
     }
 
     private async Task<Client> CreateClientAsync(CancellationToken cancellationToken)
@@ -330,27 +519,38 @@ public sealed class WTelegramAuthenticationClient(
                 ? ProtectedData.Unprotect(File.ReadAllBytes(sessionPath), null, DataProtectionScope.CurrentUser)
                 : [];
         }
-        catch (CryptographicException)
+        catch (Exception exception) when (exception is CryptographicException or IOException or UnauthorizedAccessException)
         {
             throw new TelegramAuthenticationException("telegram.session_unavailable",
-                "Не удалось прочитать локальную Telegram-сессию. Проверьте учётную запись Windows.");
+                "Локальную Telegram-сессию не удалось прочитать. Можно очистить её и войти заново; API-ключи сохранятся.");
         }
 
         // Созданная библиотекой сессия сериализуется через DPAPI. Кроме этого
         // WTelegramClient выполняет собственное шифрование сессии.
         Debug.WriteLine($"[ChatPulse][TelegramAuth] CreateClient: sessionExists={File.Exists(sessionPath)}");
-        var client = new Client(
-            what => what switch
-            {
-                "api_id" => credentials.ApiId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "api_hash" => credentials.ApiHash,
-                "user_id" => _resumeUsingStoredUserId ? "-1" : null,
-                _ => null
-            },
-            storedSession,
-            bytes => SaveSession(sessionPath, bytes));
-        client.OnOther += ObserveLoginNotificationAsync;
-        return client;
+        var generation = Volatile.Read(ref _sessionGeneration);
+        try
+        {
+            var client = new Client(
+                what => what switch
+                {
+                    "api_id" => credentials.ApiId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "api_hash" => credentials.ApiHash,
+                    "user_id" => _resumeUsingStoredUserId ? "-1" : null,
+                    _ => null
+                },
+                storedSession,
+                bytes => SaveSession(sessionPath, bytes, generation));
+            Func<TL.IObject, Task> observer = notification => ObserveLoginNotificationAsync(notification, generation);
+            client.OnOther += observer;
+            _notificationObserver = observer;
+            return client;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or FormatException or CryptographicException or EndOfStreamException or ArgumentException)
+        {
+            throw new TelegramAuthenticationException("telegram.session_corrupted",
+                "Сохранённая Telegram-сессия повреждена или несовместима. Очистите локальную сессию и войдите заново.");
+        }
     }
 
     /// <summary>
@@ -358,28 +558,34 @@ public sealed class WTelegramAuthenticationClient(
     /// канал, а не доказательство фактической доставки сообщения.
     /// Не сохраняем и не логируем номер, код или phone_code_hash.
     /// </summary>
-    private Task ObserveLoginNotificationAsync(TL.IObject notification)
+    private Task ObserveLoginNotificationAsync(TL.IObject notification, long generation)
     {
-        if (notification is TL.Auth_SentCode sentCode)
+        lock (_sessionFileLock)
         {
-            // Только типы ответа и серверное время ожидания — ни кода, ни phone_code_hash.
-            Debug.WriteLine($"[ChatPulse][TelegramAuth] Auth_SentCode: type={sentCode.type.GetType().Name}, nextType={sentCode.next_type}, timeoutSec={sentCode.timeout}");
-            _hasResendOption = sentCode.next_type != 0;
-            _resendAvailableAtUtc = _hasResendOption
-                ? DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, sentCode.timeout))
-                : null;
-            _codeDelivery = sentCode.type.GetType().Name switch
+            // Позднее уведомление отменённого запроса не меняет состояние нового входа.
+            if (generation != _sessionGeneration) return Task.CompletedTask;
+
+            if (notification is TL.Auth_SentCode sentCode)
             {
-                "Auth_SentCodeTypeApp" => TelegramCodeDeliveryKind.TelegramApp,
-                "Auth_SentCodeTypeSms" or "Auth_SentCodeTypeFirebaseSms" => TelegramCodeDeliveryKind.Sms,
-                "Auth_SentCodeTypeEmailCode" => TelegramCodeDeliveryKind.Email,
-                "Auth_SentCodeTypeCall" or "Auth_SentCodeTypeFlashCall" or "Auth_SentCodeTypeMissedCall" => TelegramCodeDeliveryKind.Call,
-                _ => TelegramCodeDeliveryKind.Other
-            };
-        }
-        else if (notification is TL.Auth_SentCodeBase)
-        {
-            Debug.WriteLine($"[ChatPulse][TelegramAuth] Auth_SentCodeBase: type={notification.GetType().Name}");
+                // Только типы ответа и серверное время ожидания — ни кода, ни phone_code_hash.
+                Debug.WriteLine($"[ChatPulse][TelegramAuth] Auth_SentCode: type={sentCode.type.GetType().Name}, nextType={sentCode.next_type}, timeoutSec={sentCode.timeout}");
+                _hasResendOption = sentCode.next_type != 0;
+                _resendAvailableAtUtc = _hasResendOption
+                    ? DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, sentCode.timeout))
+                    : null;
+                _codeDelivery = sentCode.type.GetType().Name switch
+                {
+                    "Auth_SentCodeTypeApp" => TelegramCodeDeliveryKind.TelegramApp,
+                    "Auth_SentCodeTypeSms" or "Auth_SentCodeTypeFirebaseSms" => TelegramCodeDeliveryKind.Sms,
+                    "Auth_SentCodeTypeEmailCode" => TelegramCodeDeliveryKind.Email,
+                    "Auth_SentCodeTypeCall" or "Auth_SentCodeTypeFlashCall" or "Auth_SentCodeTypeMissedCall" => TelegramCodeDeliveryKind.Call,
+                    _ => TelegramCodeDeliveryKind.Other
+                };
+            }
+            else if (notification is TL.Auth_SentCodeBase)
+            {
+                Debug.WriteLine($"[ChatPulse][TelegramAuth] Auth_SentCodeBase: type={notification.GetType().Name}");
+            }
         }
         return Task.CompletedTask;
     }
@@ -419,12 +625,28 @@ public sealed class WTelegramAuthenticationClient(
         return value;
     }
 
-    private static void SaveSession(string path, byte[] rawSession)
+    private void SaveSession(string path, byte[] rawSession, long generation)
     {
-        var protectedBytes = ProtectedData.Protect(rawSession, null, DataProtectionScope.CurrentUser);
-        var tmpPath = path + ".tmp";
-        File.WriteAllBytes(tmpPath, protectedBytes);
-        File.Move(tmpPath, path, true);
+        lock (_sessionFileLock)
+        {
+            if (generation != _sessionGeneration) return;
+
+            var protectedBytes = ProtectedData.Protect(rawSession, null, DataProtectionScope.CurrentUser);
+            try
+            {
+                var tmpPath = path + ".tmp";
+                try
+                {
+                    File.WriteAllBytes(tmpPath, protectedBytes);
+                    File.Move(tmpPath, path, true);
+                }
+                finally
+                {
+                    if (File.Exists(tmpPath)) File.Delete(tmpPath);
+                }
+            }
+            finally { CryptographicOperations.ZeroMemory(protectedBytes); }
+        }
     }
 
     private TelegramLoginProgress ToProgress(string? next)

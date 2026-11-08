@@ -4,6 +4,7 @@ namespace ChatPulse.Application.Services;
 public interface IChatConfigurationStore
 {
     Task SaveAsync(
+        long telegramUserId,
         long peerId,
         string peerType,
         string telegramTitle,

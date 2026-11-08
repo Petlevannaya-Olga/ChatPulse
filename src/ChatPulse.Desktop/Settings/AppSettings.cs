@@ -40,6 +40,8 @@ public sealed class AppSettings
 /// <summary>Одна сохранённая настройка чата. Дата трактуется как 00:00 в часовом поясе чата при импорте.</summary>
 public sealed class ConfiguredChat
 {
+    /// <summary>Владелец настроек. 0 = старая запись без привязки, использовать автоматически нельзя.</summary>
+    public long TelegramUserId { get; set; }
     public long PeerId { get; set; }
     public string PeerType { get; set; } = string.Empty;
     public string TelegramTitle { get; set; } = string.Empty;

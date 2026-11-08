@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using ChatPulse.Application.Features.Telegram.ApiCredentials;
@@ -6,6 +7,8 @@ using ChatPulse.Application.Features.Telegram.ApiCredentials.Delete;
 using ChatPulse.Application.Features.Telegram.ApiCredentials.Get;
 using ChatPulse.Application.Features.Telegram.ApiCredentials.Save;
 using ChatPulse.Application.Features.Telegram.BeginLogin;
+using ChatPulse.Application.Features.Telegram.CancelLogin;
+using ChatPulse.Application.Services;
 using ChatPulse.Application.Features.Telegram.ContinueLogin;
 using ChatPulse.Application.Features.Telegram.RestoreSession;
 using ChatPulse.Application.Features.Telegram.ResetSession;
@@ -17,13 +20,58 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ChatPulse.Desktop.ViewModels;
 
-public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
-    : INotifyPropertyChanged
+public sealed class TelegramSetupViewModel : INotifyPropertyChanged
 {
+    private readonly IServiceScopeFactory scopeFactory;
+
+    public TelegramSetupViewModel(IServiceScopeFactory scopeFactory, TelegramAuthorizationEvents authorizationEvents)
+    {
+        this.scopeFactory = scopeFactory;
+        authorizationEvents.AuthorizationLost += HandleAuthorizationLost;
+        authorizationEvents.VerificationRequired += HandleVerificationRequired;
+    }
+
+    private void HandleVerificationRequired()
+    {
+        void Invalidate()
+        {
+            SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(true);
+            Error = "Не удалось подтвердить текущую Telegram-сессию. Повторите проверку после восстановления соединения.";
+        }
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+            dispatcher.BeginInvoke((Action)Invalidate);
+        else
+            Invalidate();
+    }
+
+    private void HandleAuthorizationLost()
+    {
+        void Invalidate()
+        {
+            SetProgress(null);
+            SetSessionRetryNeeded(false);
+            SetSessionRecoveryNeeded(true);
+            Error = "Telegram завершил авторизацию этой сессии. Очистите локальную сессию и войдите заново.";
+        }
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+            dispatcher.BeginInvoke((Action)Invalidate);
+        else
+            Invalidate();
+    }
+
     private string _phoneNumber = "+7";
     private bool _isApiConfigured;
     private bool _isEditingApiCredentials;
     private bool _isApiCredentialsDraftValid;
+    private bool _isApiCredentialsCorrupted;
+    private bool _isSessionRecoveryNeeded;
+    private bool _isSessionRetryNeeded;
     private TelegramLoginProgress? _progress;
     private bool _isBusy;
     private string _error = string.Empty;
@@ -42,8 +90,14 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
     // Редактировать ключи можно и при действующей сессии.
     // Сброс будет выполнен только при фактическом изменении ключей.
     public bool CanEditApiCredentials => IsApiConfigured && !IsBusy && !IsAwaitingInput;
-    public bool CanResetTelegramSession => IsApiConfigured && IsAuthorized && !IsBusy && !IsAwaitingInput;
-    public bool CanDeleteApiCredentials => IsApiConfigured && !IsBusy && !IsAwaitingInput;
+    public bool IsSessionRecoveryNeeded => _isSessionRecoveryNeeded;
+    public bool IsSessionRetryNeeded => _isSessionRetryNeeded;
+    public bool CanRetrySession => IsApiConfigured && IsSessionRetryNeeded && !IsBusy;
+    public bool CanResetTelegramSession => IsApiConfigured &&
+        (IsAuthorized || IsSessionRecoveryNeeded) && !IsBusy && !IsAwaitingInput;
+    public bool IsApiCredentialsCorrupted => _isApiCredentialsCorrupted;
+    public bool CanDeleteApiCredentials => (IsApiConfigured || IsApiCredentialsCorrupted) &&
+        !IsBusy && !IsAwaitingInput;
     public bool CanSaveApiCredentials => !IsBusy && _isApiCredentialsDraftValid;
 
     /// <summary>
@@ -91,12 +145,20 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
                 return;
             }
             _isApiConfigured = result.Value;
+            SetApiCredentialsCorrupted(false);
             Changed(nameof(IsApiConfigured));
             Changed(nameof(CanStart));
             Changed(nameof(CanEditApiCredentials));
             Changed(nameof(CanDeleteApiCredentials));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* ignore */ }
+        catch (InvalidDataException)
+        {
+            _isApiConfigured = false;
+            SetApiCredentialsCorrupted(true);
+            Changed(nameof(IsApiConfigured));
+            Error = "Сохранённые Telegram API-ключи повреждены или недоступны. Удалите локальные ключи и сессию, затем настройте подключение заново.";
+        }
         catch (Exception)
         {
             Error = "Не удалось проверить локальные API-ключи Telegram.";
@@ -118,15 +180,23 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             if (result.IsFailure)
             {
                 SetProgress(null);
+                var recoveryNeeded = result.Error.Code is
+                    "telegram.session_unavailable" or "telegram.session_revoked" or "telegram.session_corrupted";
+                SetSessionRecoveryNeeded(recoveryNeeded);
+                SetSessionRetryNeeded(!recoveryNeeded);
                 Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
                 return;
             }
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(false);
             SetProgress(result.Value.IsAuthorized ? result.Value : null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /*ignore*/}
         catch (Exception)
         {
             SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(true);
             Error = "Не удалось восстановить Telegram-сессию. Проверьте подключение к Telegram.";
         }
         finally { IsBusy = false; }
@@ -186,8 +256,14 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
 
             // true = keys actually changed and session reset was completed.
             // false = same keys; do not discard the existing authorization in the UI.
-            if (result.Value) SetProgress(null);
+            if (result.Value)
+            {
+                SetProgress(null);
+                SetSessionRecoveryNeeded(false);
+                SetSessionRetryNeeded(false);
+            }
             _isApiConfigured = true;
+            SetApiCredentialsCorrupted(false);
             _isEditingApiCredentials = false;
             Changed(nameof(IsApiConfigured));
             Changed(nameof(IsEditingApiCredentials));
@@ -201,10 +277,13 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         {
             // Reset may already have disposed the client, even if old keys were restored.
             SetProgress(null);
+            SetSessionRecoveryNeeded(true);
             await LoadApiCredentialsStatusAsync(CancellationToken.None);
-            Error = exception.PreviousCredentialsRestored
-                ? "Не удалось сбросить Telegram-сессию. Предыдущие API-ключи восстановлены. Проверьте авторизацию."
-                : "Не удалось завершить замену ключей или восстановить старые. Проверьте настройки подключения Telegram.";
+            Error = exception.OperationCommitted
+                ? "Новые API-ключи сохранены и сессия сброшена, но не удалось завершить очистку служебных файлов. Перезапустите ChatPulse."
+                : exception.PreviousCredentialsRestored
+                    ? "Не удалось сбросить Telegram-сессию. Предыдущие API-ключи восстановлены. Проверьте авторизацию."
+                    : "Не удалось завершить замену ключей или восстановить старые. Проверьте настройки подключения Telegram.";
             return false;
         }
         catch (Exception)
@@ -238,9 +317,12 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             }
 
             _isApiConfigured = false;
+            SetApiCredentialsCorrupted(false);
             _isEditingApiCredentials = false;
             _isApiCredentialsDraftValid = false;
             SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(false);
             Changed(nameof(IsApiConfigured));
             Changed(nameof(IsEditingApiCredentials));
             Changed(nameof(CanStart));
@@ -252,10 +334,13 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         {
             // The reset might have invalidated the in-memory authorization already.
             SetProgress(null);
+            SetSessionRecoveryNeeded(true);
             await LoadApiCredentialsStatusAsync(CancellationToken.None);
-            Error = exception.PreviousCredentialsRestored
-                ? "Не удалось сбросить сессию. Ранее сохранённые API-ключи восстановлены."
-                : "Не удалось сбросить сессию и восстановить API-ключи. Проверьте настройки Telegram.";
+            Error = exception.OperationCommitted
+                ? "API-ключи и локальная сессия удалены, но не удалось завершить очистку служебных файлов. Перезапустите ChatPulse."
+                : exception.PreviousCredentialsRestored
+                    ? "Не удалось сбросить сессию. Ранее сохранённые API-ключи восстановлены."
+                    : "Не удалось сбросить сессию и восстановить API-ключи. Проверьте настройки Telegram.";
             return false;
         }
         catch (Exception)
@@ -289,23 +374,33 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             }
 
             SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(false);
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return false; }
         catch (Exception)
         {
-            Error = "Не удалось сбросить локальную Telegram-сессию. Проверьте доступ к папке ChatPulse.";
+            SetSessionRecoveryNeeded(true);
+            // Reset disposes the client before deleting files; a failed file operation
+            // must not leave the UI claiming that the old authorization is verified.
+            SetProgress(null);
+            Error = "Не удалось полностью сбросить локальную Telegram-сессию. Проверьте папку ChatPulse и авторизуйтесь снова.";
             return false;
         }
         finally { IsBusy = false; }
     }
 
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Changed(); Changed(nameof(CanStart)); Changed(nameof(CanConfirm)); Changed(nameof(CanResendCode)); Changed(nameof(CanSaveApiCredentials)); Changed(nameof(CanEditApiCredentials)); Changed(nameof(CanDeleteApiCredentials)); Changed(nameof(CanResetTelegramSession)); } }
+    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Changed(); Changed(nameof(CanStart)); Changed(nameof(CanConfirm)); Changed(nameof(CanResendCode)); Changed(nameof(CanSaveApiCredentials)); Changed(nameof(CanEditApiCredentials)); Changed(nameof(CanDeleteApiCredentials)); Changed(nameof(CanResetTelegramSession)); Changed(nameof(CanCancelLogin)); Changed(nameof(CanRetrySession)); } }
     public bool IsAuthorized => _progress?.IsAuthorized == true;
     public bool IsAwaitingInput => _progress is { RequiredInput: not TelegramLoginInputKind.None };
+    public bool CanCancelLogin => IsAwaitingInput && !IsBusy;
     // UI readiness only; the request is still validated by the CQRS decorator.
-    public bool IsPhoneComplete => PhoneNumber.StartsWith("+7", StringComparison.Ordinal) && PhoneNumber.Length == 12;
-    public bool CanStart => IsApiConfigured && !IsBusy && !IsAuthorized && IsPhoneComplete && !IsAwaitingInput;
+    public bool IsPhoneComplete => PhoneNumber.Length == 12 &&
+        PhoneNumber.StartsWith("+7", StringComparison.Ordinal) &&
+        PhoneNumber.Skip(2).All(static character => character is >= '0' and <= '9');
+    public bool CanStart => IsApiConfigured && !IsBusy && !IsAuthorized && IsPhoneComplete &&
+        !IsAwaitingInput && !IsSessionRecoveryNeeded && !IsSessionRetryNeeded;
     public bool CanConfirm => !IsBusy && IsAwaitingInput;
 
     public bool IsVerificationCodePending =>
@@ -373,6 +468,44 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         _ => string.Empty
     };
 
+    /// <summary>Удаляет только незавершённую локальную сессию, API-ключи не меняет.</summary>
+    public async Task<bool> CancelLoginAsync(CancellationToken ct = default)
+    {
+        if (!CanCancelLogin) return false;
+        IsBusy = true;
+        Error = string.Empty;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<
+                ICommandHandler<bool, CancelTelegramLoginCommand>>();
+            var result = await handler.Handle(new CancelTelegramLoginCommand(), ct);
+            if (result.IsFailure)
+            {
+                // The client has no pending login; do not strand the user on
+                // a confirmation form that cannot be completed or canceled.
+                if (result.Error.Code == "telegram.login_not_pending")
+                    SetProgress(null);
+                Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
+                return false;
+            }
+            SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return false; }
+        catch (Exception)
+        {
+            // При ошибке удаления клиент мог быть уже закрыт; не показываем старый шаг входа.
+            SetProgress(null);
+            SetSessionRecoveryNeeded(true);
+            Error = "Не удалось отменить вход полностью. Очистите локальную сессию и повторите попытку.";
+            return false;
+        }
+        finally { IsBusy = false; }
+    }
+
     public async Task BeginAsync(CancellationToken ct = default)
     {
         if (IsBusy) return;
@@ -385,8 +518,15 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             using var scope = scopeFactory.CreateScope();
             var handler = scope.ServiceProvider.GetRequiredService<ICommandHandler<TelegramLoginProgress, BeginTelegramLoginCommand>>();
             var result = await handler.Handle(new BeginTelegramLoginCommand(PhoneNumber.Trim()), ct);
-            if (result.IsFailure) { Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message; return; }
+            if (result.IsFailure)
+            {
+                HandleInterruptedRemoteRequest(result.Error.Code);
+                Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
+                return;
+            }
             SetProgress(result.Value);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /*ignore*/}
         catch (Exception) { Error = "Не удалось выполнить вход. Попробуйте ещё раз."; }
@@ -407,6 +547,7 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             var result = await handler.Handle(new ResendTelegramCodeCommand(), ct);
             if (result.IsFailure)
             {
+                HandleInterruptedRemoteRequest(result.Error.Code);
                 Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
                 return;
             }
@@ -433,7 +574,12 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             using var scope = scopeFactory.CreateScope();
             var handler = scope.ServiceProvider.GetRequiredService<ICommandHandler<TelegramLoginProgress, ContinueTelegramLoginCommand>>();
             var result = await handler.Handle(new ContinueTelegramLoginCommand(input), ct);
-            if (result.IsFailure) { Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message; return; }
+            if (result.IsFailure)
+            {
+                HandleInterruptedRemoteRequest(result.Error.Code);
+                Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
+                return;
+            }
 
             // WTelegramClient может снова запросить verification_code после
             // неверного кода без исключения. Не оставляем тот же экран молча.
@@ -460,12 +606,55 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         finally { IsBusy = false; }
     }
 
+    private void HandleInterruptedRemoteRequest(string code)
+    {
+        if (code == "telegram.request_timeout")
+        {
+            // Клиент был отсоединён, старый шаг входа больше недействителен.
+            SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(true);
+        }
+        else if (code == "telegram.session_revoked")
+        {
+            SetProgress(null);
+            SetSessionRecoveryNeeded(true);
+        }
+    }
+
+    private void SetApiCredentialsCorrupted(bool corrupted)
+    {
+        if (_isApiCredentialsCorrupted == corrupted) return;
+        _isApiCredentialsCorrupted = corrupted;
+        Changed(nameof(IsApiCredentialsCorrupted));
+        Changed(nameof(CanDeleteApiCredentials));
+    }
+
+    private void SetSessionRecoveryNeeded(bool needed)
+    {
+        if (_isSessionRecoveryNeeded == needed) return;
+        _isSessionRecoveryNeeded = needed;
+        Changed(nameof(IsSessionRecoveryNeeded));
+        Changed(nameof(CanResetTelegramSession));
+        Changed(nameof(CanStart));
+    }
+
+    private void SetSessionRetryNeeded(bool needed)
+    {
+        if (_isSessionRetryNeeded == needed) return;
+        _isSessionRetryNeeded = needed;
+        Changed(nameof(IsSessionRetryNeeded));
+        Changed(nameof(CanRetrySession));
+        Changed(nameof(CanStart));
+    }
+
     private void SetProgress(TelegramLoginProgress? state)
     {
         _progress = state;
         ResendStatus = string.Empty;
         Changed(nameof(IsAuthorized));
         Changed(nameof(IsAwaitingInput));
+        Changed(nameof(CanCancelLogin));
         Changed(nameof(IsPasswordRequired));
         Changed(nameof(CanStart));
         Changed(nameof(CanConfirm));

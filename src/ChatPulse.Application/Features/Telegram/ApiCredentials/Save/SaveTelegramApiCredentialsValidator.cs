@@ -17,7 +17,7 @@ public sealed class SaveTelegramApiCredentialsValidator : AbstractValidator<Save
         RuleFor(x => x.ApiHash)
             .Cascade(CascadeMode.Stop)
             .NotEmpty().WithMessage("Введите API Hash.")
-            .Matches("^[0-9a-fA-F]{32}$")
+            .Matches(@"\A[0-9a-fA-F]{32}\z")
             .WithMessage("API Hash должен содержать 32 шестнадцатеричных символа.");
     }
 }

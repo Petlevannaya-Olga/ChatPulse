@@ -8,4 +8,5 @@ public sealed record SaveChatCommand(
     string TelegramTitle,
     string DisplayName,
     string SocialNetwork,
-    DateOnly StartDate) : ICommandValidation;
+    DateOnly StartDate,
+    long ExpectedTelegramUserId) : ICommandValidation;

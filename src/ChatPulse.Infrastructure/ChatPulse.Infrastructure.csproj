@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <InternalsVisibleTo Include="ChatPulse.Tests" />
     <ProjectReference Include="..\ChatPulse.Application\ChatPulse.Application.csproj" />
     <ProjectReference Include="..\ChatPulse.Domain\ChatPulse.Domain.csproj" />
   </ItemGroup>

@@ -6,12 +6,14 @@ using ChatPulse.Shared.Abstractions;
 
 namespace ChatPulse.Application.Features.Telegram.ResendCode;
 
-public sealed class ResendTelegramCodeHandler(ITelegramAuthenticationClient telegram)
+public sealed class ResendTelegramCodeHandler(ITelegramAuthenticationClient telegram,
+    ITelegramOperationGate operationGate)
     : ICommandHandler<TelegramLoginProgress, ResendTelegramCodeCommand>
 {
     public async Task<Result<TelegramLoginProgress, Error>> Handle(
         ResendTelegramCodeCommand command, CancellationToken cancellationToken)
     {
+        using var operation = await operationGate.EnterAsync(cancellationToken);
         try
         {
             var progress = await telegram.ResendCodeAsync(cancellationToken);

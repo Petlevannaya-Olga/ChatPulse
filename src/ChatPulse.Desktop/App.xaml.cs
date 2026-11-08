@@ -14,6 +14,7 @@ namespace ChatPulse.Desktop;
 public partial class App : System.Windows.Application
 {
     private IHost? _host;
+    private ApplicationInstanceLock? _instanceLock;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -27,6 +28,13 @@ public partial class App : System.Windows.Application
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "ChatPulse", "Data");
             Directory.CreateDirectory(dataDirectory);
+            if (!ApplicationInstanceLock.TryAcquire(dataDirectory, out _instanceLock))
+            {
+                MessageBox.Show("ChatPulse уже запущен. Закройте другое окно приложения перед повторным запуском.",
+                    "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
+                Shutdown();
+                return;
+            }
 
             var builder = Host.CreateApplicationBuilder();
             builder.Logging.AddDebug();
@@ -58,8 +66,15 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _host?.StopAsync().GetAwaiter().GetResult();
-        _host?.Dispose();
-        base.OnExit(e);
+        try
+        {
+            _host?.StopAsync().GetAwaiter().GetResult();
+        }
+        finally
+        {
+            _host?.Dispose();
+            _instanceLock?.Dispose();
+            base.OnExit(e);
+        }
     }
 }

@@ -7,13 +7,14 @@ public partial class TelegramLoginInProgressDialog : Window
 {
     public TelegramLoginInProgressDialog() => InitializeComponent();
 
-    private void CloseButton_OnClick(object sender, RoutedEventArgs e) => DialogResult = true;
+    private void KeepLoginButton_OnClick(object sender, RoutedEventArgs e) => DialogResult = false;
+    private void CancelLoginButton_OnClick(object sender, RoutedEventArgs e) => DialogResult = true;
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
         {
-            DialogResult = true;
+            DialogResult = false;
             e.Handled = true;
         }
 

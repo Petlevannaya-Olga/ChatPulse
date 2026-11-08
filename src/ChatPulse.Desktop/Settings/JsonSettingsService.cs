@@ -15,9 +15,7 @@ namespace ChatPulse.Desktop.Settings;
 public sealed class JsonSettingsService : ISettingsService, IDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
-    private readonly string _directory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "ChatPulse");
+    private readonly string _directory;
     private readonly string _path;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -27,8 +25,14 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public JsonSettingsService()
+    public JsonSettingsService() : this(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChatPulse")) { }
+
+    // Позволяет проверить работу хранилища в изолированной временной папке.
+    public JsonSettingsService(string directory)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        _directory = directory;
         _path = Path.Combine(_directory, "settings.json");
     }
 
@@ -67,16 +71,21 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         => UpdateAsync(settings => settings.IsOnboardingCompleted = true, cancellationToken);
 
     public Task SaveChatAsync(ConfiguredChat chat, CancellationToken cancellationToken = default)
-        => UpdateAsync(settings =>
+    {
+        if (chat.TelegramUserId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(chat), "Чат должен принадлежать Telegram-аккаунту.");
+        return UpdateAsync(settings =>
         {
             settings.Chats ??= [];
             var index = settings.Chats.FindIndex(existing =>
+                existing.TelegramUserId == chat.TelegramUserId &&
                 existing.PeerId == chat.PeerId && existing.PeerType == chat.PeerType);
             if (index < 0)
                 settings.Chats.Add(chat);
             else
                 settings.Chats[index] = chat;
         }, cancellationToken);
+    }
 
     private async Task UpdateAsync(Action<AppSettings> update, CancellationToken cancellationToken)
     {

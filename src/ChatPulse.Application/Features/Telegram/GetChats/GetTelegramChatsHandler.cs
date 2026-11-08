@@ -6,16 +6,18 @@ using ChatPulse.Shared.Abstractions;
 
 namespace ChatPulse.Application.Features.Telegram.GetChats;
 
-public sealed class GetTelegramChatsHandler(ITelegramAuthenticationClient telegram)
-    : IQueryHandler<IReadOnlyList<TelegramChatOption>, GetTelegramChatsQuery>
+public sealed class GetTelegramChatsHandler(ITelegramAuthenticationClient telegram,
+    ITelegramOperationGate operationGate)
+    : IQueryHandler<TelegramChatsSnapshot, GetTelegramChatsQuery>
 {
-    public async Task<Result<IReadOnlyList<TelegramChatOption>, Error>> Handle(
+    public async Task<Result<TelegramChatsSnapshot, Error>> Handle(
         GetTelegramChatsQuery query, CancellationToken cancellationToken)
     {
+        using var operation = await operationGate.EnterAsync(cancellationToken);
         try
         {
             var chats = await telegram.GetChatsAsync(cancellationToken);
-            return Result.Success<IReadOnlyList<TelegramChatOption>, Error>(chats);
+            return Result.Success<TelegramChatsSnapshot, Error>(chats);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -23,7 +25,7 @@ public sealed class GetTelegramChatsHandler(ITelegramAuthenticationClient telegr
         }
         catch (TelegramAuthenticationException ex)
         {
-            return Result.Failure<IReadOnlyList<TelegramChatOption>, Error>(
+            return Result.Failure<TelegramChatsSnapshot, Error>(
                 new Error(ex.Code, ex.Message, ErrorType.SERVICE_UNAVAILABLE));
         }
     }

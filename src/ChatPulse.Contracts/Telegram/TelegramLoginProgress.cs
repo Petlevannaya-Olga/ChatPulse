@@ -28,5 +28,5 @@ public sealed record TelegramLoginProgress(
     bool HasResendOption = false,
     DateTimeOffset? ResendAvailableAtUtc = null)
 {
-    public bool IsAuthorized => RequiredInput == TelegramLoginInputKind.None && UserId.HasValue;
+    public bool IsAuthorized => RequiredInput == TelegramLoginInputKind.None && UserId is > 0;
 }

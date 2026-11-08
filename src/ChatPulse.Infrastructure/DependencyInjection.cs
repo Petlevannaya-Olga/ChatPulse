@@ -19,12 +19,16 @@ public static class DependencyInjection
             options.UseSqlite($"Data Source={databasePath}"));
 
         services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
+        services.AddSingleton<ITelegramCredentialChangeJournal>(
+            _ => new FileTelegramCredentialChangeJournal(Path.GetDirectoryName(databasePath)!));
         services.AddSingleton<ITelegramApiCredentialsStore>(
             _ => new ProtectedTelegramApiCredentialsStore(Path.GetDirectoryName(databasePath)!));
         services.AddSingleton<ITelegramAuthenticationClient>(provider =>
             new WTelegramAuthenticationClient(
                 Path.GetDirectoryName(databasePath)!,
-                provider.GetRequiredService<ITelegramApiCredentialsStore>()));
+                provider.GetRequiredService<ITelegramApiCredentialsStore>(),
+                provider.GetRequiredService<ITelegramCredentialChangeJournal>(),
+                provider.GetRequiredService<TelegramAuthorizationEvents>()));
 
         return services;
     }

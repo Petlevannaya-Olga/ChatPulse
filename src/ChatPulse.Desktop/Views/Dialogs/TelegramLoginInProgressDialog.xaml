@@ -68,15 +68,21 @@
                                    Foreground="#796C98" Margin="0,4,0,0" />
                     </StackPanel>
                 </Grid>
-                <TextBlock Text="Вход в Telegram ещё не завершён. Сначала подтвердите вход кодом."
+                <TextBlock Text="Отменить незавершённый вход в Telegram? Можно будет ввести другой номер и запросить новый код."
                            FontSize="15" LineHeight="22" TextWrapping="Wrap"
                            Foreground="#39295F" Margin="0,20,0,0" />
-                <TextBlock Text="Возможность отменить начатую авторизацию добавим отдельно."
+                <TextBlock Text="Локальная незавершённая сессия будет удалена. API-ключи и настройки чатов сохранятся."
                            FontSize="13" TextWrapping="Wrap"
                            Foreground="#796C98" Margin="0,10,0,0" />
-                <Button Content="Понятно" Style="{StaticResource PrimaryDialogButton}"
-                        HorizontalAlignment="Right" Margin="0,24,0,0"
-                        IsDefault="True" Click="CloseButton_OnClick" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">
+                    <Button Content="Продолжить вход" Width="170" Height="48"
+                            Background="Transparent" BorderThickness="0" Cursor="Hand"
+                            Foreground="#24154C" FontSize="15" FontWeight="SemiBold"
+                            IsCancel="True" Click="KeepLoginButton_OnClick" />
+                    <Button Content="Отменить вход" Style="{StaticResource PrimaryDialogButton}"
+                            Width="170" Margin="12,0,0,0"
+                            IsDefault="True" Click="CancelLoginButton_OnClick" />
+                </StackPanel>
             </StackPanel>
         </Border>
     </Grid>

@@ -24,6 +24,9 @@ public sealed class FirstChatSetupViewModel(
     private bool _isBusy;
     private bool _isSaved;
     private bool _initialized;
+    private bool _reloadAfterCurrent;
+    private long _viewEpoch;
+    private long? _telegramUserId;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -113,47 +116,97 @@ public sealed class FirstChatSetupViewModel(
         private set { _isSaved = value; Changed(); }
     }
     public bool CanRefresh => !IsBusy;
-    public bool CanSave => !IsBusy && SelectedChat is not null
+    public bool CanSave => !IsBusy && _telegramUserId is > 0 && SelectedChat is not null
         && !string.IsNullOrWhiteSpace(DisplayName)
         && SocialNetwork is not null && StartDate.HasValue;
 
+    /// <summary>
+    /// Сбрасывает только экран и кэш списка, не удаляя конфигурацию других аккаунтов.
+    /// Запоздавший ответ старой загрузки будет проигнорирован.
+    /// </summary>
+    public void Invalidate()
+    {
+        _viewEpoch++;
+        _initialized = false;
+        _telegramUserId = null;
+        Chats.Clear();
+        SelectedChat = null;
+        DisplayName = string.Empty;
+        SocialNetwork = null;
+        StartDate = DateTime.Today;
+        IsSaved = false;
+        Error = string.Empty;
+        Status = string.Empty;
+        Changed(nameof(CanSave));
+    }
+
     public async Task EnsureLoadedAsync(CancellationToken cancellationToken = default)
     {
-        if (_initialized || IsBusy) return;
-        _initialized = true;
+        if (_initialized) return;
+        if (IsBusy)
+        {
+            _reloadAfterCurrent = true;
+            return;
+        }
         await RefreshAsync(cancellationToken);
     }
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         if (IsBusy) return;
+        var epoch = _viewEpoch;
+        var previousOwner = _telegramUserId;
+        var previousSelection = SelectedChat;
+        _initialized = true;
         IsBusy = true;
         Error = string.Empty;
         Status = "Загружаем список чатов из Telegram…";
         try
         {
-            var saved = (await settings.LoadAsync(cancellationToken)).Chats?.FirstOrDefault();
             using var scope = scopeFactory.CreateScope();
             var handler = scope.ServiceProvider.GetRequiredService<
-                IQueryHandler<IReadOnlyList<TelegramChatOption>, GetTelegramChatsQuery>>();
+                IQueryHandler<TelegramChatsSnapshot, GetTelegramChatsQuery>>();
             var result = await handler.Handle(new GetTelegramChatsQuery(), cancellationToken);
+            if (epoch != _viewEpoch) return;
             if (result.IsFailure)
             {
+                _telegramUserId = null;
+                Chats.Clear();
+                SelectedChat = null;
                 Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
                 Status = string.Empty;
-                _initialized = false; // разрешаем повторное открытие и обновление
+                _initialized = false;
                 return;
             }
 
+            var snapshot = result.Value;
+            if (snapshot.TelegramUserId <= 0)
+            {
+                _initialized = false;
+                Error = "Не удалось определить аккаунт Telegram. Подключите его заново.";
+                return;
+            }
+
+            // Читаем конфигурацию только после получения подтверждённого user ID.
+            // Старые записи без владельца (TelegramUserId = 0) не присваиваем
+            // новому аккаунту автоматически.
+            var appSettings = await settings.LoadAsync(cancellationToken);
+            if (epoch != _viewEpoch) return;
+            var saved = appSettings.Chats?.FirstOrDefault(chat =>
+                chat.TelegramUserId == snapshot.TelegramUserId);
+            var hasUnownedChats = appSettings.Chats?.Any(chat => chat.TelegramUserId <= 0) == true;
+            _telegramUserId = snapshot.TelegramUserId;
             Chats.Clear();
-            foreach (var chat in result.Value)
+            foreach (var chat in snapshot.Chats)
                 Chats.Add(chat);
 
-            // При возвращении на экран восстанавливаем ранее выбранный чат.
-            var candidate = saved is null ? SelectedChat : Chats.FirstOrDefault(chat =>
-                chat.PeerId == saved.PeerId && chat.PeerType == saved.PeerType);
-            SelectedChat = candidate is null ? null : Chats.FirstOrDefault(chat =>
-                chat.PeerId == candidate.PeerId && chat.PeerType == candidate.PeerType);
+            var candidate = saved is not null
+                ? Chats.FirstOrDefault(chat => chat.PeerId == saved.PeerId && chat.PeerType == saved.PeerType)
+                : previousOwner == snapshot.TelegramUserId && previousSelection is not null
+                    ? Chats.FirstOrDefault(chat => chat.PeerId == previousSelection.PeerId &&
+                                                   chat.PeerType == previousSelection.PeerType)
+                    : null;
+            SelectedChat = candidate;
 
             if (saved is not null && SelectedChat is not null)
             {
@@ -170,10 +223,18 @@ public sealed class FirstChatSetupViewModel(
             Status = Chats.Count == 0
                 ? "В аккаунте пока не найдено доступных групп или каналов."
                 : $"Доступно чатов: {Chats.Count}";
+            if (hasUnownedChats && saved is null)
+            {
+                Status += " Старые настройки без привязки к аккаунту сохранены отдельно; выберите чат заново.";
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _initialized = false;
+        }
+        catch (Exception) when (epoch != _viewEpoch)
+        {
+            // Ответ от уже закрытого или сменившего аккаунт экрана не применяем.
         }
         catch (Exception)
         {
@@ -181,12 +242,22 @@ public sealed class FirstChatSetupViewModel(
             Error = "Не удалось загрузить список чатов. Проверьте подключение и нажмите «Обновить».";
             Status = string.Empty;
         }
-        finally { IsBusy = false; }
+        finally
+        {
+            IsBusy = false;
+            if (_reloadAfterCurrent && !_initialized)
+            {
+                _reloadAfterCurrent = false;
+                await RefreshAsync(cancellationToken);
+            }
+        }
     }
 
     public async Task SaveAsync(CancellationToken cancellationToken = default)
     {
         if (!CanSave) return;
+        var epoch = _viewEpoch;
+        var expectedUserId = _telegramUserId!.Value;
         IsBusy = true;
         Error = string.Empty;
         try
@@ -201,8 +272,10 @@ public sealed class FirstChatSetupViewModel(
                 chat.Title,
                 DisplayName,
                 SocialNetwork!,
-                DateOnly.FromDateTime(StartDate!.Value));
+                DateOnly.FromDateTime(StartDate!.Value),
+                expectedUserId);
             var result = await handler.Handle(command, cancellationToken);
+            if (epoch != _viewEpoch) return;
             if (result.IsFailure)
             {
                 Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
@@ -211,7 +284,8 @@ public sealed class FirstChatSetupViewModel(
             IsSaved = true;
             Status = "Первый чат сохранён. Загрузка заданий будет следующим этапом.";
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { /*ignore*/}
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { /*ignore*/ }
+        catch (Exception) when (epoch != _viewEpoch) { /* устаревший ответ */ }
         catch (Exception)
         {
             Error = "Не удалось сохранить чат в settings.json. Проверьте доступ к папке ChatPulse.";

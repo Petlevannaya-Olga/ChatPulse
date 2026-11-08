@@ -6,6 +6,7 @@ namespace ChatPulse.Desktop.Settings;
 public sealed class SettingsChatConfigurationStore(ISettingsService settings) : IChatConfigurationStore
 {
     public Task SaveAsync(
+        long telegramUserId,
         long peerId,
         string peerType,
         string telegramTitle,
@@ -15,6 +16,7 @@ public sealed class SettingsChatConfigurationStore(ISettingsService settings) : 
         CancellationToken cancellationToken)
         => settings.SaveChatAsync(new ConfiguredChat
         {
+            TelegramUserId = telegramUserId,
             PeerId = peerId,
             PeerType = peerType,
             TelegramTitle = telegramTitle,

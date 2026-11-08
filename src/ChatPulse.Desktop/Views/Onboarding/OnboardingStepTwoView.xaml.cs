@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -65,7 +65,9 @@ public partial class OnboardingStepTwoView : UserControl
             ? TelegramOnboardingPage.ApiCredentials : page;
 
         // Навигация не должна открывать редактирование сохранённых секретов.
-        vm.CancelEditApiCredentials();
+        // Не стираем сообщение об отозванной/непроверенной сессии при переходе с первого чата.
+        if (vm.IsEditingApiCredentials)
+            vm.CancelEditApiCredentials();
         ApiIdInput.Clear();
         ApiHashInput.Clear();
         RefreshApiCredentialsSaveState();
@@ -254,6 +256,13 @@ public partial class OnboardingStepTwoView : UserControl
         return formatted.Length;
     }
 
+    private async void RetryRestoreButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm || !vm.CanRetrySession) return;
+        await vm.RestoreSessionAsync();
+        UpdatePanels(vm);
+    }
+
     private async void StartButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
@@ -276,6 +285,21 @@ public partial class OnboardingStepTwoView : UserControl
         if (DataContext is not TelegramSetupViewModel vm || !vm.CanResendCode) return;
         ConfirmationInput.Clear();
         await vm.ResendCodeAsync();
+        UpdatePanels(vm);
+    }
+
+    private async void CancelLoginButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not TelegramSetupViewModel vm || !vm.CanCancelLogin) return;
+        if (!ShowModal(new TelegramLoginInProgressDialog())) return;
+        await CancelPendingLoginAsync(vm);
+    }
+
+    private async Task CancelPendingLoginAsync(TelegramSetupViewModel vm)
+    {
+        ConfirmationInput.Clear();
+        PasswordInput.Clear();
+        await vm.CancelLoginAsync();
         UpdatePanels(vm);
     }
 
@@ -446,7 +470,7 @@ public partial class OnboardingStepTwoView : UserControl
         return dialog.ShowDialog() == true;
     }
 
-    private void BackButton_OnClick(object sender, RoutedEventArgs e)
+    private async void BackButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm || vm.IsBusy) return;
 
@@ -456,7 +480,8 @@ public partial class OnboardingStepTwoView : UserControl
             // состояние авторизации осталось бы активным в WTelegramClient.
             if (vm.IsAwaitingInput)
             {
-                ShowModal(new TelegramLoginInProgressDialog());
+                if (ShowModal(new TelegramLoginInProgressDialog()))
+                    await CancelPendingLoginAsync(vm);
                 return;
             }
             TelegramPageRequested?.Invoke(TelegramOnboardingPage.ApiCredentials);

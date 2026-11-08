@@ -6,12 +6,14 @@ using ChatPulse.Shared.Abstractions;
 
 namespace ChatPulse.Application.Features.Telegram.ContinueLogin;
 
-public sealed class ContinueTelegramLoginHandler(ITelegramAuthenticationClient telegram)
+public sealed class ContinueTelegramLoginHandler(ITelegramAuthenticationClient telegram,
+    ITelegramOperationGate operationGate)
     : ICommandHandler<TelegramLoginProgress, ContinueTelegramLoginCommand>
 {
     public async Task<Result<TelegramLoginProgress, Error>> Handle(
         ContinueTelegramLoginCommand command, CancellationToken cancellationToken)
     {
+        using var operation = await operationGate.EnterAsync(cancellationToken);
         try
         {
             var progress = await telegram.ContinueLoginAsync(command.Value, cancellationToken);

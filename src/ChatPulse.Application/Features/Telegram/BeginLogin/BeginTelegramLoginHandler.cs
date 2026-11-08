@@ -6,12 +6,14 @@ using ChatPulse.Shared.Abstractions;
 
 namespace ChatPulse.Application.Features.Telegram.BeginLogin;
 
-public sealed class BeginTelegramLoginHandler(ITelegramAuthenticationClient telegram)
+public sealed class BeginTelegramLoginHandler(ITelegramAuthenticationClient telegram,
+    ITelegramOperationGate operationGate)
     : ICommandHandler<TelegramLoginProgress, BeginTelegramLoginCommand>
 {
     public async Task<Result<TelegramLoginProgress, Error>> Handle(
         BeginTelegramLoginCommand command, CancellationToken cancellationToken)
     {
+        using var operation = await operationGate.EnterAsync(cancellationToken);
         // Входные данные проверяет только FluentValidation через декоратор.
         try
         {

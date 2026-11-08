@@ -14,6 +14,9 @@ public static class DependencyInjection
     {
         var assembly = typeof(DependencyInjection).Assembly;
 
+        services.AddSingleton<ITelegramOperationGate, TelegramOperationGate>();
+        services.AddSingleton<TelegramAuthorizationEvents>();
+
         services.AddValidatorsFromAssembly(assembly);
 
         services.Scan(scan => scan.FromAssemblies(assembly)

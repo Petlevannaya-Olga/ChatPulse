@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Domain", "src\ChatPulse.Domain\ChatPulse.Domain.csproj", "{30558684-8E38-4533-88CF-7CB899C60772}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Application", "src\ChatPulse.Application\ChatPulse.Application.csproj", "{A1DF7FAA-D821-4441-ACB4-E2FFFF881A86}"
@@ -21,12 +21,20 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Shared", "src\Cha
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Contracts", "src\ChatPulse.Contracts\ChatPulse.Contracts.csproj", "{92476A67-6F46-4882-AC52-B5E74AFA3065}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChatPulse.Tests", "tests\ChatPulse.Tests\ChatPulse.Tests.csproj", "{A0FD6CD9-5EC1-455B-A960-4689084F978A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{B9983636-4499-4FF1-8E3F-9C13D85EEFC7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A0FD6CD9-5EC1-455B-A960-4689084F978A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A0FD6CD9-5EC1-455B-A960-4689084F978A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A0FD6CD9-5EC1-455B-A960-4689084F978A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A0FD6CD9-5EC1-455B-A960-4689084F978A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{30558684-8E38-4533-88CF-7CB899C60772}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{30558684-8E38-4533-88CF-7CB899C60772}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{30558684-8E38-4533-88CF-7CB899C60772}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -59,5 +67,6 @@ Global
 		{8FF05FD5-EE93-46A1-884C-13FD78924066} = {279FA96F-A257-49E0-A4FD-370B4142E290}
 		{6D720A1C-301C-4F4A-9DB9-B9D9A204CF27} = {279FA96F-A257-49E0-A4FD-370B4142E290}
 		{92476A67-6F46-4882-AC52-B5E74AFA3065} = {279FA96F-A257-49E0-A4FD-370B4142E290}
+		{A0FD6CD9-5EC1-455B-A960-4689084F978A} = {B9983636-4499-4FF1-8E3F-9C13D85EEFC7}
 	EndGlobalSection
 EndGlobal

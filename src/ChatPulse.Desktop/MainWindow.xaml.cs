@@ -15,24 +15,47 @@ public partial class MainWindow : Window
     private readonly TelegramSetupViewModel _telegramSetup;
     private readonly FirstChatSetupViewModel _firstChatSetup;
     private readonly ILogger<MainWindow> _logger;
+    private readonly ChatPulse.Application.Services.TelegramAuthorizationEvents _authorizationEvents;
     private TelegramOnboardingPage _telegramPage = TelegramOnboardingPage.ApiCredentials;
     private bool _isCloseConfirmed;
     private bool _isOnboardingCompleted;
+    private bool _hasInitialized;
 
     public MainWindow(
         TelegramSetupViewModel telegramSetup,
         FirstChatSetupViewModel firstChatSetup,
         ISettingsService settings,
-        ILogger<MainWindow> logger)
+        ILogger<MainWindow> logger,
+        ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents)
     {
         InitializeComponent();
         _settings = settings;
         _telegramSetup = telegramSetup;
         _firstChatSetup = firstChatSetup;
         _logger = logger;
+        _authorizationEvents = authorizationEvents;
+        _authorizationEvents.AuthorizationLost += OnTelegramAuthorizationLost;
+        _authorizationEvents.VerificationRequired += OnTelegramAuthorizationLost;
+        Closed += (_, _) =>
+        {
+            _authorizationEvents.AuthorizationLost -= OnTelegramAuthorizationLost;
+            _authorizationEvents.VerificationRequired -= OnTelegramAuthorizationLost;
+        };
         SecondStepScreen.DataContext = telegramSetup;
         ThirdStepScreen.DataContext = _firstChatSetup;
         SecondStepScreen.TelegramPageRequested += SecondStepScreen_OnTelegramPageRequested;
+    }
+
+    private void OnTelegramAuthorizationLost()
+    {
+        Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            // Во время начальной инициализации навигация ещё не нужна.
+            if (!_hasInitialized || ThirdStepScreen.Visibility != Visibility.Visible) return;
+            _firstChatSetup.Invalidate();
+            _telegramPage = TelegramOnboardingPage.Phone;
+            await NavigateAsync(OnboardingStep.Telegram);
+        }));
     }
 
     /// <summary>
@@ -105,10 +128,14 @@ public partial class MainWindow : Window
 
         // Главный экран будет реализован после настройки чатов.
         ShowStep(step);
+        _hasInitialized = true;
     }
 
     private void ShowStep(OnboardingStep step)
     {
+        if (step == OnboardingStep.FirstChat && ThirdStepScreen.Visibility != Visibility.Visible)
+            _firstChatSetup.Invalidate();
+
         WelcomeScreen.Visibility = step == OnboardingStep.Welcome
             ? Visibility.Visible : Visibility.Collapsed;
         FirstStepScreen.Visibility = step == OnboardingStep.Profile

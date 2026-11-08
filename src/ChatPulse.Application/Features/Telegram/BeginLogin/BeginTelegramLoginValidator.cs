@@ -9,7 +9,7 @@ public sealed class BeginTelegramLoginValidator : AbstractValidator<BeginTelegra
         RuleFor(x => x.PhoneNumber)
             .Cascade(CascadeMode.Stop)
             .NotEmpty().WithMessage("Введите номер телефона.")
-            .Matches(@"^\+7[0-9]{10}$")
+            .Matches(@"\A\+7[0-9]{10}\z")
             .WithMessage("Введите 10 цифр номера после +7.");
     }
 }

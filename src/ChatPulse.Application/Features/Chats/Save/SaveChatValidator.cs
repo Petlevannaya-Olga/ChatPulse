@@ -6,6 +6,8 @@ public sealed class SaveChatValidator : AbstractValidator<SaveChatCommand>
 {
     public SaveChatValidator()
     {
+        RuleFor(x => x.ExpectedTelegramUserId)
+            .GreaterThan(0).WithMessage("Не удалось определить Telegram-аккаунт. Обновите список чатов.");
         RuleFor(x => x.PeerId)
             .GreaterThan(0).WithMessage("Не выбран чат Telegram.");
         RuleFor(x => x.PeerType)

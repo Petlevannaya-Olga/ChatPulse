@@ -6,12 +6,14 @@ using ChatPulse.Shared.Abstractions;
 
 namespace ChatPulse.Application.Features.Telegram.RestoreSession;
 
-public sealed class RestoreTelegramSessionHandler(ITelegramAuthenticationClient telegram)
+public sealed class RestoreTelegramSessionHandler(ITelegramAuthenticationClient telegram,
+    ITelegramOperationGate operationGate)
     : IQueryHandler<TelegramLoginProgress, RestoreTelegramSessionQuery>
 {
     public async Task<Result<TelegramLoginProgress, Error>> Handle(
         RestoreTelegramSessionQuery query, CancellationToken cancellationToken)
     {
+        using var operation = await operationGate.EnterAsync(cancellationToken);
         try
         {
             var progress = await telegram.RestoreSessionAsync(cancellationToken);

@@ -9,6 +9,10 @@ public interface ITelegramAuthenticationClient
     Task<TelegramLoginProgress> BeginLoginAsync(string phoneNumber, CancellationToken cancellationToken);
     Task<TelegramLoginProgress> ContinueLoginAsync(string input, CancellationToken cancellationToken);
     Task<TelegramLoginProgress> ResendCodeAsync(CancellationToken cancellationToken);
+    /// <summary>Отменяет незавершённый вход, сохраняя API-ключи и настройки чатов.</summary>
+    Task CancelLoginAsync(CancellationToken cancellationToken);
     Task ResetSessionAsync(CancellationToken cancellationToken);
-    Task<IReadOnlyList<TelegramChatOption>> GetChatsAsync(CancellationToken cancellationToken);
+    Task<TelegramChatsSnapshot> GetChatsAsync(CancellationToken cancellationToken);
+    /// <summary>Возвращает ID уже проверенной авторизованной сессии без нового запроса к Telegram.</summary>
+    Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken);
 }
