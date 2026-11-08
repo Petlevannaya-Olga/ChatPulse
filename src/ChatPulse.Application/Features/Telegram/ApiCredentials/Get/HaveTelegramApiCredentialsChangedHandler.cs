@@ -7,13 +7,18 @@ using ChatPulse.Shared.Abstractions;
 namespace ChatPulse.Application.Features.Telegram.ApiCredentials.Get;
 
 public sealed class HaveTelegramApiCredentialsChangedHandler(ITelegramApiCredentialsStore store,
-    ITelegramOperationGate operationGate)
+    ITelegramOperationGate operationGate, ITelegramCredentialChangeJournal journal)
     : IQueryHandler<bool, HaveTelegramApiCredentialsChangedQuery>
 {
     public async Task<Result<bool, Error>> Handle(
         HaveTelegramApiCredentialsChangedQuery query, CancellationToken cancellationToken)
     {
         using var operation = await operationGate.EnterAsync(cancellationToken);
+        // A pending interrupted update will invalidate the session during Save,
+        // even when the entered values are identical. Require confirmation first.
+        if (await journal.IsPendingAsync(cancellationToken))
+            return Result.Success<bool, Error>(true);
+
         // The Save command is validated independently via FluentValidation.
         // Invalid draft input is not considered equal to any stored credentials.
         if (!int.TryParse(query.ApiId, NumberStyles.None, CultureInfo.InvariantCulture, out var apiId))

@@ -65,7 +65,7 @@ public sealed class TelegramCredentialsHandlersTests
             .Handle(new SaveTelegramApiCredentialsCommand("10", HashA), default);
 
         Assert.True(result.IsSuccess);
-        Assert.False(result.Value); // Identical keys: no new update.
+        Assert.True(result.Value); // Recovery invalidated the session, despite unchanged keys.
         Assert.Equal(0, store.SaveCalls);
         Assert.Equal(1, telegram.ResetCalls); // But recovery still needs cleanup.
         Assert.False(journal.IsPending);
@@ -83,9 +83,10 @@ public sealed class TelegramCredentialsHandlersTests
         var journal = new FakeCredentialChangeJournal();
         await journal.MarkPendingAsync(default);
 
-        await Assert.ThrowsAsync<IOException>(() =>
+        var recoveryException = await Assert.ThrowsAsync<TelegramApiCredentialsUpdateException>(() =>
             new SaveTelegramApiCredentialsHandler(store, telegram, new TelegramOperationGate(), journal)
                 .Handle(new SaveTelegramApiCredentialsCommand("10", HashA), default));
+        Assert.IsType<IOException>(recoveryException.InnerException);
 
         Assert.Equal(previous, store.Value);
         Assert.True(journal.IsPending);
@@ -269,6 +270,27 @@ public sealed class TelegramCredentialsHandlersTests
     }
 
     [Fact]
+    public async Task Delete_InterruptedCleanupFailure_ReportsUncertainSessionAndKeepsMarker()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(10, HashA) };
+        var client = new FakeTelegramClient
+        {
+            ResetImpl = _ => throw new IOException("Cannot delete old session")
+        };
+        var journal = new FakeCredentialChangeJournal();
+        await journal.MarkPendingAsync(default);
+
+        var exception = await Assert.ThrowsAsync<TelegramApiCredentialsUpdateException>(() =>
+            new DeleteTelegramApiCredentialsHandler(client, store, new TelegramOperationGate(), journal)
+                .Handle(new DeleteTelegramApiCredentialsCommand(), default));
+
+        Assert.IsType<IOException>(exception.InnerException);
+        Assert.True(journal.IsPending);
+        Assert.NotNull(store.Value);
+        Assert.Equal(0, store.DeleteCalls);
+    }
+
+    [Fact]
     public async Task Delete_NoExistingKeys_StillClearsOrphanedSession()
     {
         var store = new FakeCredentialsStore();
@@ -355,16 +377,30 @@ public sealed class TelegramCredentialsHandlersTests
     public async Task Compare_ReturnsWhetherCredentialsDiffer(string id, string hash, bool expected)
     {
         var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(10, HashA) };
-        var result = await new HaveTelegramApiCredentialsChangedHandler(store, new TelegramOperationGate())
+        var result = await new HaveTelegramApiCredentialsChangedHandler(store, new TelegramOperationGate(), new FakeCredentialChangeJournal())
             .Handle(new HaveTelegramApiCredentialsChangedQuery(id, hash), default);
         Assert.True(result.IsSuccess);
         Assert.Equal(expected, result.Value);
     }
 
     [Fact]
+    public async Task Compare_IdenticalKeysWithPendingRecovery_RequiresSessionResetConfirmation()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(10, HashA) };
+        var journal = new FakeCredentialChangeJournal();
+        await journal.MarkPendingAsync(default);
+        var result = await new HaveTelegramApiCredentialsChangedHandler(store,
+                new TelegramOperationGate(), journal)
+            .Handle(new HaveTelegramApiCredentialsChangedQuery("10", HashA), default);
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        Assert.True(journal.IsPending); // Comparison must not modify the session.
+    }
+
+    [Fact]
     public async Task Compare_FirstConfiguration_IsChanged()
     {
-        var result = await new HaveTelegramApiCredentialsChangedHandler(new FakeCredentialsStore(), new TelegramOperationGate())
+        var result = await new HaveTelegramApiCredentialsChangedHandler(new FakeCredentialsStore(), new TelegramOperationGate(), new FakeCredentialChangeJournal())
             .Handle(new HaveTelegramApiCredentialsChangedQuery("10", HashA), default);
         Assert.True(result.Value);
     }

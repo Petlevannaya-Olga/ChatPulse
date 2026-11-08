@@ -30,7 +30,9 @@ public sealed class WTelegramAuthenticationClient(
     private TelegramCodeDeliveryKind _codeDelivery = TelegramCodeDeliveryKind.Unknown;
     private DateTimeOffset? _resendAvailableAtUtc;
     private bool _hasResendOption;
-    private bool _disposed;
+    private int _disposed;
+    private readonly TaskCompletionSource<bool> _disposeCompleted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _resumeUsingStoredUserId;
 
     /// <summary>
@@ -121,7 +123,7 @@ public sealed class WTelegramAuthenticationClient(
             // WTelegramClient возвращает авторизованного пользователя без нового кода.
             var next = await AwaitRemoteAsync(_client.Login(phoneNumber), cancellationToken);
             Debug.WriteLine($"[ChatPulse][TelegramAuth] BeginLogin: next={SafeLoginStep(next)}, delivery={_codeDelivery}");
-            return ToProgress(next);
+            return await CompleteLoginStepAsync(next);
         }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -168,7 +170,7 @@ public sealed class WTelegramAuthenticationClient(
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ContinueLogin: submitting step={SafeLoginStep(_awaitingInput)}");
             var next = await AwaitRemoteAsync(_client.Login(input), cancellationToken);
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ContinueLogin: next={SafeLoginStep(next)}");
-            return ToProgress(next);
+            return await CompleteLoginStepAsync(next);
         }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -236,7 +238,7 @@ public sealed class WTelegramAuthenticationClient(
             Debug.WriteLine("[ChatPulse][TelegramAuth] ResendCode: requested after server timeout");
             var next = await AwaitRemoteAsync(_client.Login(string.Empty), cancellationToken);
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ResendCode: next={SafeLoginStep(next)}, delivery={_codeDelivery}");
-            return ToProgress(next);
+            return await CompleteLoginStepAsync(next);
         }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -649,6 +651,41 @@ public sealed class WTelegramAuthenticationClient(
         }
     }
 
+    /// <summary>
+    /// WTelegram.Login keeps the last requested field internally. If Telegram
+    /// requests sign-up (name) or an unsupported step, a later Login(phone)
+    /// would be interpreted as the answer to that field. Discard the unfinished
+    /// login and its local session before allowing another attempt.
+    /// Called while holding the client gate.
+    /// </summary>
+    internal async Task<TelegramLoginProgress> CompleteLoginStepAsync(string? next)
+    {
+        try
+        {
+            return ToProgress(next);
+        }
+        catch (TelegramAuthenticationException exception)
+            when (exception.Code is "telegram.account_missing" or "telegram.unsupported_step")
+        {
+            try
+            {
+                // A durable marker also covers a crash between session deletion
+                // and the completion of the local cleanup.
+                await _changeJournal.MarkPendingAsync(CancellationToken.None);
+                ResetLocalSessionCore();
+                await _changeJournal.ClearPendingAsync(CancellationToken.None);
+            }
+            catch (Exception cleanupException)
+            {
+                Debug.WriteLine($"[ChatPulse][TelegramAuth] Unsupported login cleanup: {cleanupException.GetType().Name}");
+                throw new TelegramAuthenticationException("telegram.session_cleanup_failed",
+                    "Не удалось очистить незавершённую авторизацию. Очистите локальную сессию и повторите вход.");
+            }
+
+            throw;
+        }
+    }
+
     private TelegramLoginProgress ToProgress(string? next)
     {
         _awaitingInput = next;
@@ -677,14 +714,59 @@ public sealed class WTelegramAuthenticationClient(
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
     }
+
+    // A testable completion signal; shutdown does not block the WPF UI thread.
+    internal Task DisposeCompletion => _disposeCompleted.Task;
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _client?.Dispose();
-        _gate.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _ = DisposeClientWhenIdleAsync();
+    }
+
+    private async Task DisposeClientWhenIdleAsync()
+    {
+        // An active login or request owns _gate. Wait asynchronously to avoid
+        // disposing WTelegram.Client underneath that operation or blocking OnExit.
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Client? stale;
+            Func<TL.IObject, Task>? observer;
+            lock (_sessionFileLock)
+            {
+                _sessionGeneration++;
+                stale = _client;
+                observer = _notificationObserver;
+                _client = null;
+                _notificationObserver = null;
+                _awaitingInput = null;
+                _hasResendOption = false;
+                _resendAvailableAtUtc = null;
+                _codeDelivery = TelegramCodeDeliveryKind.Unknown;
+                _resumeUsingStoredUserId = false;
+            }
+
+            if (stale is not null)
+            {
+                if (observer is not null)
+                    stale.OnOther -= observer;
+                stale.Dispose();
+            }
+        }
+        catch (Exception exception)
+        {
+            // A shutdown failure should not crash the UI thread.
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] Shutdown: {exception.GetType().Name}");
+        }
+        finally
+        {
+            // Do not Dispose the semaphore here: already queued callers must
+            // acquire it, see the disposed state, and safely release it.
+            _gate.Release();
+            _disposeCompleted.TrySetResult(true);
+        }
     }
 }

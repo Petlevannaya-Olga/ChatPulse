@@ -126,6 +126,54 @@ public sealed class TelegramAuthRecoveryAndCancellationTests
         Assert.True(vm.CanResetTelegramSession);
     }
 
+    [Theory]
+    [InlineData("telegram.account_missing")]
+    [InlineData("telegram.unsupported_step")]
+    public async Task UnsupportedConfirmationStep_DoesNotLeaveOldCodeInputOnScreen(string code)
+    {
+        var client = new FakeTelegramClient
+        {
+            ContinueImpl = (_, _) => throw new TelegramAuthenticationException(code,
+                "Telegram запросил неподдерживаемый шаг входа.")
+        };
+        using var provider = CreateVmProvider(client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+        await vm.BeginAsync();
+        Assert.True(vm.IsAwaitingInput);
+
+        await vm.ConfirmAsync("12345");
+
+        Assert.False(vm.IsAwaitingInput);
+        Assert.False(vm.IsAuthorized);
+        Assert.False(vm.IsSessionRecoveryNeeded);
+        Assert.False(vm.IsSessionRetryNeeded);
+        Assert.True(vm.CanStart);
+        Assert.True(vm.HasError);
+    }
+
+    [Fact]
+    public async Task UnsupportedConfirmationStep_CleanupFailure_OffersLocalSessionReset()
+    {
+        var client = new FakeTelegramClient
+        {
+            ContinueImpl = (_, _) => throw new TelegramAuthenticationException(
+                "telegram.session_cleanup_failed", "Не удалось очистить незавершённую сессию.")
+        };
+        using var provider = CreateVmProvider(client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+        await vm.BeginAsync();
+
+        await vm.ConfirmAsync("12345");
+
+        Assert.False(vm.IsAwaitingInput);
+        Assert.True(vm.IsSessionRecoveryNeeded);
+        Assert.True(vm.CanResetTelegramSession);
+    }
+
     [Fact]
     public async Task CancelFailure_KeepsRecoveryMarkerForNextLaunch()
     {

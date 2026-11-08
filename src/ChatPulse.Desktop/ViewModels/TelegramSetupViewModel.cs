@@ -254,8 +254,8 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
                 return false;
             }
 
-            // true = keys actually changed and session reset was completed.
-            // false = same keys; do not discard the existing authorization in the UI.
+            // true = the local session was invalidated, either by a key change
+            // or by pending crash recovery. false = no change and no reset.
             if (result.Value)
             {
                 SetProgress(null);
@@ -615,10 +615,19 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
             SetSessionRecoveryNeeded(false);
             SetSessionRetryNeeded(true);
         }
-        else if (code == "telegram.session_revoked")
+        else if (code is "telegram.session_revoked" or "telegram.session_cleanup_failed")
         {
             SetProgress(null);
+            SetSessionRetryNeeded(false);
             SetSessionRecoveryNeeded(true);
+        }
+        else if (code is "telegram.account_missing" or "telegram.unsupported_step")
+        {
+            // The unsupported WTelegram login state was cleared in the client.
+            // Do not leave the previous code/password input on screen.
+            SetProgress(null);
+            SetSessionRecoveryNeeded(false);
+            SetSessionRetryNeeded(false);
         }
     }
 

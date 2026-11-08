@@ -15,6 +15,8 @@ namespace ChatPulse.Desktop.Settings;
 public sealed class JsonSettingsService : ISettingsService, IDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private int _disposed;
     private readonly string _directory;
     private readonly string _path;
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -38,7 +40,7 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
 
     public async Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
-        await _semaphore.WaitAsync(cancellationToken);
+        await EnterAsync(cancellationToken);
         try
         {
             return await LoadInternalAsync(cancellationToken);
@@ -89,7 +91,7 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
 
     private async Task UpdateAsync(Action<AppSettings> update, CancellationToken cancellationToken)
     {
-        await _semaphore.WaitAsync(cancellationToken);
+        await EnterAsync(cancellationToken);
         try
         {
             var settings = await LoadInternalAsync(cancellationToken);
@@ -143,5 +145,34 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         }
     }
 
-    public void Dispose() => _semaphore.Dispose();
+    private async Task EnterAsync(CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(JsonSettingsService));
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        try
+        {
+            await _semaphore.WaitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            throw new ObjectDisposedException(nameof(JsonSettingsService));
+        }
+
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            _semaphore.Release();
+            throw new ObjectDisposedException(nameof(JsonSettingsService));
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            _shutdown.Cancel();
+
+        // Existing file operations can still complete their finally/Release.
+        // Dispose must never destroy the semaphore while it is in use.
+    }
 }

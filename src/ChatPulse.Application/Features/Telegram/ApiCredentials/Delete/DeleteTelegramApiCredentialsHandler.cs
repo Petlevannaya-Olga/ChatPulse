@@ -17,7 +17,20 @@ public sealed class DeleteTelegramApiCredentialsHandler(
         DeleteTelegramApiCredentialsCommand command, CancellationToken cancellationToken)
     {
         using var operation = await operationGate.EnterAsync(cancellationToken);
-        await RecoverPendingTelegramCleanup.RunAsync(journal, telegram, cancellationToken);
+        try
+        {
+            await RecoverPendingTelegramCleanup.RunAsync(journal, telegram, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception recoveryException)
+        {
+            // Recovery may already have invalidated the client or deleted its
+            // file. Never report the previous session as still verified.
+            throw new TelegramApiCredentialsUpdateException(false, recoveryException);
+        }
         TelegramApiCredentials? previous;
         var previousUnreadable = false;
         try

@@ -132,6 +132,56 @@ public sealed class WTelegramOfflineTests
         Assert.Equal("telegram.not_authorized", error.Code);
     }
 
+    [Theory]
+    [InlineData("name", "telegram.account_missing")]
+    [InlineData("unrecognized_login_field", "telegram.unsupported_step")]
+    public async Task UnsupportedLoginStep_ClearsPendingLocalSessionWithoutRemovingCredentials(
+        string loginStep, string expectedCode)
+    {
+        using var files = new SandboxDirectory();
+        var store = new FakeCredentialsStore
+        {
+            Value = new TelegramApiCredentials(123, "0123456789abcdef0123456789abcdef")
+        };
+        var journal = new FakeCredentialChangeJournal();
+        var path = System.IO.Path.Combine(files.Path, "telegram.session.dpapi");
+        await File.WriteAllBytesAsync(path, [1, 2, 3, 4]);
+        using var client = new WTelegramAuthenticationClient(files.Path, store, journal);
+
+        var error = await Assert.ThrowsAsync<TelegramAuthenticationException>(
+            () => client.CompleteLoginStepAsync(loginStep));
+
+        Assert.Equal(expectedCode, error.Code);
+        Assert.False(File.Exists(path));
+        Assert.False(journal.IsPending);
+        Assert.Equal(1, journal.MarkCalls);
+        Assert.Equal(1, journal.ClearCalls);
+        Assert.NotNull(store.Value);
+        var cancelError = await Assert.ThrowsAsync<TelegramAuthenticationException>(
+            () => client.CancelLoginAsync(default));
+        Assert.Equal("telegram.login_not_pending", cancelError.Code);
+    }
+
+    [Fact]
+    public async Task UnsupportedLoginStep_WhenSessionDeletionFails_KeepsRecoveryMarker()
+    {
+        using var files = new SandboxDirectory();
+        var journal = new FakeCredentialChangeJournal();
+        await using var clientLock = new FileStream(
+            System.IO.Path.Combine(files.Path, "telegram.session.dpapi"), FileMode.Create,
+            FileAccess.ReadWrite, FileShare.None);
+        using var client = new WTelegramAuthenticationClient(files.Path,
+            new FakeCredentialsStore(), journal);
+
+        // A locked file fails to delete on Windows. On other platforms deletion
+        // of an open file is permitted; this scenario requires Windows targeting.
+        if (!OperatingSystem.IsWindows()) return;
+        var error = await Assert.ThrowsAsync<TelegramAuthenticationException>(
+            () => client.CompleteLoginStepAsync("name"));
+        Assert.Equal("telegram.session_cleanup_failed", error.Code);
+        Assert.True(journal.IsPending);
+    }
+
     private sealed class SandboxDirectory : IDisposable
     {
         public string Path { get; } = System.IO.Path.Combine(

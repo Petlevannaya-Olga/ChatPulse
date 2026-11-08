@@ -9,13 +9,14 @@ namespace ChatPulse.Application.Features.Telegram;
 /// </summary>
 internal static class RecoverPendingTelegramCleanup
 {
-    internal static async Task RunAsync(
+    internal static async Task<bool> RunAsync(
         ITelegramCredentialChangeJournal journal,
         ITelegramAuthenticationClient telegram,
         CancellationToken cancellationToken)
     {
-        if (!await journal.IsPendingAsync(cancellationToken)) return;
+        if (!await journal.IsPendingAsync(cancellationToken)) return false;
         await telegram.ResetSessionAsync(CancellationToken.None);
         await journal.ClearPendingAsync(CancellationToken.None);
+        return true;
     }
 }

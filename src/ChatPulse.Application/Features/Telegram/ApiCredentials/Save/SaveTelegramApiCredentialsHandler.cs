@@ -18,14 +18,29 @@ public sealed class SaveTelegramApiCredentialsHandler(
         SaveTelegramApiCredentialsCommand command, CancellationToken cancellationToken)
     {
         using var operation = await operationGate.EnterAsync(cancellationToken);
-        await RecoverPendingTelegramCleanup.RunAsync(journal, telegram, cancellationToken);
+        bool recoveredInterruptedChange;
+        try
+        {
+            recoveredInterruptedChange = await RecoverPendingTelegramCleanup.RunAsync(journal, telegram, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception recoveryException)
+        {
+            // Recovery may already have invalidated the client or deleted its
+            // file. Never report the previous session as still verified.
+            throw new TelegramApiCredentialsUpdateException(false, recoveryException);
+        }
         // Input format is enforced by the FluentValidation decorator.
         var apiId = int.Parse(command.ApiId, NumberStyles.None, CultureInfo.InvariantCulture);
         var previous = await store.LoadAsync(cancellationToken);
         if (TelegramApiCredentialsComparer.AreSame(previous, apiId, command.ApiHash))
         {
-            // false means "nothing changed", NOT a failed command.
-            return Result.Success<bool, Error>(false);
+            // A pending crash recovery may have invalidated the session even
+            // though the API keys themselves are unchanged. Inform the UI.
+            return Result.Success<bool, Error>(recoveredInterruptedChange);
         }
 
         // Durable marker is committed BEFORE modifying credentials. If the process
