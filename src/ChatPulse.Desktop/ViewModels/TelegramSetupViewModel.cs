@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using ChatPulse.Application.Features.Telegram.ApiCredentials;
 using ChatPulse.Application.Features.Telegram.ApiCredentials.Delete;
 using ChatPulse.Application.Features.Telegram.ApiCredentials.Get;
 using ChatPulse.Application.Features.Telegram.ApiCredentials.Save;
@@ -37,8 +38,8 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
 
     public bool IsApiConfigured => _isApiConfigured;
     public bool IsEditingApiCredentials => _isEditingApiCredentials;
-    // Новые API-ключи можно ввести и при подключённом аккаунте.
-    // Сброс действующей сессии выполняет SaveTelegramApiCredentialsHandler при сохранении.
+    // Редактировать ключи можно и при действующей сессии.
+    // Сброс будет выполнен только при фактическом изменении ключей.
     public bool CanEditApiCredentials => IsApiConfigured && !IsBusy && !IsAwaitingInput;
     public bool CanResetTelegramSession => IsApiConfigured && IsAuthorized && !IsBusy && !IsAwaitingInput;
     public bool CanDeleteApiCredentials => IsApiConfigured && !IsBusy && !IsAwaitingInput;
@@ -77,20 +78,28 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
 
     public async Task LoadApiCredentialsStatusAsync(CancellationToken ct = default)
     {
-        using var scope = scopeFactory.CreateScope();
-        var handler = scope.ServiceProvider.GetRequiredService<
-            IQueryHandler<bool, GetTelegramApiStatusQuery>>();
-        var result = await handler.Handle(new GetTelegramApiStatusQuery(), ct);
-        if (result.IsFailure)
+        try
         {
-            Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
-            return;
+            using var scope = scopeFactory.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<
+                IQueryHandler<bool, GetTelegramApiStatusQuery>>();
+            var result = await handler.Handle(new GetTelegramApiStatusQuery(), ct);
+            if (result.IsFailure)
+            {
+                Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
+                return;
+            }
+            _isApiConfigured = result.Value;
+            Changed(nameof(IsApiConfigured));
+            Changed(nameof(CanStart));
+            Changed(nameof(CanEditApiCredentials));
+            Changed(nameof(CanDeleteApiCredentials));
         }
-        _isApiConfigured = result.Value;
-        Changed(nameof(IsApiConfigured));
-        Changed(nameof(CanStart));
-        Changed(nameof(CanEditApiCredentials));
-        Changed(nameof(CanDeleteApiCredentials));
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* ignore */ }
+        catch (Exception)
+        {
+            Error = "Не удалось проверить локальные API-ключи Telegram.";
+        }
     }
 
     /// <summary>Проверяет ранее сохранённую сессию без нового кода Telegram.</summary>
@@ -122,6 +131,39 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         finally { IsBusy = false; }
     }
 
+    /// <summary>
+    /// Checks whether the draft differs, without exposing the stored API Hash to the view.
+    /// null means the check failed; no confirmation dialog or save should follow.
+    /// </summary>
+    public async Task<bool?> HaveApiCredentialsChangedAsync(
+        string apiId, string apiHash, CancellationToken ct = default)
+    {
+        if (IsBusy) return null;
+        IsBusy = true;
+        Error = string.Empty;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<
+                IQueryHandler<bool, HaveTelegramApiCredentialsChangedQuery>>();
+            var result = await handler.Handle(
+                new HaveTelegramApiCredentialsChangedQuery(apiId.Trim(), apiHash.Trim()), ct);
+            if (result.IsFailure)
+            {
+                Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
+                return null;
+            }
+            return result.Value;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return null; }
+        catch (Exception)
+        {
+            Error = "Не удалось сравнить API-ключи с сохранёнными. Проверьте доступ к хранилищу.";
+            return null;
+        }
+        finally { IsBusy = false; }
+    }
+
     public async Task<bool> SaveApiCredentialsAsync(string apiId, string apiHash,
         CancellationToken ct = default)
     {
@@ -137,14 +179,13 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
                 new SaveTelegramApiCredentialsCommand(apiId.Trim(), apiHash.Trim()), ct);
             if (result.IsFailure)
             {
-                // Операция могла сбросить сессию до ошибки сохранения ключей.
-                SetProgress(null);
                 Error = result.Error.Errors?.FirstOrDefault()?.Message ?? result.Error.Message;
                 return false;
             }
-            // SaveTelegramApiCredentialsHandler сбрасывает прежнюю сессию перед записью ключей.
-            // Убираем статус авторизации из UI: после замены ключей нужен новый вход.
-            SetProgress(null);
+
+            // true = keys actually changed and session reset was completed.
+            // false = same keys; do not discard the existing authorization in the UI.
+            if (result.Value) SetProgress(null);
             _isApiConfigured = true;
             _isEditingApiCredentials = false;
             Changed(nameof(IsApiConfigured));
@@ -155,11 +196,20 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return false; }
+        catch (TelegramApiCredentialsUpdateException exception)
+        {
+            // Reset may already have disposed the client, even if old keys were restored.
+            SetProgress(null);
+            await LoadApiCredentialsStatusAsync(CancellationToken.None);
+            Error = exception.PreviousCredentialsRestored
+                ? "Не удалось сбросить Telegram-сессию. Предыдущие API-ключи восстановлены. Проверьте авторизацию."
+                : "Не удалось завершить замену ключей или восстановить старые. Проверьте настройки подключения Telegram.";
+            return false;
+        }
         catch (Exception)
         {
-            // Сброс в обработчике команды предшествует записи новых ключей.
-            SetProgress(null);
-            Error = "Не удалось сохранить API-ключи. Проверьте доступ к папке ChatPulse.";
+            // Error before the reset means that the existing authorization remains valid.
+            Error = "Не удалось сохранить API-ключи. Действующая сессия не сброшена.";
             return false;
         }
         finally { IsBusy = false; }
@@ -197,9 +247,20 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return false; }
+        catch (TelegramApiCredentialsUpdateException exception)
+        {
+            // The reset might have invalidated the in-memory authorization already.
+            SetProgress(null);
+            await LoadApiCredentialsStatusAsync(CancellationToken.None);
+            Error = exception.PreviousCredentialsRestored
+                ? "Не удалось сбросить сессию. Ранее сохранённые API-ключи восстановлены."
+                : "Не удалось сбросить сессию и восстановить API-ключи. Проверьте настройки Telegram.";
+            return false;
+        }
         catch (Exception)
         {
-            Error = "Не удалось удалить локальные API-ключи или Telegram-сессию. Попробуйте снова.";
+            // Local session is untouched when secret-file deletion fails.
+            Error = "Не удалось удалить API-ключи. Сессия не сброшена.";
             return false;
         }
         finally { IsBusy = false; }

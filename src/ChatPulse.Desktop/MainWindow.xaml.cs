@@ -13,6 +13,7 @@ public partial class MainWindow : Window
 {
     private readonly ISettingsService _settings;
     private readonly TelegramSetupViewModel _telegramSetup;
+    private readonly FirstChatSetupViewModel _firstChatSetup;
     private readonly ILogger<MainWindow> _logger;
     private TelegramOnboardingPage _telegramPage = TelegramOnboardingPage.ApiCredentials;
     private bool _isCloseConfirmed;
@@ -20,14 +21,17 @@ public partial class MainWindow : Window
 
     public MainWindow(
         TelegramSetupViewModel telegramSetup,
+        FirstChatSetupViewModel firstChatSetup,
         ISettingsService settings,
         ILogger<MainWindow> logger)
     {
         InitializeComponent();
         _settings = settings;
         _telegramSetup = telegramSetup;
+        _firstChatSetup = firstChatSetup;
         _logger = logger;
         SecondStepScreen.DataContext = telegramSetup;
+        ThirdStepScreen.DataContext = _firstChatSetup;
         SecondStepScreen.TelegramPageRequested += SecondStepScreen_OnTelegramPageRequested;
     }
 
@@ -79,7 +83,7 @@ public partial class MainWindow : Window
         }
 
         // Не предлагаем заново войти в Telegram после успешного восстановления.
-        // На шаге 3 пока остаётся заглушка для настройки первого чата.
+        // Третий шаг загружает список чатов только при открытии.
         if (_telegramSetup.IsAuthorized)
         {
             _telegramPage = TelegramOnboardingPage.Phone;
@@ -193,7 +197,8 @@ public partial class MainWindow : Window
         => await NavigateAsync(OnboardingStep.Telegram);
 
     /// <summary>
-    /// Вызывается будущим последним шагом только после успешного добавления чата.
+    /// Завершение онбординга будет подключено при появлении главного экрана.
+    /// Сохранение первого чата само по себе ещё не начинает импорт сообщений.
     /// </summary>
     public async Task MarkOnboardingCompletedAsync(CancellationToken cancellationToken = default)
     {

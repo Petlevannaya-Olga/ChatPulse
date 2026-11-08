@@ -10,4 +10,5 @@ public interface ITelegramAuthenticationClient
     Task<TelegramLoginProgress> ContinueLoginAsync(string input, CancellationToken cancellationToken);
     Task<TelegramLoginProgress> ResendCodeAsync(CancellationToken cancellationToken);
     Task ResetSessionAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<TelegramChatOption>> GetChatsAsync(CancellationToken cancellationToken);
 }

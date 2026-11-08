@@ -262,6 +262,59 @@ public sealed class WTelegramAuthenticationClient(
         finally { _gate.Release(); }
     }
 
+    /// <summary>Читает список доступных групп и каналов без загрузки истории сообщений.</summary>
+    public async Task<IReadOnlyList<TelegramChatOption>> GetChatsAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (_client is null || _client.UserId == 0)
+            {
+                throw new TelegramAuthenticationException("telegram.not_authorized",
+                    "Telegram не подключён. Вернитесь к шагу авторизации.");
+            }
+
+            var dialogs = await _client.Messages_GetAllDialogs();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // ID в Telegram не глобально уникален между Chat и Channel:
+            // сохраняем также тип peer, а не только числовой идентификатор.
+            return dialogs.dialogs
+                .Select(dialog => dialogs.UserOrChat(dialog))
+                .OfType<TL.ChatBase>()
+                .Where(chat => chat.IsActive)
+                .Select(chat => new TelegramChatOption(
+                    chat.ID,
+                    chat is TL.Chat ? "Chat" : "Channel",
+                    chat switch
+                    {
+                        TL.Chat group => group.title,
+                        TL.Channel channel => channel.title,
+                        _ => chat.ToString() ?? "Чат Telegram"
+                    },
+                    chat.IsChannel ? "Канал" : "Группа"))
+                .DistinctBy(chat => (chat.PeerType, chat.PeerId))
+                .OrderBy(chat => chat.Title, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+        }
+        catch (TelegramAuthenticationException) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TL.RpcException exception)
+        {
+            Debug.WriteLine($"[ChatPulse][TelegramChats] GetChats: rpcCode={exception.Code}");
+            throw new TelegramAuthenticationException("telegram.chats_load_failed",
+                "Telegram не смог загрузить список чатов. Проверьте соединение и повторите попытку.");
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"[ChatPulse][TelegramChats] GetChats: exceptionType={exception.GetType().Name}");
+            throw new TelegramAuthenticationException("telegram.chats_load_failed",
+                "Не удалось получить список Telegram-чатов. Повторите попытку.");
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task<Client> CreateClientAsync(CancellationToken cancellationToken)
     {
         var credentials = await credentialsStore.LoadAsync(cancellationToken)

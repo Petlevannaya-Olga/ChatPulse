@@ -15,4 +15,6 @@ public interface ISettingsService
         TelegramOnboardingPage page, CancellationToken cancellationToken = default);
 
     Task CompleteOnboardingAsync(CancellationToken cancellationToken = default);
+
+    Task SaveChatAsync(ConfiguredChat chat, CancellationToken cancellationToken = default);
 }

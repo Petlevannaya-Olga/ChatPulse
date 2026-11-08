@@ -8,6 +8,7 @@
         Height="800"
         MinWidth="1000"
         MinHeight="650"
+        Style="{StaticResource MaterialDesignWindow}"
         WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI"
         UseLayoutRounding="True"

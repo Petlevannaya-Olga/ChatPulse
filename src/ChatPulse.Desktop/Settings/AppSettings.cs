@@ -32,4 +32,19 @@ public sealed class AppSettings
     public TelegramOnboardingPage CurrentTelegramPage { get; set; } = TelegramOnboardingPage.ApiCredentials;
 
     public bool IsOnboardingCompleted { get; set; }
+
+    /// <summary>Конфигурация подключённых чатов, не история заданий.</summary>
+    public List<ConfiguredChat> Chats { get; set; } = [];
 }
+
+/// <summary>Одна сохранённая настройка чата. Дата трактуется как 00:00 в часовом поясе чата при импорте.</summary>
+public sealed class ConfiguredChat
+{
+    public long PeerId { get; set; }
+    public string PeerType { get; set; } = string.Empty;
+    public string TelegramTitle { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string SocialNetwork { get; set; } = string.Empty;
+    public DateOnly StartDate { get; set; }
+}
+

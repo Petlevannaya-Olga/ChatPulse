@@ -90,8 +90,9 @@ public sealed class ProtectedTelegramApiCredentialsStore(string dataDirectory)
         try
         {
             // Local deletion only: Telegram-side revocation is a different operation.
-            File.Delete(_path);
+            // Delete the temporary file first; if it fails, keep the real keys.
             File.Delete(_path + ".tmp");
+            File.Delete(_path);
         }
         finally { _gate.Release(); }
     }

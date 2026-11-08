@@ -66,6 +66,18 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
     public Task CompleteOnboardingAsync(CancellationToken cancellationToken = default)
         => UpdateAsync(settings => settings.IsOnboardingCompleted = true, cancellationToken);
 
+    public Task SaveChatAsync(ConfiguredChat chat, CancellationToken cancellationToken = default)
+        => UpdateAsync(settings =>
+        {
+            settings.Chats ??= [];
+            var index = settings.Chats.FindIndex(existing =>
+                existing.PeerId == chat.PeerId && existing.PeerType == chat.PeerType);
+            if (index < 0)
+                settings.Chats.Add(chat);
+            else
+                settings.Chats[index] = chat;
+        }, cancellationToken);
+
     private async Task UpdateAsync(Action<AppSettings> update, CancellationToken cancellationToken)
     {
         await _semaphore.WaitAsync(cancellationToken);

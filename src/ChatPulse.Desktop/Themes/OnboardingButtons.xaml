@@ -1,0 +1,40 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes">
+    <!-- Единая геометрия кнопок онбординга. Шаблоны Material Design сохраняют
+         стандартные состояния и ripple; отличаются только визуальные приоритеты. -->
+    <Style x:Key="ChatPulseOnboardingPrimaryButton" TargetType="Button"
+           BasedOn="{StaticResource MaterialDesignRaisedButton}">
+        <Setter Property="Height" Value="48" />
+        <Setter Property="MinWidth" Value="176" />
+        <Setter Property="Padding" Value="20,0" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="#7545F9" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="9" />
+    </Style>
+
+    <Style x:Key="ChatPulseOnboardingOutlinedButton" TargetType="Button"
+           BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+        <Setter Property="Height" Value="48" />
+        <Setter Property="MinWidth" Value="176" />
+        <Setter Property="Padding" Value="20,0" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="#7545C8" />
+        <Setter Property="BorderBrush" Value="#8A58DB" />
+        <Setter Property="BorderThickness" Value="1.5" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="9" />
+    </Style>
+
+    <!-- Вторичное, но потенциально разрушительное действие. -->
+    <Style x:Key="ChatPulseOnboardingDangerOutlinedButton" TargetType="Button"
+           BasedOn="{StaticResource ChatPulseOnboardingOutlinedButton}">
+        <Setter Property="Foreground" Value="#B54865" />
+        <Setter Property="BorderBrush" Value="#B54865" />
+    </Style>
+</ResourceDictionary>

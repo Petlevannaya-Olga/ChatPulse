@@ -339,13 +339,20 @@ public partial class OnboardingStepTwoView : UserControl
     private async void ApiKeysSaveButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
-        // Замена ключей сбрасывает действующую сессию. Сначала спрашиваем согласие,
-        // при отмене оставляем введённые значения и действующую авторизацию.
-        if (vm.IsAuthorized &&
+        // Confirm only an actual change. Re-saving identical credentials must not
+        // display a logout warning or discard the verified Telegram session.
+        var apiId = ApiIdInput.Text.Trim();
+        var apiHash = ApiHashInput.Password.Trim();
+        var changed = await vm.HaveApiCredentialsChangedAsync(apiId, apiHash);
+        if (changed is null) return;
+        // Only save the draft that was compared; a concurrent edit needs rechecking.
+        if (ApiIdInput.Text.Trim() != apiId || ApiHashInput.Password.Trim() != apiHash)
+            return;
+        if (changed.Value && vm.IsAuthorized &&
             !ShowModal(new TelegramSessionActionDialog(TelegramSessionAction.ChangeApiKeys)))
             return;
 
-        var saved = await vm.SaveApiCredentialsAsync(ApiIdInput.Text, ApiHashInput.Password);
+        var saved = await vm.SaveApiCredentialsAsync(apiId, apiHash);
         if (saved)
         {
             ApiIdInput.Clear();
