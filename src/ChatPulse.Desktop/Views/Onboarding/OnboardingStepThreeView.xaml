@@ -34,6 +34,14 @@
             <Setter Property="FontSize" Value="15" />
             <Setter Property="Foreground" Value="{StaticResource TextPrimary}" />
         </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button"
+               BasedOn="{StaticResource MaterialDesignRaisedButton}">
+            <Setter Property="Height" Value="48" />
+            <Setter Property="MinWidth" Value="215" />
+            <Setter Property="Padding" Value="20,10" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
         <Style x:Key="TextButton" TargetType="Button"
                BasedOn="{StaticResource MaterialDesignFlatButton}">
             <Setter Property="Padding" Value="14,9" />
@@ -240,10 +248,10 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="0" Click="BackButton_OnClick"
-                                    Style="{StaticResource ChatPulseOnboardingOutlinedButton}" Width="248" Content="←  Назад" />
+                                    Style="{StaticResource TextButton}" Content="←  Назад" />
                             <Button Grid.Column="2" Click="SaveButton_OnClick"
                                     IsEnabled="{Binding CanSave}"
-                                    Style="{StaticResource ChatPulseOnboardingPrimaryButton}" Width="248" Content="Сохранить первый чат  →" />
+                                    Style="{StaticResource PrimaryButton}" Content="Сохранить первый чат  →" />
                         </Grid>
                     </Border>
                 </Grid>

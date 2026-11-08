@@ -308,8 +308,12 @@ public partial class OnboardingStepTwoView : UserControl
             ? Visibility.Visible : Visibility.Collapsed;
         ConnectedPanel.Visibility = !showApi && vm.IsAuthorized
             ? Visibility.Visible : Visibility.Collapsed;
-        ApiCancelButton.Visibility = vm.IsApiConfigured && vm.IsEditingApiCredentials
-            ? Visibility.Visible : Visibility.Collapsed;
+        var showApiCancel = vm.IsApiConfigured && vm.IsEditingApiCredentials;
+        ApiCancelButton.Visibility = showApiCancel ? Visibility.Visible : Visibility.Collapsed;
+        ApiCancelColumn.Width = showApiCancel ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        ApiSaveButton.SetValue(Grid.ColumnSpanProperty, showApiCancel ? 1 : 2);
+        ApiSaveButton.Margin = showApiCancel ? new Thickness(0, 0, 6, 0) : new Thickness(0);
+        ApiCancelButton.Margin = showApiCancel ? new Thickness(6, 0, 0, 0) : new Thickness(0);
         PasswordInput.Visibility = vm.IsPasswordRequired ? Visibility.Visible : Visibility.Collapsed;
         ConfirmationInput.Visibility = vm.IsPasswordRequired ? Visibility.Collapsed : Visibility.Visible;
         TelegramHelpButton.Visibility = !showApi && !vm.IsAuthorized ? Visibility.Visible : Visibility.Collapsed;

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using ChatPulse.Application.Features.Telegram.ApiCredentials;
 using ChatPulse.Application.Features.Telegram.ApiCredentials.Delete;
@@ -336,6 +337,7 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
     }
     public bool IsPasswordRequired => _progress?.RequiredInput == TelegramLoginInputKind.Password;
     public string ConnectedAccount => _progress?.DisplayName ?? string.Empty;
+    public string ConnectedAccountInitials => BuildAccountInitials(ConnectedAccount);
     public string Error { get => _error; private set { _error = value; Changed(); Changed(nameof(HasError)); } }
     public bool HasError => Error.Length > 0;
 
@@ -468,6 +470,7 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         Changed(nameof(CanStart));
         Changed(nameof(CanConfirm));
         Changed(nameof(ConnectedAccount));
+        Changed(nameof(ConnectedAccountInitials));
         Changed(nameof(Prompt));
         Changed(nameof(PromptHint));
         Changed(nameof(IsVerificationCodePending));
@@ -477,6 +480,30 @@ public sealed class TelegramSetupViewModel(IServiceScopeFactory scopeFactory)
         Changed(nameof(CanEditApiCredentials));
         Changed(nameof(CanDeleteApiCredentials));
         Changed(nameof(CanResetTelegramSession));
+    }
+
+    private static string BuildAccountInitials(string? displayName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName)) return "TG";
+
+        var source = displayName.Trim();
+        if (source.StartsWith('@'))
+        {
+            source = source.TrimStart('@');
+            return string.Concat(source.Take(2)).ToUpperInvariant();
+        }
+
+        var parts = source
+            .Split([' ', '	', '-', '_'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static part => part.Length > 0)
+            .ToArray();
+
+        if (parts.Length >= 2)
+        {
+            return string.Concat(parts[0][0], parts[1][0]).ToUpperInvariant();
+        }
+
+        return string.Concat(parts[0].Take(2)).ToUpperInvariant();
     }
 
     private void Changed([CallerMemberName] string? name = null)

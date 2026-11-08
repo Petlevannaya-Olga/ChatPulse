@@ -56,6 +56,64 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="OutlineBackButton" TargetType="Button">
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F4EFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ContinueButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="48" />
+            <Setter Property="MinWidth" Value="176" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9"
+                                Background="{StaticResource PrimaryBrush}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.75" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Background" Value="#B9B0CF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Grid Background="{StaticResource OnboardingBackgroundBrush}" ClipToBounds="True">
@@ -270,7 +328,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button Grid.Column="0" Click="BackButton_OnClick"
-                                Style="{StaticResource ChatPulseOnboardingOutlinedButton}" Width="248">
+                                Style="{StaticResource OutlineBackButton}">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="←" FontSize="19" Margin="0,0,9,0"
                                            VerticalAlignment="Center" />
@@ -279,7 +337,7 @@
                         </Button>
                         <Button Grid.Column="2" x:Name="ContinueButton" Click="ContinueButton_OnClick"
                                 IsEnabled="{Binding IsNameValid}"
-                                Style="{StaticResource ChatPulseOnboardingPrimaryButton}" Width="248">
+                                Style="{StaticResource ContinueButtonStyle}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="Продолжить" />
                                 <TextBlock Text="→" FontSize="20" Margin="16,0,0,0" />

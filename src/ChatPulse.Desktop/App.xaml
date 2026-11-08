@@ -5,14 +5,14 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <!-- Material Design 3: единая база стилей для WPF.
-                     ScrollBars.xaml остаётся последним для сохранения фирменного скролла. -->
+                <!-- Material Design 3: единая база стилей WPF.
+                     Локальные темы подключаются после неё для переопределения оформления. -->
                 <materialDesign:BundledTheme BaseTheme="Light"
                                              PrimaryColor="DeepPurple"
                                              SecondaryColor="Pink" />
                 <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesign3.Defaults.xaml" />
-                <ResourceDictionary Source="Themes/OnboardingButtons.xaml" />
                 <ResourceDictionary Source="Themes/ScrollBars.xaml" />
+                <ResourceDictionary Source="Themes/ToolTips.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
