@@ -538,6 +538,7 @@ public partial class OnboardingStepTwoView : UserControl
                               nameof(TelegramSetupViewModel.IsPasswordRequired) or
                               nameof(TelegramSetupViewModel.IsSessionRetryNeeded) or
                               nameof(TelegramSetupViewModel.IsSessionRecoveryNeeded) or
+                              nameof(TelegramSetupViewModel.IsApiCredentialsCorrupted) or
                               nameof(TelegramSetupViewModel.IsAuthorized))
         {
             UpdatePanels(vm);
@@ -556,11 +557,20 @@ public partial class OnboardingStepTwoView : UserControl
             ConfirmationInput.Clear();
             ClearCloudPassword();
         }
-        var showApi = _currentPage == TelegramOnboardingPage.ApiCredentials || !vm.IsApiConfigured;
+        // A failed session check is not a request to modify valid API credentials.
+        // Keep credential repair available when the credentials themselves are corrupted.
+        var isSessionProblem = vm.IsApiConfigured && !vm.IsApiCredentialsCorrupted &&
+                               (vm.IsSessionRetryNeeded || vm.IsSessionRecoveryNeeded);
+        var showApi = _currentPage == TelegramOnboardingPage.ApiCredentials ||
+                      !vm.IsApiConfigured || isSessionProblem;
         ApiKeysPanel.Visibility = showApi ? Visibility.Visible : Visibility.Collapsed;
-        ApiCredentialsEntryPanel.Visibility = !vm.IsApiConfigured || vm.IsEditingApiCredentials
+        ApiKeysHelpButton.Visibility = isSessionProblem ? Visibility.Collapsed : Visibility.Visible;
+        ApiSavedActionsPanel.Visibility = isSessionProblem ? Visibility.Collapsed : Visibility.Visible;
+        ApiCredentialsEntryPanel.Visibility = !isSessionProblem &&
+                                              (!vm.IsApiConfigured || vm.IsEditingApiCredentials)
             ? Visibility.Visible : Visibility.Collapsed;
-        ApiSavedPanel.Visibility = vm.IsApiConfigured && !vm.IsEditingApiCredentials
+        ApiSavedPanel.Visibility = vm.IsApiConfigured &&
+                                   (isSessionProblem || !vm.IsEditingApiCredentials)
             ? Visibility.Visible : Visibility.Collapsed;
         // Until the old session is verified or explicitly reset, do not offer
         // a phone login that CanStart intentionally forbids for safety.

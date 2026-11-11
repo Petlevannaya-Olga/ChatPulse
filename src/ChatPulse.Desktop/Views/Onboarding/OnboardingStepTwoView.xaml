@@ -474,7 +474,7 @@
                              В settings.json не храним секреты. -->
                         <StackPanel x:Name="ApiKeysPanel" Margin="0,9,0,0" Visibility="Visible">
                             <!-- Help is a link next to API configuration, not a second button below the form. -->
-                            <Button Click="ApiKeysHelpButton_OnClick" Background="Transparent"
+                            <Button x:Name="ApiKeysHelpButton" Click="ApiKeysHelpButton_OnClick" Background="Transparent"
                                     BorderThickness="0" Margin="0,0,0,8"
                                     HorizontalAlignment="Center" Cursor="Hand"
                                     FocusVisualStyle="{x:Null}"
@@ -515,7 +515,7 @@
                                 </StackPanel>
                                 <!-- Переход к номеру выполняется общей кнопкой «Продолжить»
                                      в нижней панели шага. Здесь остаются действия с ключами. -->
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                <StackPanel x:Name="ApiSavedActionsPanel" Orientation="Horizontal" HorizontalAlignment="Center"
                                             Margin="0,14,0,14">
                                     <Button Content="Изменить API-ключи"
                                             Margin="0,0,18,0"
