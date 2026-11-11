@@ -48,7 +48,7 @@
                                   ShadowDepth="8" Opacity="0.32" />
             </Border.Effect>
             <StackPanel>
-                <Grid>
+                <Grid x:Name="DialogKeyboardFocusTarget" Focusable="True" KeyboardNavigation.IsTabStop="False">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -81,7 +81,7 @@
                             IsCancel="True" Click="KeepLoginButton_OnClick" />
                     <Button Content="Отменить вход" Style="{StaticResource PrimaryDialogButton}"
                             Width="170" Margin="12,0,0,0"
-                            IsDefault="True" Click="CancelLoginButton_OnClick" />
+                            Click="CancelLoginButton_OnClick" />
                 </StackPanel>
             </StackPanel>
         </Border>

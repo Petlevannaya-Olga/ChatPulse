@@ -48,7 +48,7 @@
         </Style>
     </Window.Resources>
 
-    <Grid Margin="24">
+    <Grid x:Name="DialogKeyboardFocusTarget" Margin="24" Focusable="True" KeyboardNavigation.IsTabStop="False">
         <Border Background="White" CornerRadius="20" Padding="32,28">
             <Border.Effect>
                 <DropShadowEffect Color="#18083A" BlurRadius="28" ShadowDepth="8" Opacity="0.32" />
@@ -89,7 +89,7 @@
                 <Button Grid.Row="2" Content="Понятно"
                         HorizontalAlignment="Right"
                         Margin="0,22,0,0"
-                        IsDefault="True" IsCancel="True"
+                        IsCancel="True"
                         Style="{StaticResource ChatPulseConfirmButton}"
                         Click="Close_Click" />
             </Grid>

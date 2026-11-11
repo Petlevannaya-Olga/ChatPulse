@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Input;
 using ChatPulse.Desktop.Settings;
 using ChatPulse.Desktop.ViewModels;
 using ChatPulse.Desktop.Views.Dialogs;
@@ -18,6 +19,7 @@ public partial class MainWindow : Window
     private readonly ChatPulse.Application.Services.TelegramAuthorizationEvents _authorizationEvents;
     private TelegramOnboardingPage _telegramPage = TelegramOnboardingPage.ApiCredentials;
     private bool _isCloseConfirmed;
+    private bool _isExitDialogOpen;
     private bool _isOnboardingCompleted;
     private bool _hasInitialized;
 
@@ -258,23 +260,29 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Do not open a second exit confirmation while the first is displayed.
+        if (_isExitDialogOpen)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        _isExitDialogOpen = true;
         var dialog = new ExitOnboardingDialog { Owner = this };
         ShowDialogOverlay();
 
         try
         {
             if (dialog.ShowDialog() == true)
-            {
                 _isCloseConfirmed = true;
-            }
             else
-            {
                 e.Cancel = true;
-            }
         }
         finally
         {
             HideDialogOverlay();
+            _isExitDialogOpen = false;
+            Keyboard.ClearFocus();
         }
 
         base.OnClosing(e);

@@ -48,7 +48,7 @@
             <Setter Property="Foreground" Value="#321953"/>
         </Style>
     </Window.Resources>
-    <Grid>
+    <Grid x:Name="DialogKeyboardFocusTarget" Focusable="True" KeyboardNavigation.IsTabStop="False">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Border Background="#2C1854" Padding="26,20">
             <StackPanel>

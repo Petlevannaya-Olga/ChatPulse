@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ChatPulse.Desktop.Settings;
@@ -61,6 +62,22 @@ public partial class OnboardingStepTwoView : UserControl
             }
         };
         RefreshPhonePlaceholder();
+    }
+
+    // Enter on a focused button should behave as a single click, without turning
+    // an opened confirmation dialog into an implicit default action.
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && Keyboard.FocusedElement is Button button &&
+            button.IsKeyboardFocused && button.IsEnabled && button.IsVisible)
+        {
+            e.Handled = true;
+            if (!e.IsRepeat)
+                button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, button));
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
     }
 
     public event EventHandler? BackRequested;
@@ -651,12 +668,7 @@ public partial class OnboardingStepTwoView : UserControl
         if (DataContext is not TelegramSetupViewModel vm || !vm.CanDeleteApiCredentials)
             return;
 
-        if (!ShowModal(new DeleteTelegramApiKeysDialog()))
-        {
-            // Otherwise the next Enter immediately opens the dialog again.
-            Keyboard.ClearFocus();
-            return;
-        }
+        if (!ShowModal(new DeleteTelegramApiKeysDialog())) return;
 
         if (!await vm.DeleteApiCredentialsAsync()) return;
 
@@ -672,10 +684,7 @@ public partial class OnboardingStepTwoView : UserControl
             return;
 
         if (!ShowModal(new TelegramSessionActionDialog(TelegramSessionAction.ResetSession)))
-        {
-            Keyboard.ClearFocus();
             return;
-        }
 
         if (!await vm.ResetTelegramSessionAsync())
         {
@@ -725,10 +734,15 @@ public partial class OnboardingStepTwoView : UserControl
         {
             mainWindow.ShowDialogOverlay();
             try { return dialog.ShowDialog() == true; }
-            finally { mainWindow.HideDialogOverlay(); }
+            finally
+            {
+                mainWindow.HideDialogOverlay();
+                Keyboard.ClearFocus();
+            }
         }
 
-        return dialog.ShowDialog() == true;
+        try { return dialog.ShowDialog() == true; }
+        finally { Keyboard.ClearFocus(); }
     }
 
     private async void BackButton_OnClick(object sender, RoutedEventArgs e)

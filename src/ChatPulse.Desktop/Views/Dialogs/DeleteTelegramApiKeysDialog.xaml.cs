@@ -8,9 +8,7 @@ public partial class DeleteTelegramApiKeysDialog : Window
     public DeleteTelegramApiKeysDialog()
     {
         InitializeComponent();
-        // Enter should only activate an explicitly focused action button.
-        // Keep focus on a neutral element when the confirmation dialog opens.
-        ContentRendered += (_, _) => Keyboard.Focus(DialogKeyboardFocusTarget);
+        ModalDialogKeyboardPolicy.Apply(this, DialogKeyboardFocusTarget);
     }
 
     private void Cancel_OnClick(object sender, RoutedEventArgs e) => DialogResult = false;

@@ -76,7 +76,7 @@
                         <ColumnDefinition Width="14" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Content="Отмена" 
+                    <Button Grid.Column="0" Content="Отмена"
                             Background="#F5F0FF" Foreground="#39235C"
                             BorderThickness="0" Style="{StaticResource DialogButton}"
                             Click="Cancel_OnClick" />
