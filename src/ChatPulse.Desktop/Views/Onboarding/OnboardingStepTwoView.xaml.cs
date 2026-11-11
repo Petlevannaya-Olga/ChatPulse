@@ -651,7 +651,12 @@ public partial class OnboardingStepTwoView : UserControl
         if (DataContext is not TelegramSetupViewModel vm || !vm.CanDeleteApiCredentials)
             return;
 
-        if (!ShowModal(new DeleteTelegramApiKeysDialog())) return;
+        if (!ShowModal(new DeleteTelegramApiKeysDialog()))
+        {
+            // Otherwise the next Enter immediately opens the dialog again.
+            Keyboard.ClearFocus();
+            return;
+        }
 
         if (!await vm.DeleteApiCredentialsAsync()) return;
 
@@ -667,7 +672,10 @@ public partial class OnboardingStepTwoView : UserControl
             return;
 
         if (!ShowModal(new TelegramSessionActionDialog(TelegramSessionAction.ResetSession)))
+        {
+            Keyboard.ClearFocus();
             return;
+        }
 
         if (!await vm.ResetTelegramSessionAsync())
         {

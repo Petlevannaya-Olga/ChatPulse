@@ -14,6 +14,8 @@ public partial class TelegramSessionActionDialog : Window
     public TelegramSessionActionDialog(TelegramSessionAction action)
     {
         InitializeComponent();
+        // No implicit Enter action: the user must explicitly focus a button.
+        ContentRendered += (_, _) => Keyboard.Focus(DialogKeyboardFocusTarget);
 
         if (action == TelegramSessionAction.ChangeApiKeys)
         {
