@@ -48,6 +48,179 @@ public sealed class TelegramSetupViewModelTests
     }
 
     [Fact]
+    public void ShortPositiveApiId_IsFormatValid_WithoutInlineError()
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        vm.UpdateApiCredentialsDraftValidity("3", HashA);
+        Assert.Empty(vm.ApiIdDraftError);
+        Assert.True(vm.CanSaveApiCredentials);
+    }
+
+    [Theory]
+    [InlineData("", "Введите API ID.")]
+    [InlineData("0", "API ID должен быть положительным целым числом.")]
+    [InlineData("-1", "API ID должен быть положительным целым числом.")]
+    [InlineData("2147483648", "API ID должен быть положительным целым числом.")]
+    [InlineData("abc", "API ID должен быть положительным целым числом.")]
+    public void ApiIdDraftError_UsesExistingValidator(string apiId, string expectedError)
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        vm.UpdateApiCredentialsDraftValidity(apiId, HashA);
+        Assert.Equal(expectedError, vm.ApiIdDraftError);
+        Assert.Empty(vm.ApiHashDraftError);
+        Assert.False(vm.CanSaveApiCredentials);
+    }
+
+    [Theory]
+    [InlineData("", "Введите API Hash.")]
+    [InlineData("0123", "API Hash должен содержать 32 шестнадцатеричных символа.")]
+    [InlineData("0123456789abcdef0123456789abcdeg", "API Hash должен содержать 32 шестнадцатеричных символа.")]
+    public void ApiHashDraftError_UsesExistingValidator(string apiHash, string expectedError)
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        vm.UpdateApiCredentialsDraftValidity("123", apiHash);
+        Assert.Empty(vm.ApiIdDraftError);
+        Assert.Equal(expectedError, vm.ApiHashDraftError);
+        Assert.False(vm.CanSaveApiCredentials);
+    }
+
+    [Fact]
+    public void CorrectingApiDraft_ClearsBothInlineErrors()
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        vm.UpdateApiCredentialsDraftValidity("0", "wrong");
+        Assert.NotEmpty(vm.ApiIdDraftError);
+        Assert.NotEmpty(vm.ApiHashDraftError);
+        vm.UpdateApiCredentialsDraftValidity("123", HashA);
+        Assert.Empty(vm.ApiIdDraftError);
+        Assert.Empty(vm.ApiHashDraftError);
+        Assert.True(vm.CanSaveApiCredentials);
+    }
+
+    [Theory]
+    [InlineData("", "Заполните поле подтверждения.")]
+    [InlineData("   ", "Заполните поле подтверждения.")]
+    public void EmptyConfirmationDraft_IsRejectedByExistingValidator(string draft, string expectedError)
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+
+        vm.UpdateConfirmationDraftValidity(draft);
+
+        Assert.Equal(expectedError, vm.ConfirmationDraftError);
+        Assert.False(vm.CanConfirm);
+    }
+
+    [Fact]
+    public async Task ConfirmationButton_RequiresNonEmptyDraft_AndUpdatesOnEveryChange()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient
+        {
+            BeginImpl = (_, _) => Task.FromResult(
+                new TelegramLoginProgress(TelegramLoginInputKind.VerificationCode))
+        };
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+        await vm.BeginAsync();
+
+        Assert.True(vm.IsAwaitingInput);
+        Assert.False(vm.CanConfirm);
+
+        vm.UpdateConfirmationDraftValidity("12345");
+        Assert.Empty(vm.ConfirmationDraftError);
+        Assert.True(vm.CanConfirm);
+
+        vm.UpdateConfirmationDraftValidity(" ");
+        Assert.Equal("Заполните поле подтверждения.", vm.ConfirmationDraftError);
+        Assert.False(vm.CanConfirm);
+
+        vm.UpdateConfirmationDraftValidity("12345");
+        Assert.Empty(vm.ConfirmationDraftError);
+        Assert.True(vm.CanConfirm);
+    }
+
+    [Fact]
+    public async Task ConfirmationDraft_OverMaximumLength_DisablesConfirmAndThenRecovers()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient
+        {
+            BeginImpl = (_, _) => Task.FromResult(
+                new TelegramLoginProgress(TelegramLoginInputKind.VerificationCode))
+        };
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+        await vm.BeginAsync();
+
+        vm.UpdateConfirmationDraftValidity(new string('x', 257));
+        Assert.Equal("Значение слишком длинное.", vm.ConfirmationDraftError);
+        Assert.False(vm.CanConfirm);
+
+        vm.UpdateConfirmationDraftValidity(new string('x', 256));
+        Assert.Empty(vm.ConfirmationDraftError);
+        Assert.True(vm.CanConfirm);
+    }
+
+    [Fact]
+    public async Task ConfirmationDraftValidity_IsResetBetweenTelegramSteps()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient
+        {
+            BeginImpl = (_, _) => Task.FromResult(
+                new TelegramLoginProgress(TelegramLoginInputKind.VerificationCode)),
+            ContinueImpl = (input, _) => Task.FromResult(input == "12345"
+                ? new TelegramLoginProgress(TelegramLoginInputKind.Password)
+                : Authorized)
+        };
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+        await vm.BeginAsync();
+        vm.UpdateConfirmationDraftValidity("12345");
+        Assert.True(vm.CanConfirm);
+
+        await vm.ConfirmAsync("12345");
+        Assert.True(vm.IsPasswordRequired);
+        Assert.False(vm.CanConfirm);
+        Assert.Empty(vm.ConfirmationDraftError);
+
+        vm.UpdateConfirmationDraftValidity("cloud-password");
+        Assert.True(vm.CanConfirm);
+        await vm.ConfirmAsync("cloud-password");
+        Assert.True(vm.IsAuthorized);
+        Assert.False(vm.CanConfirm);
+    }
+
+    [Fact]
+    public void ConfirmationDraft_DoesNotEnableConfirmWithoutTelegramChallenge()
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+
+        vm.UpdateConfirmationDraftValidity("12345");
+
+        Assert.Empty(vm.ConfirmationDraftError);
+        Assert.False(vm.CanConfirm);
+    }
+
+    [Fact]
     public async Task CompareKeys_DoesNotExposeStoredHashAndFindsChanges()
     {
         var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
@@ -58,6 +231,71 @@ public sealed class TelegramSetupViewModelTests
         Assert.Equal<bool?>(true, await vm.HaveApiCredentialsChangedAsync("124", HashA));
         Assert.Equal<bool?>(true, await vm.HaveApiCredentialsChangedAsync("123", HashB));
         Assert.Equal(HashA, store.Value!.ApiHash);
+    }
+
+    [Fact]
+    public async Task ChangedSavedKeys_RequireConfirmation_WithoutAuthorizedSession()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient();
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+
+        Assert.True(vm.IsApiConfigured);
+        Assert.False(vm.IsAuthorized);
+        var changed = await vm.HaveApiCredentialsChangedAsync("123", HashB);
+        Assert.Equal<bool?>(true, changed);
+        Assert.True(vm.ShouldConfirmApiCredentialsChange(changed!.Value));
+        // The comparison itself must not save credentials or reset a session.
+        Assert.Equal(HashA, store.Value!.ApiHash);
+        Assert.Equal(0, store.SaveCalls);
+        Assert.Equal(0, client.ResetCalls);
+    }
+
+    [Fact]
+    public async Task ChangedSavedKeys_RequireConfirmation_WithAuthorizedSession()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient { RestoreImpl = _ => Task.FromResult(Authorized) };
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        await vm.RestoreSessionAsync();
+
+        Assert.True(vm.IsAuthorized);
+        var changed = await vm.HaveApiCredentialsChangedAsync("124", HashA);
+        Assert.Equal<bool?>(true, changed);
+        Assert.True(vm.ShouldConfirmApiCredentialsChange(changed!.Value));
+        Assert.Equal(0, store.SaveCalls);
+        Assert.Equal(0, client.ResetCalls);
+    }
+
+    [Fact]
+    public async Task UnchangedSavedKeys_DoNotRequireConfirmation()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+
+        var changed = await vm.HaveApiCredentialsChangedAsync("123", HashA.ToUpperInvariant());
+        Assert.Equal<bool?>(false, changed);
+        Assert.False(vm.ShouldConfirmApiCredentialsChange(changed!.Value));
+    }
+
+    [Fact]
+    public async Task FirstSave_DoesNotRequireChangeConfirmation()
+    {
+        using var provider = TelegramValidationPipelineTests.BuildProvider(
+            new FakeCredentialsStore(), new FakeTelegramClient());
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+
+        var changed = await vm.HaveApiCredentialsChangedAsync("123", HashA);
+        Assert.Equal<bool?>(true, changed);
+        Assert.False(vm.IsApiConfigured);
+        Assert.False(vm.ShouldConfirmApiCredentialsChange(changed!.Value));
     }
 
     [Fact]

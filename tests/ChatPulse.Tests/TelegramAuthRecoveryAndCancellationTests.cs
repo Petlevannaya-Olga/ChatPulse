@@ -437,6 +437,89 @@ public sealed class TelegramAuthRecoveryAndCancellationTests
         Assert.False(detached);
     }
 
+
+    [Fact]
+    public async Task RemoteWait_NetworkDisconnection_DetachesAndReportsActionableError()
+    {
+        var request = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var lostConnection = new CancellationTokenSource();
+        var detachCalls = 0;
+        var waiting = TelegramRemoteAwait.AwaitAsync(
+            request.Task, TimeSpan.FromMinutes(1), CancellationToken.None,
+            () => { detachCalls++; return Task.CompletedTask; }, lostConnection.Token);
+
+        lostConnection.Cancel();
+
+        var exception = await Assert.ThrowsAsync<TelegramAuthenticationException>(() => waiting);
+        Assert.Equal("telegram.network_unavailable", exception.Code);
+        Assert.Contains("интернетом", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("код", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, detachCalls);
+        request.TrySetResult(42); // The late result must not authorize the old client.
+    }
+
+    [Fact]
+    public async Task RemoteWait_ExternalCancellation_IsNotMisreportedAsNetworkLoss()
+    {
+        var request = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var external = new CancellationTokenSource();
+        using var lostConnection = new CancellationTokenSource();
+        var detachCalls = 0;
+        var waiting = TelegramRemoteAwait.AwaitAsync(
+            request.Task, TimeSpan.FromMinutes(1), external.Token,
+            () => { detachCalls++; return Task.CompletedTask; }, lostConnection.Token);
+
+        external.Cancel();
+        lostConnection.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        Assert.Equal(1, detachCalls);
+        request.TrySetResult(42);
+    }
+
+    [Fact]
+    public async Task BeginLogin_NetworkError_IsDisplayedAndRequiresSessionRecheck()
+    {
+        var client = new FakeTelegramClient
+        {
+            BeginImpl = (_, _) => throw new TelegramAuthenticationException(
+                "telegram.network_unavailable",
+                "Соединение с интернетом прервано. Проверьте подключение и повторите попытку.")
+        };
+        using var provider = CreateVmProvider(client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+
+        await vm.BeginAsync();
+
+        Assert.False(vm.IsBusy);
+        Assert.True(vm.HasError);
+        Assert.Contains("интернетом", vm.Error);
+        Assert.True(vm.IsSessionRetryNeeded);
+        Assert.False(vm.IsSessionRecoveryNeeded);
+        Assert.False(vm.IsAuthorized);
+        Assert.False(vm.IsAwaitingInput);
+        Assert.Equal("+79991234567", vm.PhoneNumber);
+        Assert.False(vm.CanStart); // Prevent duplicate code requests while outcome is uncertain.
+        Assert.True(vm.CanRetrySession);
+
+        await vm.RestoreSessionAsync(); // No saved session: verification re-enables phone input.
+        Assert.False(vm.IsSessionRetryNeeded);
+        Assert.True(vm.CanStart);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TransportErrorClassifier_DistinguishesNetworkAndLocalFileIOException(bool transport)
+    {
+        Exception error = transport
+            ? new IOException("network stream", new System.Net.Sockets.SocketException())
+            : new IOException("local session write failed");
+        Assert.Equal(transport, TelegramNetworkErrors.IsTransportFailure(error));
+    }
+
     private static ServiceProvider CreateVmProvider(FakeTelegramClient client)
         => TelegramValidationPipelineTests.BuildProvider(
             new FakeCredentialsStore { Value = new TelegramApiCredentials(123, Hash) }, client);

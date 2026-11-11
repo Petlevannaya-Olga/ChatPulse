@@ -56,8 +56,11 @@
                 <TextBlock Text="Инструкция для первого подключения" Foreground="#DAD0F2" Margin="0,4,0,0" FontSize="14"/>
             </StackPanel>
         </Border>
-        <ScrollViewer Grid.Row="1" Padding="28,14" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <!-- Put spacing on the content itself: themed ScrollViewer templates may ignore Padding. -->
+            <StackPanel Margin="28,14,28,22">
                 <TextBlock Text="1. Откройте Telegram" Style="{StaticResource HeadingStyle}" />
                 <TextBlock Text="Убедитесь, что вы уже вошли в Telegram на телефоне или другом устройстве. ChatPulse подключается к существующему аккаунту." TextWrapping="Wrap" Margin="0,4,0,16" />
                 <TextBlock Text="2. Введите номер телефона" Style="{StaticResource HeadingStyle}"/>

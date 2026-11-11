@@ -11,18 +11,31 @@ internal static class TelegramRemoteAwait
 {
     internal static async Task<T> AwaitAsync<T>(
         Task<T> request, TimeSpan timeout, CancellationToken cancellationToken,
-        Func<Task> abandonClient)
+        Func<Task> abandonClient,
+        CancellationToken networkUnavailableToken = default)
     {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, networkUnavailableToken);
         try
         {
-            return await request.WaitAsync(timeout, cancellationToken);
+            return await request.WaitAsync(timeout, linkedCts.Token);
         }
         catch (TimeoutException)
         {
             ObserveLateFailure(request);
             await abandonClient();
             throw new TelegramAuthenticationException("telegram.request_timeout",
-                "Telegram слишком долго не отвечает. Клиент переподключится при следующей попытке. Не запрашивайте код многократно.");
+                "Не удалось дождаться ответа Telegram. Проверьте интернет-соединение. " +
+                "Если код уже пришёл, не запрашивайте его повторно без необходимости.");
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested && networkUnavailableToken.IsCancellationRequested)
+        {
+            ObserveLateFailure(request);
+            await abandonClient();
+            throw new TelegramAuthenticationException("telegram.network_unavailable",
+                "Соединение с интернетом прервано. Проверьте подключение и повторите попытку. " +
+                "Если код уже пришёл, не запрашивайте его повторно без необходимости.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

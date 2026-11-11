@@ -18,10 +18,11 @@ public partial class TelegramSessionActionDialog : Window
         if (action == TelegramSessionAction.ChangeApiKeys)
         {
             DialogHeading.Text = "Сохранить новые API-ключи?";
-            DialogSubtitle.Text = "Потребуется повторный вход в Telegram";
+            DialogSubtitle.Text = "Сохранённые ключи будут заменены";
             DialogDescription.Text =
-                "При сохранении новых API-ключей ChatPulse удалит текущую локальную Telegram-сессию. " +
-                "После этого нужно будет заново авторизовать аккаунт. Старые ключи будут заменены.";
+                "ChatPulse заменит ранее сохранённые API-ключи и сбросит локальную Telegram-сессию, " +
+                "если она существует. Для повторного подключения аккаунта потребуется авторизация. " +
+                "Продолжить?";
             ConfirmButton.Content = "Сохранить ключи";
             ConfirmButton.Background = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(126, 65, 220));

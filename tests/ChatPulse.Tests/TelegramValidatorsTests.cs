@@ -11,6 +11,7 @@ public sealed class TelegramValidatorsTests
 
     [Theory]
     [InlineData("1")]
+    [InlineData("3")]
     [InlineData("123456789")]
     [InlineData("2147483647")]
     public void ApiId_ValidValues_Accepted(string value)

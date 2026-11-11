@@ -4,6 +4,7 @@ using ChatPulse.Application;
 using ChatPulse.Application.Services;
 using ChatPulse.Desktop.Settings;
 using ChatPulse.Desktop.ViewModels;
+using ChatPulse.Desktop.Views.Dialogs;
 using ChatPulse.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -30,8 +31,9 @@ public partial class App : System.Windows.Application
             Directory.CreateDirectory(dataDirectory);
             if (!ApplicationInstanceLock.TryAcquire(dataDirectory, out _instanceLock))
             {
-                MessageBox.Show("ChatPulse уже запущен. Закройте другое окно приложения перед повторным запуском.",
-                    "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
+                // Показываем фирменное окно до создания DI-контейнера и главного окна.
+                // Блокировка второго процесса остаётся на уровне файла (ApplicationInstanceLock).
+                new AlreadyRunningDialog().ShowDialog();
                 Shutdown();
                 return;
             }

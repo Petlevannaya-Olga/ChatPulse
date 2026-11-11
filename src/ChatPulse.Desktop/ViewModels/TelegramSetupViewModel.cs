@@ -69,6 +69,7 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     private bool _isApiConfigured;
     private bool _isEditingApiCredentials;
     private bool _isApiCredentialsDraftValid;
+    private bool _isConfirmationDraftValid;
     private bool _isApiCredentialsCorrupted;
     private bool _isSessionRecoveryNeeded;
     private bool _isSessionRetryNeeded;
@@ -99,6 +100,14 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     public bool CanDeleteApiCredentials => (IsApiConfigured || IsApiCredentialsCorrupted) &&
         !IsBusy && !IsAwaitingInput;
     public bool CanSaveApiCredentials => !IsBusy && _isApiCredentialsDraftValid;
+    // A replacement of previously saved API keys must be explicitly confirmed,
+    // even when Telegram authorization has not been restored or was lost.
+    // The first save and re-saving identical keys must not show a warning.
+    public bool ShouldConfirmApiCredentialsChange(bool credentialsChanged) =>
+        IsApiConfigured && credentialsChanged;
+    // Текст только для отображения под полями. Значения API Hash здесь не сохраняем.
+    public string ApiIdDraftError { get; private set; } = string.Empty;
+    public string ApiHashDraftError { get; private set; } = string.Empty;
 
     /// <summary>
     /// Проверяем черновик тем же FluentValidation-валидатором, который применяет
@@ -110,7 +119,14 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
         var validator = scope.ServiceProvider.GetRequiredService<
             IValidator<SaveTelegramApiCredentialsCommand>>();
         var command = new SaveTelegramApiCredentialsCommand(apiId.Trim(), apiHash.Trim());
-        var valid = validator.Validate(command).IsValid;
+        var validation = validator.Validate(command);
+        ApiIdDraftError = validation.Errors.FirstOrDefault(
+            issue => issue.PropertyName == nameof(SaveTelegramApiCredentialsCommand.ApiId))?.ErrorMessage
+            ?? string.Empty;
+        ApiHashDraftError = validation.Errors.FirstOrDefault(
+            issue => issue.PropertyName == nameof(SaveTelegramApiCredentialsCommand.ApiHash))?.ErrorMessage
+            ?? string.Empty;
+        var valid = validation.IsValid;
         if (_isApiCredentialsDraftValid == valid) return;
         _isApiCredentialsDraftValid = valid;
         Changed(nameof(CanSaveApiCredentials));
@@ -401,7 +417,24 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
         PhoneNumber.Skip(2).All(static character => character is >= '0' and <= '9');
     public bool CanStart => IsApiConfigured && !IsBusy && !IsAuthorized && IsPhoneComplete &&
         !IsAwaitingInput && !IsSessionRecoveryNeeded && !IsSessionRetryNeeded;
-    public bool CanConfirm => !IsBusy && IsAwaitingInput;
+    public bool CanConfirm => !IsBusy && IsAwaitingInput && _isConfirmationDraftValid;
+
+    // Только состояние валидации: введённый код, email или пароль не храним в ViewModel.
+    // Используем тот же FluentValidation-валидатор, что и CQRS-декоратор отправки.
+    public string ConfirmationDraftError { get; private set; } = string.Empty;
+
+    public void UpdateConfirmationDraftValidity(string input)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var validator = scope.ServiceProvider.GetRequiredService<
+            IValidator<ContinueTelegramLoginCommand>>();
+        var validation = validator.Validate(new ContinueTelegramLoginCommand(input));
+        ConfirmationDraftError = validation.Errors.FirstOrDefault()?.ErrorMessage ?? string.Empty;
+        var valid = validation.IsValid;
+        if (_isConfirmationDraftValid == valid) return;
+        _isConfirmationDraftValid = valid;
+        Changed(nameof(CanConfirm));
+    }
 
     public bool IsVerificationCodePending =>
         _progress?.RequiredInput == TelegramLoginInputKind.VerificationCode;
@@ -608,7 +641,7 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
 
     private void HandleInterruptedRemoteRequest(string code)
     {
-        if (code == "telegram.request_timeout")
+        if (code is "telegram.request_timeout" or "telegram.network_unavailable")
         {
             // Клиент был отсоединён, старый шаг входа больше недействителен.
             SetProgress(null);
@@ -660,6 +693,9 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     private void SetProgress(TelegramLoginProgress? state)
     {
         _progress = state;
+        // Новый этап Telegram не должен наследовать валидность ввода с прошлого этапа.
+        _isConfirmationDraftValid = false;
+        ConfirmationDraftError = string.Empty;
         ResendStatus = string.Empty;
         Changed(nameof(IsAuthorized));
         Changed(nameof(IsAwaitingInput));

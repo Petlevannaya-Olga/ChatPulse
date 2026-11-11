@@ -56,8 +56,11 @@
                 <TextBlock Text="Первичная настройка Telegram API" Foreground="#DAD0F2" Margin="0,4,0,0" FontSize="14" />
             </StackPanel>
         </Border>
-        <ScrollViewer Grid.Row="1" Padding="28,14" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <!-- Put spacing on the content itself: themed ScrollViewer templates may ignore Padding. -->
+            <StackPanel Margin="28,14,28,22">
                 <TextBlock Text="Зачем нужны ключи?" Style="{StaticResource HeadingStyle}" />
                 <TextBlock Text="ChatPulse — независимое приложение, использующее Telegram API. Чтобы подключить свой аккаунт, вам потребуется зарегистрировать API-приложение в Telegram. Ключи сохраняются только на вашем компьютере." TextWrapping="Wrap" Margin="0,4,0,16" />
                 <TextBlock Text="1. Откройте официальный сайт" Style="{StaticResource HeadingStyle}" />

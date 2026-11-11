@@ -76,6 +76,30 @@
             </Setter>
         </Style>
 
+        <!-- Маленький переключатель видимости без собственной рамки. -->
+        <Style x:Key="SecretVisibilityButton" TargetType="Button">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#F1E8FC" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="OutlineBackButton" TargetType="Button">
             <Setter Property="Padding" Value="14,10" />
             <Setter Property="Foreground" Value="{StaticResource TextPrimary}" />
@@ -411,17 +435,57 @@
                             <StackPanel x:Name="ApiCredentialsEntryPanel">
                                 <TextBlock Text="API ID" FontSize="15" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" />
-                                <TextBox x:Name="ApiIdInput" Style="{StaticResource ProfileTextBox}"
-                                         Padding="12,0,12,0" MaxLength="10"
-                                         InputMethod.IsInputMethodEnabled="False"
-                                         PreviewTextInput="ApiIdInput_OnPreviewTextInput"
-                                         TextChanged="ApiIdInput_OnTextChanged"
-                                         ToolTip="Только цифры. API ID выдаёт Telegram." />
+                                <!-- Ограничения показываются серым внутри пустого поля, а не в ToolTip. -->
+                                <Grid Height="52">
+                                    <TextBox x:Name="ApiIdInput" Style="{StaticResource ProfileTextBox}"
+                                             Padding="12,0,12,0" MaxLength="10"
+                                             InputMethod.IsInputMethodEnabled="False"
+                                             PreviewTextInput="ApiIdInput_OnPreviewTextInput"
+                                             TextChanged="ApiIdInput_OnTextChanged"
+                                             LostKeyboardFocus="ApiIdInput_OnLostKeyboardFocus" />
+                                    <TextBlock x:Name="ApiIdHint"
+                                               Text="только цифры: от 1 до 2 147 483 647"
+                                               FontSize="14" Foreground="#9A90AD"
+                                               Margin="14,0,12,0" TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"
+                                               IsHitTestVisible="False" />
+                                </Grid>
+                                <TextBlock x:Name="ApiIdErrorText" FontSize="12" TextWrapping="Wrap"
+                                           Foreground="#C83A60" Margin="2,4,0,0" Visibility="Collapsed" />
                                 <TextBlock Text="API Hash" FontSize="15" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextPrimary}" Margin="0,9,0,4" />
-                                <PasswordBox x:Name="ApiHashInput" Style="{StaticResource ProfilePasswordBox}"
-                                             MaxLength="32" PasswordChanged="ApiHashInput_OnPasswordChanged"
-                                             ToolTip="32 символа: цифры 0–9 и латинские буквы A–F." />
+                                <Grid Height="52">
+                                    <PasswordBox x:Name="ApiHashInput" Style="{StaticResource ProfilePasswordBox}"
+                                                 Padding="12,0,48,0" MaxLength="32"
+                                                 PasswordChanged="ApiHashInput_OnPasswordChanged"
+                                                 LostKeyboardFocus="ApiHashInput_OnLostKeyboardFocus" />
+                                    <TextBox x:Name="ApiHashVisibleInput" Style="{StaticResource ProfileTextBox}"
+                                             Padding="12,0,48,0" MaxLength="32"
+                                             Visibility="Collapsed" TextChanged="ApiHashVisibleInput_OnTextChanged"
+                                             LostKeyboardFocus="ApiHashInput_OnLostKeyboardFocus" />
+                                    <TextBlock x:Name="ApiHashHint" Text="32 символа: 0–9, a–f"
+                                               FontSize="14" Foreground="#9A90AD"
+                                               Margin="14,0,48,0" TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"
+                                               IsHitTestVisible="False" />
+                                    <Button x:Name="ApiHashVisibilityButton" HorizontalAlignment="Right"
+                                            VerticalAlignment="Center" Margin="0,0,5,0"
+                                            Style="{StaticResource SecretVisibilityButton}"
+                                            Click="ApiHashVisibilityButton_OnClick"
+                                            ToolTip="Показать API Hash"
+                                            AutomationProperties.Name="Показать API Hash">
+                                        <Grid Width="22" Height="22">
+                                            <Path Data="M 2,11 C 6,4 16,4 20,11 C 16,18 6,18 2,11 Z"
+                                                  Stroke="#72568B" StrokeThickness="1.6" Fill="Transparent" />
+                                            <Ellipse Width="6" Height="6" Stroke="#72568B" StrokeThickness="1.6"
+                                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            <Path x:Name="ApiHashEyeSlash" Data="M 3,19 L 19,3"
+                                                  Stroke="#72568B" StrokeThickness="2" />
+                                        </Grid>
+                                    </Button>
+                                </Grid>
+                                <TextBlock x:Name="ApiHashErrorText" FontSize="12" TextWrapping="Wrap"
+                                           Foreground="#C83A60" Margin="2,4,0,0" Visibility="Collapsed" />
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                     <Path Width="15" Height="15" VerticalAlignment="Center"
                                           Data="M 4,6 L 4,4 A 3,3 0 0 1 10,4 L 10,6 M 3,6 L 11,6 L 11,13 L 3,13 Z"
@@ -541,9 +605,37 @@
                             <TextBlock Text="{Binding Prompt}" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" />
                             <TextBox x:Name="ConfirmationInput" Style="{StaticResource ProfileTextBox}"
-                                     Padding="12,0,12,0" />
-                            <PasswordBox x:Name="PasswordInput" Style="{StaticResource ProfilePasswordBox}"
-                                         Visibility="Collapsed" />
+                                     Padding="12,0,12,0"
+                                     TextChanged="ConfirmationInput_OnTextChanged"
+                                     LostKeyboardFocus="ConfirmationInput_OnLostKeyboardFocus" />
+                            <TextBlock x:Name="ConfirmationErrorText" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="#C83A60" Margin="2,4,0,0" Visibility="Collapsed" />
+                            <Grid x:Name="CloudPasswordContainer" Height="52" Visibility="Collapsed">
+                                <PasswordBox x:Name="PasswordInput" Style="{StaticResource ProfilePasswordBox}"
+                                             Padding="12,0,48,0" PasswordChanged="CloudPasswordInput_OnChanged"
+                                             LostKeyboardFocus="CloudPasswordInput_OnLostKeyboardFocus" />
+                                <TextBox x:Name="CloudPasswordVisibleInput" Style="{StaticResource ProfileTextBox}"
+                                         Padding="12,0,48,0" Visibility="Collapsed"
+                                         TextChanged="CloudPasswordVisibleInput_OnTextChanged"
+                                         LostKeyboardFocus="CloudPasswordInput_OnLostKeyboardFocus" />
+                                <Button x:Name="CloudPasswordVisibilityButton" HorizontalAlignment="Right"
+                                        VerticalAlignment="Center" Margin="0,0,5,0"
+                                        Style="{StaticResource SecretVisibilityButton}"
+                                        Click="CloudPasswordVisibilityButton_OnClick"
+                                        ToolTip="Показать пароль"
+                                        AutomationProperties.Name="Показать пароль">
+                                    <Grid Width="22" Height="22">
+                                        <Path Data="M 2,11 C 6,4 16,4 20,11 C 16,18 6,18 2,11 Z"
+                                              Stroke="#72568B" StrokeThickness="1.6" Fill="Transparent" />
+                                        <Ellipse Width="6" Height="6" Stroke="#72568B" StrokeThickness="1.6"
+                                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        <Path x:Name="CloudPasswordEyeSlash" Data="M 3,19 L 19,3"
+                                              Stroke="#72568B" StrokeThickness="2" />
+                                    </Grid>
+                                </Button>
+                            </Grid>
+                            <TextBlock x:Name="CloudPasswordErrorText" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="#C83A60" Margin="2,4,0,0" Visibility="Collapsed" />
                             <TextBlock Text="{Binding PromptHint}" TextWrapping="Wrap" FontSize="14"
                                        Foreground="{StaticResource TextSecondary}" Margin="0,5,0,0" />
                             <Button Content="Подтвердить" Click="ConfirmButton_OnClick"

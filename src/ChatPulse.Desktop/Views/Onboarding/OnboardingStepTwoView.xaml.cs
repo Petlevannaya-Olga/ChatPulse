@@ -15,6 +15,15 @@ public partial class OnboardingStepTwoView : UserControl
     private const int LocalPhoneLength = 10;
     private string _localDigits = string.Empty;
     private bool _isFormattingPhone;
+    private bool _apiIdValidationVisible;
+    private bool _apiHashValidationVisible;
+    private bool _confirmationValidationVisible;
+    private bool _cloudPasswordValidationVisible;
+    private string? _lastConfirmationPrompt;
+    private bool _apiHashVisible;
+    private bool _cloudPasswordVisible;
+    private bool _syncingApiHash;
+    private bool _syncingCloudPassword;
     private TelegramOnboardingPage _currentPage = TelegramOnboardingPage.ApiCredentials;
     private readonly DispatcherTimer _resendTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
@@ -41,6 +50,7 @@ public partial class OnboardingStepTwoView : UserControl
 
             if (args.NewValue is TelegramSetupViewModel vm)
             {
+                _lastConfirmationPrompt = null;
                 vm.PropertyChanged += ViewModel_OnPropertyChanged;
                 var stored = vm.PhoneNumber.StartsWith("+7", StringComparison.Ordinal)
                     ? OnlyAsciiDigits(vm.PhoneNumber[2..])
@@ -68,25 +78,228 @@ public partial class OnboardingStepTwoView : UserControl
         // Не стираем сообщение об отозванной/непроверенной сессии при переходе с первого чата.
         if (vm.IsEditingApiCredentials)
             vm.CancelEditApiCredentials();
-        ApiIdInput.Clear();
-        ApiHashInput.Clear();
-        RefreshApiCredentialsSaveState();
+        ClearApiDraft();
+        ClearCloudPassword();
+        ConfirmationInput.Clear();
+        _confirmationValidationVisible = false;
         UpdatePanels(vm);
     }
 
     // Both fields use the same FluentValidation rules as the command decorator.
     // The password is read only to evaluate the draft and is not retained by the ViewModel.
+    private string CurrentApiHash => _apiHashVisible ? ApiHashVisibleInput.Text : ApiHashInput.Password;
+    private string CurrentCloudPassword => _cloudPasswordVisible ? CloudPasswordVisibleInput.Text : PasswordInput.Password;
+
     private void ApiIdInput_OnTextChanged(object sender, TextChangedEventArgs e)
-        => RefreshApiCredentialsSaveState();
+    {
+        if (ApiIdInput.Text.Length > 0) _apiIdValidationVisible = true;
+        RefreshApiCredentialsSaveState();
+    }
+
+    private void ApiIdInput_OnLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _apiIdValidationVisible = true;
+        RefreshApiCredentialsSaveState();
+    }
 
     private void ApiHashInput_OnPasswordChanged(object sender, RoutedEventArgs e)
-        => RefreshApiCredentialsSaveState();
+    {
+        if (_syncingApiHash) return;
+        if (ApiHashInput.Password.Length > 0) _apiHashValidationVisible = true;
+        RefreshApiCredentialsSaveState();
+    }
+
+    private void ApiHashVisibleInput_OnTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_syncingApiHash) return;
+        if (ApiHashVisibleInput.Text.Length > 0) _apiHashValidationVisible = true;
+        RefreshApiCredentialsSaveState();
+    }
+
+    private void ApiHashInput_OnLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // Нажатие на глазик не должно внезапно показывать ошибку пустого поля.
+        if (e.NewFocus is Button button && button == ApiHashVisibilityButton) return;
+        _apiHashValidationVisible = true;
+        RefreshApiCredentialsSaveState();
+    }
 
     private void RefreshApiCredentialsSaveState()
     {
-        if (ApiIdInput is null || ApiHashInput is null) return;
-        if (DataContext is TelegramSetupViewModel vm)
-            vm.UpdateApiCredentialsDraftValidity(ApiIdInput.Text, ApiHashInput.Password);
+        UpdateApiFieldHints();
+        if (ApiIdInput is null || ApiHashInput is null || ApiHashVisibleInput is null ||
+            ApiIdErrorText is null || ApiHashErrorText is null) return;
+        if (DataContext is not TelegramSetupViewModel vm) return;
+        vm.UpdateApiCredentialsDraftValidity(ApiIdInput.Text, CurrentApiHash);
+        DisplayInlineError(ApiIdErrorText, _apiIdValidationVisible ? vm.ApiIdDraftError : string.Empty);
+        DisplayInlineError(ApiHashErrorText, _apiHashValidationVisible ? vm.ApiHashDraftError : string.Empty);
+    }
+
+    private void UpdateApiFieldHints()
+    {
+        // Инициализация XAML и обработчики изменения текста могут вызываться до полной загрузки полей.
+        if (ApiIdInput is not null && ApiIdHint is not null)
+            ApiIdHint.Visibility = ApiIdInput.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        if (ApiHashInput is not null && ApiHashVisibleInput is not null && ApiHashHint is not null)
+            ApiHashHint.Visibility = CurrentApiHash.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static void DisplayInlineError(TextBlock block, string message)
+    {
+        if (block is null) return;
+        block.Text = message;
+        block.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void ApiHashVisibilityButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _syncingApiHash = true;
+        try
+        {
+            if (_apiHashVisible)
+            {
+                ApiHashInput.Password = ApiHashVisibleInput.Text;
+                ApiHashVisibleInput.Clear();
+            }
+            else
+            {
+                ApiHashVisibleInput.Text = ApiHashInput.Password;
+                ApiHashInput.Clear();
+            }
+            _apiHashVisible = !_apiHashVisible;
+            ApiHashInput.Visibility = _apiHashVisible ? Visibility.Collapsed : Visibility.Visible;
+            ApiHashVisibleInput.Visibility = _apiHashVisible ? Visibility.Visible : Visibility.Collapsed;
+            ApiHashEyeSlash.Visibility = _apiHashVisible ? Visibility.Collapsed : Visibility.Visible;
+            ApiHashVisibilityButton.ToolTip = _apiHashVisible ? "Скрыть API Hash" : "Показать API Hash";
+            System.Windows.Automation.AutomationProperties.SetName(
+                ApiHashVisibilityButton, _apiHashVisible ? "Скрыть API Hash" : "Показать API Hash");
+        }
+        finally { _syncingApiHash = false; }
+        if (_apiHashVisible) ApiHashVisibleInput.Focus();
+        else ApiHashInput.Focus();
+        RefreshApiCredentialsSaveState();
+    }
+
+    private void CloudPasswordVisibilityButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _syncingCloudPassword = true;
+        try
+        {
+            if (_cloudPasswordVisible)
+            {
+                PasswordInput.Password = CloudPasswordVisibleInput.Text;
+                CloudPasswordVisibleInput.Clear();
+            }
+            else
+            {
+                CloudPasswordVisibleInput.Text = PasswordInput.Password;
+                PasswordInput.Clear();
+            }
+        }
+        finally { _syncingCloudPassword = false; }
+        _cloudPasswordVisible = !_cloudPasswordVisible;
+        PasswordInput.Visibility = _cloudPasswordVisible ? Visibility.Collapsed : Visibility.Visible;
+        CloudPasswordVisibleInput.Visibility = _cloudPasswordVisible ? Visibility.Visible : Visibility.Collapsed;
+        CloudPasswordEyeSlash.Visibility = _cloudPasswordVisible ? Visibility.Collapsed : Visibility.Visible;
+        CloudPasswordVisibilityButton.ToolTip = _cloudPasswordVisible ? "Скрыть пароль" : "Показать пароль";
+        System.Windows.Automation.AutomationProperties.SetName(
+            CloudPasswordVisibilityButton, _cloudPasswordVisible ? "Скрыть пароль" : "Показать пароль");
+        if (_cloudPasswordVisible) CloudPasswordVisibleInput.Focus();
+        else PasswordInput.Focus();
+        RefreshConfirmationDraftState();
+    }
+
+    private void ClearApiHash()
+    {
+        _syncingApiHash = true;
+        try
+        {
+            ApiHashInput.Clear();
+            ApiHashVisibleInput.Clear();
+        }
+        finally { _syncingApiHash = false; }
+        _apiHashVisible = false;
+        _apiHashValidationVisible = false;
+        ApiHashInput.Visibility = Visibility.Visible;
+        ApiHashVisibleInput.Visibility = Visibility.Collapsed;
+        ApiHashEyeSlash.Visibility = Visibility.Visible;
+        ApiHashVisibilityButton.ToolTip = "Показать API Hash";
+        System.Windows.Automation.AutomationProperties.SetName(ApiHashVisibilityButton, "Показать API Hash");
+        RefreshApiCredentialsSaveState();
+    }
+
+    private void ConfirmationInput_OnTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (ConfirmationInput.Text.Length > 0) _confirmationValidationVisible = true;
+        RefreshConfirmationDraftState();
+    }
+
+    private void ConfirmationInput_OnLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _confirmationValidationVisible = true;
+        RefreshConfirmationDraftState();
+    }
+
+    private void CloudPasswordInput_OnChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncingCloudPassword) return;
+        if (CurrentCloudPassword.Length > 0) _cloudPasswordValidationVisible = true;
+        RefreshConfirmationDraftState();
+    }
+
+    private void CloudPasswordVisibleInput_OnTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_syncingCloudPassword) return;
+        if (CurrentCloudPassword.Length > 0) _cloudPasswordValidationVisible = true;
+        RefreshConfirmationDraftState();
+    }
+
+    private void CloudPasswordInput_OnLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is Button button && button == CloudPasswordVisibilityButton) return;
+        _cloudPasswordValidationVisible = true;
+        RefreshConfirmationDraftState();
+    }
+
+    private void RefreshConfirmationDraftState()
+    {
+        if (ConfirmationInput is null || ConfirmationErrorText is null ||
+            PasswordInput is null || CloudPasswordVisibleInput is null || CloudPasswordErrorText is null)
+            return;
+        if (DataContext is not TelegramSetupViewModel vm) return;
+
+        vm.UpdateConfirmationDraftValidity(vm.IsPasswordRequired
+            ? CurrentCloudPassword : ConfirmationInput.Text);
+        DisplayInlineError(ConfirmationErrorText,
+            !vm.IsPasswordRequired && _confirmationValidationVisible && vm.IsAwaitingInput
+                ? vm.ConfirmationDraftError : string.Empty);
+        DisplayInlineError(CloudPasswordErrorText,
+            vm.IsPasswordRequired && _cloudPasswordValidationVisible && vm.IsAwaitingInput
+                ? vm.ConfirmationDraftError : string.Empty);
+    }
+
+    private void ClearCloudPassword()
+    {
+        _cloudPasswordValidationVisible = false;
+        DisplayInlineError(CloudPasswordErrorText, string.Empty);
+        PasswordInput.Clear();
+        CloudPasswordVisibleInput.Clear();
+        _cloudPasswordVisible = false;
+        PasswordInput.Visibility = Visibility.Visible;
+        CloudPasswordVisibleInput.Visibility = Visibility.Collapsed;
+        CloudPasswordEyeSlash.Visibility = Visibility.Visible;
+        CloudPasswordVisibilityButton.ToolTip = "Показать пароль";
+        System.Windows.Automation.AutomationProperties.SetName(CloudPasswordVisibilityButton, "Показать пароль");
+    }
+
+    private void ClearApiDraft()
+    {
+        _apiIdValidationVisible = false;
+        _apiHashValidationVisible = false;
+        ApiIdInput.Clear();
+        ClearApiHash();
+        RefreshApiCredentialsSaveState();
     }
 
     // Restrict what the TextBox accepts; semantic API ID validation remains in FluentValidation.
@@ -273,9 +486,19 @@ public partial class OnboardingStepTwoView : UserControl
     private async void ConfirmButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
-        var input = vm.IsPasswordRequired ? PasswordInput.Password : ConfirmationInput.Text;
-        PasswordInput.Clear();
+        RefreshConfirmationDraftState();
+        if (!vm.CanConfirm)
+        {
+            if (vm.IsPasswordRequired) _cloudPasswordValidationVisible = true;
+            else _confirmationValidationVisible = true;
+            RefreshConfirmationDraftState();
+            return;
+        }
+
+        var input = vm.IsPasswordRequired ? CurrentCloudPassword : ConfirmationInput.Text;
+        ClearCloudPassword();
         ConfirmationInput.Clear();
+        _confirmationValidationVisible = false;
         await vm.ConfirmAsync(input);
         UpdatePanels(vm);
     }
@@ -284,6 +507,7 @@ public partial class OnboardingStepTwoView : UserControl
     {
         if (DataContext is not TelegramSetupViewModel vm || !vm.CanResendCode) return;
         ConfirmationInput.Clear();
+        _confirmationValidationVisible = false;
         await vm.ResendCodeAsync();
         UpdatePanels(vm);
     }
@@ -298,7 +522,8 @@ public partial class OnboardingStepTwoView : UserControl
     private async Task CancelPendingLoginAsync(TelegramSetupViewModel vm)
     {
         ConfirmationInput.Clear();
-        PasswordInput.Clear();
+        _confirmationValidationVisible = false;
+        ClearCloudPassword();
         await vm.CancelLoginAsync();
         UpdatePanels(vm);
     }
@@ -320,6 +545,15 @@ public partial class OnboardingStepTwoView : UserControl
     private void UpdatePanels(TelegramSetupViewModel vm)
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(() => UpdatePanels(vm)); return; }
+        // При переходе от кода к паролю/email или выходе из авторизации
+        // не переносим введённый секрет и отметки об ошибках на новый этап.
+        if (_lastConfirmationPrompt != vm.Prompt)
+        {
+            _lastConfirmationPrompt = vm.Prompt;
+            _confirmationValidationVisible = false;
+            ConfirmationInput.Clear();
+            ClearCloudPassword();
+        }
         var showApi = _currentPage == TelegramOnboardingPage.ApiCredentials || !vm.IsApiConfigured;
         ApiKeysPanel.Visibility = showApi ? Visibility.Visible : Visibility.Collapsed;
         ApiCredentialsEntryPanel.Visibility = !vm.IsApiConfigured || vm.IsEditingApiCredentials
@@ -338,8 +572,11 @@ public partial class OnboardingStepTwoView : UserControl
         ApiSaveButton.SetValue(Grid.ColumnSpanProperty, showApiCancel ? 1 : 2);
         ApiSaveButton.Margin = showApiCancel ? new Thickness(0, 0, 6, 0) : new Thickness(0);
         ApiCancelButton.Margin = showApiCancel ? new Thickness(6, 0, 0, 0) : new Thickness(0);
-        PasswordInput.Visibility = vm.IsPasswordRequired ? Visibility.Visible : Visibility.Collapsed;
+        CloudPasswordContainer.Visibility = vm.IsPasswordRequired ? Visibility.Visible : Visibility.Collapsed;
         ConfirmationInput.Visibility = vm.IsPasswordRequired ? Visibility.Collapsed : Visibility.Visible;
+        if (!vm.IsPasswordRequired && (_cloudPasswordVisible || PasswordInput.Password.Length > 0 ||
+                                      CloudPasswordVisibleInput.Text.Length > 0))
+            ClearCloudPassword();
         TelegramHelpButton.Visibility = !showApi && !vm.IsAuthorized ? Visibility.Visible : Visibility.Collapsed;
         // Один переход «Продолжить» для двух подэтапов:
         // сохранённые ключи -> номер Telegram; успешный вход -> первый чат.
@@ -347,6 +584,7 @@ public partial class OnboardingStepTwoView : UserControl
             (showApi
                 ? vm.IsApiConfigured && !vm.IsEditingApiCredentials
                 : vm.IsAuthorized);
+        RefreshConfirmationDraftState();
         UpdateResendTimer(vm);
     }
 
@@ -367,24 +605,24 @@ public partial class OnboardingStepTwoView : UserControl
     private async void ApiKeysSaveButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
-        // Confirm only an actual change. Re-saving identical credentials must not
-        // display a logout warning or discard the verified Telegram session.
+        // Confirm any actual replacement of saved credentials, even when the
+        // session is unverified, revoked, or not currently connected.
+        // Initial save and re-saving identical credentials need no warning.
         var apiId = ApiIdInput.Text.Trim();
-        var apiHash = ApiHashInput.Password.Trim();
+        var apiHash = CurrentApiHash.Trim();
         var changed = await vm.HaveApiCredentialsChangedAsync(apiId, apiHash);
         if (changed is null) return;
         // Only save the draft that was compared; a concurrent edit needs rechecking.
-        if (ApiIdInput.Text.Trim() != apiId || ApiHashInput.Password.Trim() != apiHash)
+        if (ApiIdInput.Text.Trim() != apiId || CurrentApiHash.Trim() != apiHash)
             return;
-        if (changed.Value && vm.IsAuthorized &&
+        if (vm.ShouldConfirmApiCredentialsChange(changed.Value) &&
             !ShowModal(new TelegramSessionActionDialog(TelegramSessionAction.ChangeApiKeys)))
             return;
 
         var saved = await vm.SaveApiCredentialsAsync(apiId, apiHash);
         if (saved)
         {
-            ApiIdInput.Clear();
-            ApiHashInput.Clear();
+            ClearApiDraft();
             TelegramPageRequested?.Invoke(TelegramOnboardingPage.Phone);
         }
         UpdatePanels(vm);
@@ -399,8 +637,7 @@ public partial class OnboardingStepTwoView : UserControl
 
         if (!await vm.DeleteApiCredentialsAsync()) return;
 
-        ApiIdInput.Clear();
-        ApiHashInput.Clear();
+        ClearApiDraft();
         vm.CancelEditApiCredentials();
         TelegramPageRequested?.Invoke(TelegramOnboardingPage.ApiCredentials);
         UpdatePanels(vm);
@@ -421,15 +658,14 @@ public partial class OnboardingStepTwoView : UserControl
         }
 
         ConfirmationInput.Clear();
-        PasswordInput.Clear();
+        ClearCloudPassword();
         UpdatePanels(vm);
     }
 
     private void ApiKeysEditButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
-        ApiIdInput.Clear();
-        ApiHashInput.Clear();
+        ClearApiDraft();
         vm.BeginEditApiCredentials();
         UpdatePanels(vm);
     }
@@ -437,8 +673,7 @@ public partial class OnboardingStepTwoView : UserControl
     private void ApiKeysCancelButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (DataContext is not TelegramSetupViewModel vm) return;
-        ApiIdInput.Clear();
-        ApiHashInput.Clear();
+        ClearApiDraft();
         vm.CancelEditApiCredentials();
         UpdatePanels(vm);
     }
@@ -490,8 +725,7 @@ public partial class OnboardingStepTwoView : UserControl
 
         // На странице ключей «Назад» всегда возвращает к имени.
         // Черновик секретов очищаем, сохранённые ключи при этом не меняются.
-        ApiIdInput.Clear();
-        ApiHashInput.Clear();
+        ClearApiDraft();
         vm.CancelEditApiCredentials();
         BackRequested?.Invoke(this, EventArgs.Empty);
     }

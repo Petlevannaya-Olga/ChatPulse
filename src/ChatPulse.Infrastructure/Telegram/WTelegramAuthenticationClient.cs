@@ -144,11 +144,18 @@ public sealed class WTelegramAuthenticationClient(
             throw new TelegramAuthenticationException("telegram.configuration_invalid",
                 "Не удалось прочитать API-ключи. Проверьте локальное хранилище ключей.");
         }
+        catch (Exception ex) when (TelegramNetworkErrors.IsTransportFailure(ex))
+        {
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] BeginLogin: transport error type={ex.GetType().Name}");
+            await DetachClientAsync();
+            throw NetworkUnavailableException();
+        }
         catch (Exception ex)
         {
             Debug.WriteLine($"[ChatPulse][TelegramAuth] BeginLogin: exception type={ex.GetType().Name}");
             throw new TelegramAuthenticationException("telegram.login_failed",
-                "Telegram не принял запрос. Проверьте номер, подключение и данные приложения.");
+                "Не удалось выполнить запрос к Telegram. Проверьте интернет-соединение и повторите попытку. " +
+                "Если код уже пришёл, не запрашивайте его повторно без необходимости.");
         }
         finally { _gate.Release(); }
     }
@@ -187,6 +194,12 @@ public sealed class WTelegramAuthenticationClient(
             // в интерфейс текст исключения, который может содержать детали запроса.
             throw new TelegramAuthenticationException("telegram.rpc_login_error",
                 TelegramRpcErrorMessages.ForConfirmation(ex.Message, ex.Code));
+        }
+        catch (Exception ex) when (TelegramNetworkErrors.IsTransportFailure(ex))
+        {
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] ContinueLogin: transport error type={ex.GetType().Name}");
+            await DetachClientAsync();
+            throw NetworkUnavailableException();
         }
         catch (IOException)
         {
@@ -253,6 +266,12 @@ public sealed class WTelegramAuthenticationClient(
             Debug.WriteLine($"[ChatPulse][TelegramAuth] ResendCode: RPC error={SafeRpcError(ex.Message)}, code={ex.Code}");
             throw new TelegramAuthenticationException("telegram.resend_failed",
                 TelegramRpcErrorMessages.ForResend(ex.Message, ex.Code));
+        }
+        catch (Exception ex) when (TelegramNetworkErrors.IsTransportFailure(ex))
+        {
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] ResendCode: transport error type={ex.GetType().Name}");
+            await DetachClientAsync();
+            throw NetworkUnavailableException();
         }
         catch (Exception ex)
         {
@@ -467,9 +486,19 @@ public sealed class WTelegramAuthenticationClient(
 
     // Библиотека не принимает CancellationToken для этих вызовов напрямую.
     // После прерывания старый Client изолируется, но запрос на сервере может завершиться позже.
-    private Task<T> AwaitRemoteAsync<T>(Task<T> request, CancellationToken cancellationToken)
-        => TelegramRemoteAwait.AwaitAsync(request, RemoteRequestTimeout,
-            cancellationToken, DetachClientAsync);
+    private async Task<T> AwaitRemoteAsync<T>(Task<T> request, CancellationToken cancellationToken)
+    {
+        // A local network disconnect should fail promptly instead of waiting
+        // for the full remote timeout. An upstream outage still uses the timeout.
+        using var network = new TelegramNetworkAvailabilityMonitor();
+        return await TelegramRemoteAwait.AwaitAsync(request, RemoteRequestTimeout,
+            cancellationToken, DetachClientAsync, network.UnavailableToken);
+    }
+
+    private static TelegramAuthenticationException NetworkUnavailableException() =>
+        new("telegram.network_unavailable",
+            "Не удалось связаться с Telegram. Проверьте интернет-соединение и повторите попытку. " +
+            "Если код уже пришёл, не запрашивайте его повторно без необходимости.");
 
     /// <summary>Отсоединяет устаревший клиент, не удаляя локальную сессию.</summary>
     private async Task DetachClientAsync()
