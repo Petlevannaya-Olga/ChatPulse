@@ -426,11 +426,24 @@
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Button.Template>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="↻" FontSize="19" FontWeight="SemiBold"
-                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
-                                        <TextBlock Text="Повторить" VerticalAlignment="Center" />
-                                    </StackPanel>
+                                    <!-- Vector icon and label share a fixed-height grid,
+                                         avoiding the font baseline shift of the ↻ character. -->
+                                    <Grid Height="20" VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="16" />
+                                            <ColumnDefinition Width="6" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Path Grid.Column="0" Width="16" Height="16"
+                                              VerticalAlignment="Center" Stretch="Uniform"
+                                              Stroke="#7134B5" StrokeThickness="1.9"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              StrokeLineJoin="Round"
+                                              Data="M 21,2 L 21,8 15,8 M 3,22 L 3,16 9,16 M 3.09,9 A 9,9 0 0 1 17.97,5.64 L 21,8 M 3,16 L 6.03,18.36 A 9,9 0 0 0 20.91,15" />
+                                        <TextBlock Grid.Column="2" Text="Повторить"
+                                                   FontSize="14" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" Foreground="#7134B5" />
+                                    </Grid>
                                 </Button>
                             </Grid>
                         </Border>
@@ -502,7 +515,22 @@
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                            <StackPanel x:Name="ApiSavedPanel" Visibility="Collapsed" Margin="0,14,0,0">
+                            <StackPanel x:Name="ApiSavedPanel" Visibility="Collapsed">
+                                <!-- In recovery states the actions are hidden, so reserve breathing room
+                                     below the saved-keys message before the footer separator. -->
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Margin" Value="0,14,0,0" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSessionRetryNeeded}" Value="True">
+                                                <Setter Property="Margin" Value="0,6,0,22" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsSessionRecoveryNeeded}" Value="True">
+                                                <Setter Property="Margin" Value="0,6,0,22" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                                     <Grid Width="19" Height="19" Margin="0,0,8,0" VerticalAlignment="Center">
                                         <Ellipse Fill="#E9F8F1" Stroke="#28A873" StrokeThickness="1" />
