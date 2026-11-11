@@ -536,6 +536,8 @@ public partial class OnboardingStepTwoView : UserControl
                               nameof(TelegramSetupViewModel.IsBusy) or
                               nameof(TelegramSetupViewModel.IsAwaitingInput) or
                               nameof(TelegramSetupViewModel.IsPasswordRequired) or
+                              nameof(TelegramSetupViewModel.IsSessionRetryNeeded) or
+                              nameof(TelegramSetupViewModel.IsSessionRecoveryNeeded) or
                               nameof(TelegramSetupViewModel.IsAuthorized))
         {
             UpdatePanels(vm);
@@ -560,7 +562,10 @@ public partial class OnboardingStepTwoView : UserControl
             ? Visibility.Visible : Visibility.Collapsed;
         ApiSavedPanel.Visibility = vm.IsApiConfigured && !vm.IsEditingApiCredentials
             ? Visibility.Visible : Visibility.Collapsed;
-        PhonePanel.Visibility = !showApi && !vm.IsAwaitingInput && !vm.IsAuthorized
+        // Until the old session is verified or explicitly reset, do not offer
+        // a phone login that CanStart intentionally forbids for safety.
+        PhonePanel.Visibility = !showApi && !vm.IsAwaitingInput && !vm.IsAuthorized &&
+                                !vm.IsSessionRetryNeeded && !vm.IsSessionRecoveryNeeded
             ? Visibility.Visible : Visibility.Collapsed;
         ConfirmPanel.Visibility = !showApi && vm.IsAwaitingInput
             ? Visibility.Visible : Visibility.Collapsed;
@@ -577,10 +582,13 @@ public partial class OnboardingStepTwoView : UserControl
         if (!vm.IsPasswordRequired && (_cloudPasswordVisible || PasswordInput.Password.Length > 0 ||
                                       CloudPasswordVisibleInput.Text.Length > 0))
             ClearCloudPassword();
-        TelegramHelpButton.Visibility = !showApi && !vm.IsAuthorized ? Visibility.Visible : Visibility.Collapsed;
+        TelegramHelpButton.Visibility = !showApi && !vm.IsAuthorized &&
+                                        !vm.IsSessionRetryNeeded && !vm.IsSessionRecoveryNeeded
+            ? Visibility.Visible : Visibility.Collapsed;
         // Один переход «Продолжить» для двух подэтапов:
         // сохранённые ключи -> номер Telegram; успешный вход -> первый чат.
         TelegramContinueButton.IsEnabled = !vm.IsBusy &&
+            !vm.IsSessionRetryNeeded && !vm.IsSessionRecoveryNeeded &&
             (showApi
                 ? vm.IsApiConfigured && !vm.IsEditingApiCredentials
                 : vm.IsAuthorized);
@@ -732,7 +740,8 @@ public partial class OnboardingStepTwoView : UserControl
 
     private void ContinueButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not TelegramSetupViewModel vm || vm.IsBusy) return;
+        if (DataContext is not TelegramSetupViewModel vm || vm.IsBusy ||
+            vm.IsSessionRetryNeeded || vm.IsSessionRecoveryNeeded) return;
 
         if (_currentPage == TelegramOnboardingPage.ApiCredentials)
         {

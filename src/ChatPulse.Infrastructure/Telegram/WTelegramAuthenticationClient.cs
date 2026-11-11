@@ -94,7 +94,7 @@ public sealed class WTelegramAuthenticationClient(
         {
             Debug.WriteLine($"[ChatPulse][TelegramAuth] RestoreSession: error type={exception.GetType().Name}");
             throw new TelegramAuthenticationException("telegram.session_restore_failed",
-                "Не удалось проверить сохранённую Telegram-сессию. Проверьте подключение к Telegram и повторите запуск.");
+                "Не удалось проверить сохранённую Telegram-сессию. Проверьте интернет-соединение и повторите проверку.");
         }
         finally { _gate.Release(); }
     }

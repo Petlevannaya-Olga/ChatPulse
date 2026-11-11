@@ -373,6 +373,103 @@
                                    Foreground="{StaticResource TextSecondary}" TextAlignment="Center"
                                    Margin="0,2,0,0" />
 
+                        <!-- Compact recovery notice: one row, with retry action on the right. -->
+                        <Border x:Name="SessionRetryCard" Margin="0,10,0,8" Background="#FFF7FB"
+                                BorderBrush="#F0C7D8" BorderThickness="1" CornerRadius="16"
+                                Padding="16,12"
+                                Visibility="{Binding IsSessionRetryNeeded, Converter={StaticResource BoolToVisibility}}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="34" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17"
+                                        Background="#FFE9F1" BorderBrush="#F2C1D4" BorderThickness="1"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="!" FontSize="18" FontWeight="Bold" Foreground="#C34771"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <TextBlock Grid.Column="2" Text="Не удалось проверить Telegram-сессию"
+                                           FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"
+                                           VerticalAlignment="Center" Foreground="{StaticResource TextPrimary}" />
+                                <Button Grid.Column="4" IsEnabled="{Binding CanRetrySession}"
+                                        Click="RetryRestoreButton_OnClick"
+                                        Padding="12,8" FontSize="14" FontWeight="SemiBold"
+                                        Background="White" BorderBrush="#DEC8EF" BorderThickness="1"
+                                        Foreground="#7134B5" Cursor="Hand"
+                                        VerticalAlignment="Center" HorizontalAlignment="Right"
+                                        FocusVisualStyle="{x:Null}"
+                                        ToolTip="Повторить проверку сохранённой Telegram-сессии"
+                                        AutomationProperties.Name="Повторить проверку Telegram-сессии">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="RetrySurface" CornerRadius="9"
+                                                    Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="RetrySurface" Property="Background" Value="#F4EFFF" />
+                                                </Trigger>
+                                                <Trigger Property="IsPressed" Value="True">
+                                                    <Setter TargetName="RetrySurface" Property="Background" Value="#EDE1FC" />
+                                                </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="RetrySurface" Property="Opacity" Value="0.55" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="↻" FontSize="19" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                        <TextBlock Text="Повторить" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                        </Border>
+
+                        <Border x:Name="SessionResetCard" Margin="0,10,0,8" Background="#FFF7FB"
+                                BorderBrush="#F0C7D8" BorderThickness="1" CornerRadius="16"
+                                Padding="16,14"
+                                Visibility="{Binding IsSessionRecoveryNeeded, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="34" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17"
+                                            Background="#FFE9F1" BorderBrush="#F2C1D4" BorderThickness="1"
+                                            VerticalAlignment="Top">
+                                        <TextBlock Text="!" FontSize="18" FontWeight="Bold" Foreground="#C34771"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Требуется повторная авторизация"
+                                                   FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource TextPrimary}" />
+                                        <TextBlock Text="{Binding Error}" Margin="0,4,0,0"
+                                                   FontSize="13" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource TextSecondary}" />
+                                    </StackPanel>
+                                </Grid>
+                                <Button Content="Очистить сессию и войти заново"
+                                        IsEnabled="{Binding CanResetTelegramSession}"
+                                        Click="ResetTelegramSessionButton_OnClick"
+                                        Style="{StaticResource OutlineBackButton}"
+                                        Foreground="#B54865" HorizontalAlignment="Center"
+                                        Margin="0,10,0,0" />
+                            </StackPanel>
+                        </Border>
+
                         <!-- Личные API-параметры: отдельный этап внутри шага 2.
                              В settings.json не храним секреты. -->
                         <StackPanel x:Name="ApiKeysPanel" Margin="0,9,0,0" Visibility="Visible">
@@ -524,9 +621,37 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <!-- Ошибка занимает место только когда есть текст.
+                             Высота карточки увеличивается, а нижняя панель
+                             всегда идёт после содержимого. -->
+                        <Border Margin="0,12,0,4" Background="Transparent">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding HasError}" Value="True" />
+                                                <Condition Binding="{Binding IsSessionRetryNeeded}" Value="False" />
+                                                <Condition Binding="{Binding IsSessionRecoveryNeeded}" Value="False" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <ScrollViewer MaxHeight="92"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          Focusable="False">
+                                <TextBlock Text="{Binding Error}" FontSize="13" TextWrapping="Wrap"
+                                           Foreground="#D0446A" />
+                            </ScrollViewer>
+                        </Border>
+
                         <!-- Each state replaces the previous one; no duplicate phone/code inputs. -->
-                        <StackPanel x:Name="PhonePanel" Margin="0,10,0,0">
-                            <TextBlock Text="Номер телефона Telegram" FontSize="15" FontWeight="SemiBold"
+                        <StackPanel x:Name="PhonePanel" Margin="0,14,0,0">
+                            <TextBlock x:Name="PhoneSectionTitle" Text="Номер телефона Telegram" FontSize="15" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimary}" Margin="0,0,0,4" />
                             <!-- Как в первом шаге: единое поле с фиолетовой рамкой
                                  при фокусе. Префикс и ввод — соседние колонки,
@@ -581,23 +706,10 @@
                             <TextBlock Text="Код +7 указан автоматически. Введите оставшиеся 10 цифр."
                                        Foreground="{StaticResource TextSecondary}" FontSize="14"
                                        Margin="0,5,0,0" />
-                            <Button Content="Повторить проверку Telegram-сессии"
-                                    Visibility="{Binding IsSessionRetryNeeded, Converter={StaticResource BoolToVisibility}}"
-                                    IsEnabled="{Binding CanRetrySession}"
-                                    Click="RetryRestoreButton_OnClick"
-                                    Style="{StaticResource ContinueButtonStyle}"
-                                    HorizontalAlignment="Stretch" Margin="0,8,0,0" />
                             <Button Click="StartButton_OnClick" IsEnabled="{Binding CanStart}"
                                     Style="{StaticResource ContinueButtonStyle}"
                                     HorizontalAlignment="Stretch" Margin="0,8,0,0"
                                     Content="Получить код" />
-                            <Button Content="Очистить локальную Telegram-сессию"
-                                    Visibility="{Binding IsSessionRecoveryNeeded, Converter={StaticResource BoolToVisibility}}"
-                                    IsEnabled="{Binding CanResetTelegramSession}"
-                                    Click="ResetTelegramSessionButton_OnClick"
-                                    Style="{StaticResource OutlineBackButton}"
-                                    Foreground="#B54865" HorizontalAlignment="Center"
-                                    Margin="0,12,0,0" />
                         </StackPanel>
 
                         <StackPanel x:Name="ConfirmPanel" Margin="0,10,0,0"
@@ -698,19 +810,6 @@
                             </Grid>
                         </Border>
 
-                        <!-- Ошибка занимает место только когда есть текст.
-                             Высота карточки увеличивается, а нижняя панель
-                             всегда идёт после содержимого. -->
-                        <Border Margin="0,12,0,4" Background="Transparent"
-                                Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}">
-                            <ScrollViewer MaxHeight="92"
-                                          VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          Focusable="False">
-                                <TextBlock Text="{Binding Error}" FontSize="13" TextWrapping="Wrap"
-                                           Foreground="#D0446A" />
-                            </ScrollViewer>
-                        </Border>
                         <!-- Старая инструкция остаётся для этапа телефона. -->
                         <Button x:Name="TelegramHelpButton" Click="HelpButton_OnClick" Background="Transparent"
                                 BorderThickness="0" Margin="0,6,0,18"
