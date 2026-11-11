@@ -439,7 +439,6 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     public bool IsVerificationCodePending =>
         _progress?.RequiredInput == TelegramLoginInputKind.VerificationCode;
     public bool HasResendOption => IsVerificationCodePending && _progress!.HasResendOption;
-    public bool ResendUnavailable => IsVerificationCodePending && !HasResendOption;
     private int SecondsUntilResend => _progress?.ResendAvailableAtUtc is { } at
         ? Math.Max(0, (int)Math.Ceiling((at - DateTimeOffset.UtcNow).TotalSeconds))
         : 0;
@@ -709,7 +708,6 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
         Changed(nameof(PromptHint));
         Changed(nameof(IsVerificationCodePending));
         Changed(nameof(HasResendOption));
-        Changed(nameof(ResendUnavailable));
         RefreshResendCountdown();
         Changed(nameof(CanEditApiCredentials));
         Changed(nameof(CanDeleteApiCredentials));

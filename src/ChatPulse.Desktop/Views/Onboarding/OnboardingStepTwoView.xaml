@@ -654,10 +654,6 @@
                                     Style="{StaticResource OutlineBackButton}"
                                     Foreground="#7732BE"
                                     HorizontalAlignment="Center" Margin="0,10,0,0" />
-                            <TextBlock Text="Повторная отправка сейчас не предложена Telegram. Проверьте способ доставки выше."
-                                       Visibility="{Binding ResendUnavailable, Converter={StaticResource BoolToVisibility}}"
-                                       TextWrapping="Wrap" TextAlignment="Center" FontSize="13"
-                                       Foreground="{StaticResource TextSecondary}" Margin="0,10,0,0" />
                             <TextBlock Text="{Binding ResendStatus}"
                                        Visibility="{Binding HasResendStatus, Converter={StaticResource BoolToVisibility}}"
                                        TextWrapping="Wrap" TextAlignment="Center" FontSize="13"
