@@ -324,6 +324,32 @@ public sealed class TelegramAuthRecoveryAndCancellationTests
     }
 
     [Fact]
+    public async Task RetryWithoutAuthorizedSession_ReturnsToPhoneLoginWithExplanation()
+    {
+        var attempt = 0;
+        var client = new FakeTelegramClient
+        {
+            RestoreImpl = _ => ++attempt == 1
+                ? throw new TelegramAuthenticationException("telegram.session_restore_failed", "Network unavailable")
+                : Task.FromResult(new TelegramLoginProgress(TelegramLoginInputKind.None))
+        };
+        using var provider = CreateVmProvider(client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+
+        await vm.RestoreSessionAsync();
+        Assert.True(vm.CanRetrySession);
+        await vm.RestoreSessionAsync();
+
+        Assert.Equal(2, client.RestoreCalls);
+        Assert.False(vm.IsAuthorized);
+        Assert.False(vm.IsSessionRetryNeeded);
+        Assert.False(vm.IsSessionRecoveryNeeded);
+        Assert.Contains("Войдите", vm.Error);
+        Assert.False(vm.IsBusy);
+    }
+
+    [Fact]
     public async Task CorruptSession_RestoreOffersCleanup()
     {
         var client = new FakeTelegramClient

@@ -88,11 +88,24 @@ public sealed class WTelegramAuthenticationClient(
             throw new TelegramAuthenticationException("telegram.session_revoked",
                 "Telegram отклонил сохранённую сессию. Очистите локальную сессию и войдите заново.");
         }
+        catch (TelegramAuthenticationException exception) when (exception.Code is
+                   "telegram.network_unavailable" or "telegram.request_timeout" or "telegram.session_restore_failed")
+        {
+            // Не используем повторно клиент, который пережил сетевую ошибку.
+            // TelegramRemoteAwait уже отсоединяет клиента при таймауте/потере сети;
+            // эта проверка также покрывает ошибки до входа в AwaitRemoteAsync.
+            if (_client is not null) await DetachClientAsync();
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] RestoreSession: transient failure code={exception.Code}");
+            throw;
+        }
         catch (TelegramAuthenticationException) { throw; }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception)
         {
             Debug.WriteLine($"[ChatPulse][TelegramAuth] RestoreSession: error type={exception.GetType().Name}");
+            // Запрос мог завершиться до обёртки с таймаутом: такой клиент
+            // нельзя безопасно переиспользовать при следующей проверке.
+            await DetachClientAsync();
             throw new TelegramAuthenticationException("telegram.session_restore_failed",
                 "Не удалось проверить сохранённую Telegram-сессию. Проверьте интернет-соединение и повторите проверку.");
         }

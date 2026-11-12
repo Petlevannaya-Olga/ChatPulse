@@ -185,6 +185,7 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     public async Task RestoreSessionAsync(CancellationToken ct = default)
     {
         if (!_isApiConfigured || IsBusy) return;
+        var wasRetry = IsSessionRetryNeeded;
         IsBusy = true;
         Error = string.Empty;
         try
@@ -206,6 +207,8 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
             SetSessionRecoveryNeeded(false);
             SetSessionRetryNeeded(false);
             SetProgress(result.Value.IsAuthorized ? result.Value : null);
+            if (wasRetry && !result.Value.IsAuthorized)
+                Error = "Подтвердить сохранённую авторизацию не удалось. Войдите в Telegram по номеру телефона.";
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /*ignore*/}
         catch (Exception)

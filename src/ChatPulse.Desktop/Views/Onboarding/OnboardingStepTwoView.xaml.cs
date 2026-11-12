@@ -475,6 +475,11 @@ public partial class OnboardingStepTwoView : UserControl
         if (DataContext is not TelegramSetupViewModel vm || !vm.CanRetrySession) return;
         await vm.RestoreSessionAsync();
         UpdatePanels(vm);
+        // Успешная проверка (или отсутствие сохранённой авторизации)
+        // завершает экран ошибки. Показываем фактическое состояние:
+        // подключённый аккаунт либо форму нового входа.
+        if (!vm.IsSessionRetryNeeded && !vm.IsSessionRecoveryNeeded)
+            TelegramPageRequested?.Invoke(TelegramOnboardingPage.Phone);
     }
 
     private async void StartButton_OnClick(object sender, RoutedEventArgs e)
