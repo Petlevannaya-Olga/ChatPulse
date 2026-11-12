@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Input;
 
 namespace ChatPulse.Desktop.Views.Dialogs;
 
@@ -14,7 +13,6 @@ public partial class TelegramSessionActionDialog : Window
     public TelegramSessionActionDialog(TelegramSessionAction action)
     {
         InitializeComponent();
-        ModalDialogKeyboardPolicy.Apply(this, DialogKeyboardFocusTarget);
 
         if (action == TelegramSessionAction.ChangeApiKeys)
         {
@@ -43,13 +41,4 @@ public partial class TelegramSessionActionDialog : Window
     private void Cancel_OnClick(object sender, RoutedEventArgs e) => DialogResult = false;
     private void Confirm_OnClick(object sender, RoutedEventArgs e) => DialogResult = true;
 
-    protected override void OnPreviewKeyDown(KeyEventArgs e)
-    {
-        if (e.Key == Key.Escape)
-        {
-            DialogResult = false;
-            e.Handled = true;
-        }
-        base.OnPreviewKeyDown(e);
-    }
 }

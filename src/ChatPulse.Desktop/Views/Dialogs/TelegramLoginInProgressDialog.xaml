@@ -48,7 +48,7 @@
                                   ShadowDepth="8" Opacity="0.32" />
             </Border.Effect>
             <StackPanel>
-                <Grid x:Name="DialogKeyboardFocusTarget" Focusable="True" KeyboardNavigation.IsTabStop="False">
+                <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />

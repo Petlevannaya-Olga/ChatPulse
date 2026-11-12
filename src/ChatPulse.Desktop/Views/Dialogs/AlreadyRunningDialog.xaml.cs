@@ -10,7 +10,6 @@ public partial class AlreadyRunningDialog : Window
     public AlreadyRunningDialog()
     {
         InitializeComponent();
-        ModalDialogKeyboardPolicy.Apply(this, DialogKeyboardFocusTarget);
     }
 
     private void Close_Click(object sender, RoutedEventArgs e)

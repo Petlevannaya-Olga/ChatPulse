@@ -44,7 +44,7 @@
             <Setter Property="Foreground" Value="#321953" />
         </Style>
     </Window.Resources>
-    <Grid x:Name="DialogKeyboardFocusTarget" Focusable="True" KeyboardNavigation.IsTabStop="False">
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -106,7 +106,7 @@
         </ScrollViewer>
         <Border Grid.Row="2" BorderBrush="#E3D8EE" BorderThickness="0,1,0,0" Padding="20,12">
             <Button Content="Понятно" Width="180" HorizontalAlignment="Right"
-                    Style="{StaticResource ChatPulsePrimaryButton}" Click="CloseButton_OnClick" />
+                    Style="{StaticResource ChatPulsePrimaryButton}" Click="CloseButton_OnClick" IsCancel="True" />
         </Border>
     </Grid>
 </Window>

@@ -41,7 +41,7 @@
         </Style>
     </Window.Resources>
 
-    <Grid x:Name="DialogKeyboardFocusTarget" Margin="24" Focusable="True" KeyboardNavigation.IsTabStop="False">
+    <Grid Margin="24">
         <Border Background="White" CornerRadius="20" Padding="32,28">
             <Border.Effect>
                 <DropShadowEffect Color="#18083A" BlurRadius="28" ShadowDepth="8" Opacity="0.32" />
@@ -79,7 +79,7 @@
                     <Button Grid.Column="0" Content="Отмена"
                             Background="#F5F0FF" Foreground="#39235C"
                             BorderThickness="0" Style="{StaticResource DialogButton}"
-                            Click="Cancel_OnClick" />
+                            Click="Cancel_OnClick" IsCancel="True" />
                     <Button x:Name="ConfirmButton" Grid.Column="2"
                             Background="#BB496A" Foreground="White"
                             BorderThickness="0" Style="{StaticResource DialogButton}"

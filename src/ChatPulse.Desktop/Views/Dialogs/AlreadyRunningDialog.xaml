@@ -48,7 +48,7 @@
         </Style>
     </Window.Resources>
 
-    <Grid x:Name="DialogKeyboardFocusTarget" Margin="24" Focusable="True" KeyboardNavigation.IsTabStop="False">
+    <Grid Margin="24">
         <Border Background="White" CornerRadius="20" Padding="32,28">
             <Border.Effect>
                 <DropShadowEffect Color="#18083A" BlurRadius="28" ShadowDepth="8" Opacity="0.32" />

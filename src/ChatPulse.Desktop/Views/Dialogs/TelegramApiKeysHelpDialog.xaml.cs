@@ -8,7 +8,6 @@ public partial class TelegramApiKeysHelpDialog : Window
     public TelegramApiKeysHelpDialog()
     {
         InitializeComponent();
-        ModalDialogKeyboardPolicy.Apply(this, DialogKeyboardFocusTarget);
     }
 
     private void CloseButton_OnClick(object sender, RoutedEventArgs e) => Close();
