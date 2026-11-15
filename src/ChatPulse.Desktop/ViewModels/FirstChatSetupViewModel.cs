@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using ChatPulse.Application.Features.Telegram.GetChats;
+using ChatPulse.Application.Services;
 using ChatPulse.Application.Features.Chats.Save;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Settings;
@@ -11,10 +12,20 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ChatPulse.Desktop.ViewModels;
 
 /// <summary>Состояние третьего шага. Telegram читается через CQRS, настройки — через SettingsService.</summary>
-public sealed class FirstChatSetupViewModel(
-    IServiceScopeFactory scopeFactory,
-    ISettingsService settings) : INotifyPropertyChanged
+public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
 {
+    private readonly IServiceScopeFactory scopeFactory;
+    private readonly ISettingsService settings;
+    private readonly ITelegramConnectionState networkState;
+
+    public FirstChatSetupViewModel(IServiceScopeFactory scopeFactory,
+        ISettingsService settings, ITelegramConnectionState networkState)
+    {
+        this.scopeFactory = scopeFactory;
+        this.settings = settings;
+        this.networkState = networkState;
+        networkState.StateChanged += OnNetworkStateChanged;
+    }
     private TelegramChatOption? _selectedChat;
     private string _displayName = string.Empty;
     private string? _socialNetwork;
@@ -29,6 +40,16 @@ public sealed class FirstChatSetupViewModel(
     private long? _telegramUserId;
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    // No network RPC is started when the global monitor reports an outage.
+    // UI updates are dispatched by the monitor on the WPF thread.
+    private void OnNetworkStateChanged()
+    {
+        Changed(nameof(CanRefresh));
+        Changed(nameof(CanSave));
+        if (networkState.CanUseTelegram && _initialized && Chats.Count == 0)
+            _initialized = false;
+    }
 
     public ObservableCollection<TelegramChatOption> Chats { get; } = [];
     public IReadOnlyList<string> SocialNetworks { get; } = ["Instagram", "Telegram", "TikTok"];
@@ -115,8 +136,8 @@ public sealed class FirstChatSetupViewModel(
         get => _isSaved;
         private set { _isSaved = value; Changed(); }
     }
-    public bool CanRefresh => !IsBusy;
-    public bool CanSave => !IsBusy && _telegramUserId is > 0 && SelectedChat is not null
+    public bool CanRefresh => !IsBusy && networkState.CanUseTelegram;
+    public bool CanSave => networkState.CanUseTelegram && !IsBusy && _telegramUserId is > 0 && SelectedChat is not null
         && !string.IsNullOrWhiteSpace(DisplayName)
         && SocialNetwork is not null && StartDate.HasValue;
 
@@ -153,6 +174,13 @@ public sealed class FirstChatSetupViewModel(
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
+        if (!networkState.CanUseTelegram)
+        {
+            _initialized = false;
+            Status = string.Empty;
+            Error = "Telegram временно недоступен. Дождитесь восстановления соединения.";
+            return;
+        }
         if (IsBusy) return;
         var epoch = _viewEpoch;
         var previousOwner = _telegramUserId;

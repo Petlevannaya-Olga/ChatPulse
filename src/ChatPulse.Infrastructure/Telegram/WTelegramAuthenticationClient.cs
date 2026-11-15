@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
+using TL;
 using WTelegram;
 
 namespace ChatPulse.Infrastructure.Telegram;
@@ -108,6 +109,45 @@ public sealed class WTelegramAuthenticationClient(
             await DetachClientAsync();
             throw new TelegramAuthenticationException("telegram.session_restore_failed",
                 "Не удалось проверить сохранённую Telegram-сессию. Проверьте интернет-соединение и повторите проверку.");
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Performs an actual read-only RPC. Checking only the Windows network interface
+    /// or a locally cached UserId would produce false ONLINE states.
+    /// </summary>
+    public async Task CheckConnectionAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (_client is null || _client.UserId <= 0)
+                throw new TelegramAuthenticationException("telegram.not_authorized",
+                    "Telegram-сессия пока не подтверждена.");
+
+            await AwaitRemoteAsync(_client.Help_GetConfig(), cancellationToken);
+        }
+        catch (TelegramAuthenticationException) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TL.RpcException exception) when (IsAuthorizationLost(exception))
+        {
+            await DetachClientAsync();
+            _authorizationEvents.ReportAuthorizationLost();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram отклонил текущую сессию. Требуется повторный вход.");
+        }
+        catch (Exception exception) when (TelegramNetworkErrors.IsTransportFailure(exception))
+        {
+            await DetachClientAsync();
+            throw NetworkUnavailableException();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"[ChatPulse][TelegramAuth] CheckConnection: error type={exception.GetType().Name}");
+            throw new TelegramAuthenticationException("telegram.connection_check_failed",
+                "Не удалось проверить доступность Telegram. Повторите попытку.");
         }
         finally { _gate.Release(); }
     }

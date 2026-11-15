@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using ChatPulse.Desktop.Services;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -17,6 +18,7 @@ public partial class MainWindow : Window
     private readonly FirstChatSetupViewModel _firstChatSetup;
     private readonly ILogger<MainWindow> _logger;
     private readonly ChatPulse.Application.Services.TelegramAuthorizationEvents _authorizationEvents;
+    private readonly TelegramConnectionMonitor _connectionMonitor;
     private TelegramOnboardingPage _telegramPage = TelegramOnboardingPage.ApiCredentials;
     private bool _isCloseConfirmed;
     private bool _isExitDialogOpen;
@@ -28,7 +30,8 @@ public partial class MainWindow : Window
         FirstChatSetupViewModel firstChatSetup,
         ISettingsService settings,
         ILogger<MainWindow> logger,
-        ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents)
+        ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents,
+        TelegramConnectionMonitor connectionMonitor)
     {
         InitializeComponent();
         _settings = settings;
@@ -36,17 +39,49 @@ public partial class MainWindow : Window
         _firstChatSetup = firstChatSetup;
         _logger = logger;
         _authorizationEvents = authorizationEvents;
+        _connectionMonitor = connectionMonitor;
+        ConnectionNotice.DataContext = connectionMonitor;
+        _telegramSetup.PropertyChanged += OnTelegramStateChanged;
+        _connectionMonitor.SessionVerified += OnConnectionSessionVerified;
         _authorizationEvents.AuthorizationLost += OnTelegramAuthorizationLost;
-        _authorizationEvents.VerificationRequired += OnTelegramAuthorizationLost;
         Closed += (_, _) =>
         {
             _authorizationEvents.AuthorizationLost -= OnTelegramAuthorizationLost;
-            _authorizationEvents.VerificationRequired -= OnTelegramAuthorizationLost;
+            _connectionMonitor.SessionVerified -= OnConnectionSessionVerified;
+            _telegramSetup.PropertyChanged -= OnTelegramStateChanged;
+            _connectionMonitor.StopMonitoring();
         };
         SecondStepScreen.DataContext = telegramSetup;
         ThirdStepScreen.DataContext = _firstChatSetup;
         SecondStepScreen.TelegramPageRequested += SecondStepScreen_OnTelegramPageRequested;
     }
+
+    private void OnTelegramStateChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(TelegramSetupViewModel.IsAuthorized) && _telegramSetup.IsAuthorized)
+        {
+            _connectionMonitor.StartMonitoring(() => !_telegramSetup.IsBusy && !_telegramSetup.IsAwaitingInput &&
+                                                    !_telegramSetup.IsEditingApiCredentials &&
+                                                    !_firstChatSetup.IsBusy);
+        }
+        else if (args.PropertyName == nameof(TelegramSetupViewModel.IsBusy) &&
+                 !_telegramSetup.IsBusy && !_telegramSetup.IsAuthorized &&
+                 !_telegramSetup.IsSessionRetryNeeded && !_telegramSetup.IsSessionRecoveryNeeded)
+        {
+            // Explicit logout or credentials reset; do not keep a stale warning.
+            _connectionMonitor.StopMonitoring();
+        }
+    }
+
+    private void OnConnectionSessionVerified(ChatPulse.Contracts.Telegram.TelegramLoginProgress progress)
+    {
+        // A non-destructive check can repair the ViewModel after a temporary
+        // VerificationRequired event without opening Telegram login again.
+        _telegramSetup.ApplyVerifiedSession(progress);
+    }
+
+    private async void RetryConnectionButton_OnClick(object sender, RoutedEventArgs args)
+        => await _connectionMonitor.RetryAsync();
 
     private void OnTelegramAuthorizationLost()
     {
@@ -131,6 +166,10 @@ public partial class MainWindow : Window
         // Главный экран будет реализован после настройки чатов.
         ShowStep(step);
         _hasInitialized = true;
+        if (_telegramSetup.IsAuthorized)
+            _connectionMonitor.StartMonitoring(() => !_telegramSetup.IsBusy && !_telegramSetup.IsAwaitingInput &&
+                                                    !_telegramSetup.IsEditingApiCredentials &&
+                                                    !_firstChatSetup.IsBusy);
     }
 
     private void ShowStep(OnboardingStep step)

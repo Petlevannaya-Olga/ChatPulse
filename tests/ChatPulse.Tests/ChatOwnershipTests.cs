@@ -17,6 +17,25 @@ public sealed class ChatOwnershipTests
     private const long AccountB = 2002;
 
     [Fact]
+    public async Task NetworkOffline_PreventsChatRefresh_WithoutCallingTelegram()
+    {
+        using var directory = new TemporarySettingsDirectory();
+        using var settings = new JsonSettingsService(directory.Path);
+        var client = new FakeTelegramClient();
+        using var provider = BuildProvider(client, settings);
+        var network = (FakeTelegramConnectionState)provider.GetRequiredService<ITelegramConnectionState>();
+        var vm = provider.GetRequiredService<FirstChatSetupViewModel>();
+        network.SetState(false, false);
+
+        await vm.RefreshAsync();
+        Assert.False(vm.CanRefresh);
+        Assert.Equal(0, client.GetChatsCalls);
+
+        network.SetState(true, true);
+        Assert.True(vm.CanRefresh);
+    }
+
+    [Fact]
     public async Task SaveChat_SamePeerForDifferentUsers_StoresTwoIndependentConfigurations()
     {
         using var directory = new TemporarySettingsDirectory();
@@ -279,6 +298,7 @@ public sealed class ChatOwnershipTests
         var services = new ServiceCollection();
         services.AddApplication();
         services.AddSingleton<ITelegramAuthenticationClient>(client);
+        services.AddSingleton<ITelegramConnectionState, FakeTelegramConnectionState>();
         services.AddSingleton<ISettingsService>(settings);
         services.AddSingleton<IChatConfigurationStore, SettingsChatConfigurationStore>();
         services.AddTransient<FirstChatSetupViewModel>();

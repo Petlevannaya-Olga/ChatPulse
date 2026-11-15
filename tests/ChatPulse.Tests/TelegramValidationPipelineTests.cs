@@ -70,6 +70,7 @@ public sealed class TelegramValidationPipelineTests
         services.AddApplication();
         services.AddSingleton<ITelegramApiCredentialsStore>(store);
         services.AddSingleton<ITelegramAuthenticationClient>(client);
+        services.AddSingleton<ITelegramConnectionState, FakeTelegramConnectionState>();
         services.AddSingleton<ITelegramCredentialChangeJournal>(new FakeCredentialChangeJournal());
         services.AddSingleton<TelegramAuthorizationEvents>();
         services.AddSingleton<ChatPulse.Desktop.ViewModels.TelegramSetupViewModel>();

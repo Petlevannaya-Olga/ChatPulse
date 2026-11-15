@@ -54,6 +54,8 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient
     public int BeginCalls { get; private set; }
     public int ContinueCalls { get; private set; }
     public int RestoreCalls { get; private set; }
+    public int ConnectionCheckCalls { get; private set; }
+    public Func<CancellationToken, Task>? ConnectionCheckImpl { get; set; }
     public int ResendCalls { get; private set; }
     public int GetChatsCalls { get; private set; }
     public long CurrentTelegramUserId { get; set; } = 123;
@@ -94,6 +96,12 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient
         SubmittedConfirmation = input;
         return ContinueImpl?.Invoke(input, cancellationToken)
             ?? Task.FromResult(new TelegramLoginProgress(TelegramLoginInputKind.None, "Test", 123));
+    }
+
+    public Task CheckConnectionAsync(CancellationToken cancellationToken)
+    {
+        ConnectionCheckCalls++;
+        return ConnectionCheckImpl?.Invoke(cancellationToken) ?? Task.CompletedTask;
     }
 
     public Task<TelegramLoginProgress> RestoreSessionAsync(CancellationToken cancellationToken)

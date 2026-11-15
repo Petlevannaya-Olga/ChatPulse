@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using ChatPulse.Application;
 using ChatPulse.Application.Services;
+using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
 using ChatPulse.Desktop.ViewModels;
 using ChatPulse.Desktop.Views.Dialogs;
@@ -44,6 +45,9 @@ public partial class App : System.Windows.Application
             builder.Services.AddInfrastructure(Path.Combine(dataDirectory, "chatpulse.db"));
             builder.Services.AddSingleton<ISettingsService, JsonSettingsService>();
             builder.Services.AddSingleton<IChatConfigurationStore, SettingsChatConfigurationStore>();
+            builder.Services.AddSingleton<TelegramConnectionMonitor>();
+            builder.Services.AddSingleton<ITelegramConnectionState>(provider =>
+                provider.GetRequiredService<TelegramConnectionMonitor>());
             builder.Services.AddSingleton<TelegramSetupViewModel>();
             builder.Services.AddSingleton<FirstChatSetupViewModel>();
             builder.Services.AddSingleton<MainWindow>();

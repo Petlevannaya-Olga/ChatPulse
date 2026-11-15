@@ -6,6 +6,8 @@ namespace ChatPulse.Application.Services;
 public interface ITelegramAuthenticationClient
 {
     Task<TelegramLoginProgress> RestoreSessionAsync(CancellationToken cancellationToken);
+    /// <summary>Read-only network RPC to Telegram; does not initiate login or send a code.</summary>
+    Task CheckConnectionAsync(CancellationToken cancellationToken);
     Task<TelegramLoginProgress> BeginLoginAsync(string phoneNumber, CancellationToken cancellationToken);
     Task<TelegramLoginProgress> ContinueLoginAsync(string input, CancellationToken cancellationToken);
     Task<TelegramLoginProgress> ResendCodeAsync(CancellationToken cancellationToken);

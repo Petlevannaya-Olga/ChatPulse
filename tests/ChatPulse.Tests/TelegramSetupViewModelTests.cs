@@ -37,6 +37,43 @@ public sealed class TelegramSetupViewModelTests
     }
 
     [Fact]
+    public async Task NetworkOffline_BlocksNewTelegramRequests_WithoutDeletingCredentials()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient();
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        var connection = (FakeTelegramConnectionState)provider.GetRequiredService<ITelegramConnectionState>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.PhoneNumber = "+79991234567";
+        Assert.True(vm.CanStart);
+
+        connection.SetState(false, false);
+        Assert.False(vm.CanStart);
+        await vm.BeginAsync();
+        Assert.Equal(0, client.BeginCalls);
+        Assert.Equal(HashA, store.Value!.ApiHash);
+
+        connection.SetState(true, true);
+        Assert.True(vm.CanStart);
+    }
+
+    [Fact]
+    public async Task RevalidatedSession_RestoresAuthorizedUi_WithoutSendingNewCode()
+    {
+        var store = new FakeCredentialsStore { Value = new TelegramApiCredentials(123, HashA) };
+        var client = new FakeTelegramClient();
+        using var provider = TelegramValidationPipelineTests.BuildProvider(store, client);
+        var vm = provider.GetRequiredService<TelegramSetupViewModel>();
+        await vm.LoadApiCredentialsStatusAsync();
+        vm.ApplyVerifiedSession(Authorized);
+
+        Assert.True(vm.IsAuthorized);
+        Assert.False(vm.IsSessionRetryNeeded);
+        Assert.Equal(0, client.BeginCalls);
+    }
+
+    [Fact]
     public async Task FirstLaunch_NoKeysCannotStartLogin()
     {
         using var provider = TelegramValidationPipelineTests.BuildProvider(new FakeCredentialsStore(), new FakeTelegramClient());

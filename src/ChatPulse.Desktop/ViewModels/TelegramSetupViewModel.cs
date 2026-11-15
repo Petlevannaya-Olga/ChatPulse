@@ -23,10 +23,20 @@ namespace ChatPulse.Desktop.ViewModels;
 public sealed class TelegramSetupViewModel : INotifyPropertyChanged
 {
     private readonly IServiceScopeFactory scopeFactory;
+    private readonly ITelegramConnectionState networkState;
 
-    public TelegramSetupViewModel(IServiceScopeFactory scopeFactory, TelegramAuthorizationEvents authorizationEvents)
+    public TelegramSetupViewModel(IServiceScopeFactory scopeFactory, TelegramAuthorizationEvents authorizationEvents,
+        ITelegramConnectionState networkState)
     {
         this.scopeFactory = scopeFactory;
+        this.networkState = networkState;
+        networkState.StateChanged += () =>
+        {
+            Changed(nameof(CanStart));
+            Changed(nameof(CanConfirm));
+            Changed(nameof(CanResendCode));
+            Changed(nameof(CanRetrySession));
+        };
         authorizationEvents.AuthorizationLost += HandleAuthorizationLost;
         authorizationEvents.VerificationRequired += HandleVerificationRequired;
     }
@@ -93,7 +103,7 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     public bool CanEditApiCredentials => IsApiConfigured && !IsBusy && !IsAwaitingInput;
     public bool IsSessionRecoveryNeeded => _isSessionRecoveryNeeded;
     public bool IsSessionRetryNeeded => _isSessionRetryNeeded;
-    public bool CanRetrySession => IsApiConfigured && IsSessionRetryNeeded && !IsBusy;
+    public bool CanRetrySession => IsApiConfigured && IsSessionRetryNeeded && !IsBusy && networkState.IsNetworkAvailable;
     public bool CanResetTelegramSession => IsApiConfigured &&
         (IsAuthorized || IsSessionRecoveryNeeded) && !IsBusy && !IsAwaitingInput;
     public bool IsApiCredentialsCorrupted => _isApiCredentialsCorrupted;
@@ -179,6 +189,16 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
         {
             Error = "Не удалось проверить локальные API-ключи Telegram.";
         }
+    }
+
+    /// <summary>Applies a successful background check without requesting a new login code.</summary>
+    public void ApplyVerifiedSession(TelegramLoginProgress progress)
+    {
+        if (!progress.IsAuthorized) return;
+        Error = string.Empty;
+        SetSessionRecoveryNeeded(false);
+        SetSessionRetryNeeded(false);
+        SetProgress(progress);
     }
 
     /// <summary>Проверяет ранее сохранённую сессию без нового кода Telegram.</summary>
@@ -418,9 +438,9 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     public bool IsPhoneComplete => PhoneNumber.Length == 12 &&
         PhoneNumber.StartsWith("+7", StringComparison.Ordinal) &&
         PhoneNumber.Skip(2).All(static character => character is >= '0' and <= '9');
-    public bool CanStart => IsApiConfigured && !IsBusy && !IsAuthorized && IsPhoneComplete &&
+    public bool CanStart => networkState.CanUseTelegram && IsApiConfigured && !IsBusy && !IsAuthorized && IsPhoneComplete &&
         !IsAwaitingInput && !IsSessionRecoveryNeeded && !IsSessionRetryNeeded;
-    public bool CanConfirm => !IsBusy && IsAwaitingInput && _isConfirmationDraftValid;
+    public bool CanConfirm => networkState.CanUseTelegram && !IsBusy && IsAwaitingInput && _isConfirmationDraftValid;
 
     // Только состояние валидации: введённый код, email или пароль не храним в ViewModel.
     // Используем тот же FluentValidation-валидатор, что и CQRS-декоратор отправки.
@@ -445,7 +465,7 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
     private int SecondsUntilResend => _progress?.ResendAvailableAtUtc is { } at
         ? Math.Max(0, (int)Math.Ceiling((at - DateTimeOffset.UtcNow).TotalSeconds))
         : 0;
-    public bool CanResendCode => HasResendOption && SecondsUntilResend == 0 && !IsBusy;
+    public bool CanResendCode => networkState.CanUseTelegram && HasResendOption && SecondsUntilResend == 0 && !IsBusy;
     public string ResendButtonText
     {
         get
@@ -543,7 +563,7 @@ public sealed class TelegramSetupViewModel : INotifyPropertyChanged
 
     public async Task BeginAsync(CancellationToken ct = default)
     {
-        if (IsBusy) return;
+        if (IsBusy || !networkState.CanUseTelegram) return;
         IsBusy = true;
         Error = string.Empty;
         ResendStatus = string.Empty;
