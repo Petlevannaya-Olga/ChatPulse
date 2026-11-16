@@ -334,7 +334,7 @@
                        FontSize="14" TextAlignment="Center" />
             <TextBlock Grid.Row="1" Grid.Column="2" Text="Telegram" Foreground="White"
                        FontWeight="SemiBold" FontSize="14" TextAlignment="Center" />
-            <TextBlock Grid.Row="1" Grid.Column="4" Text="Первый чат" Foreground="#C9B9E5"
+            <TextBlock Grid.Row="1" Grid.Column="4" Text="Чаты" Foreground="#C9B9E5"
                        FontSize="14" TextAlignment="Center" />
         </Grid>
 
