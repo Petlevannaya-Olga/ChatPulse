@@ -502,6 +502,88 @@ public sealed class WTelegramAuthenticationClient(
         finally { _gate.Release(); }
     }
 
+    /// <summary>Получает только текст сообщений за указанный период. История не сохраняется на диск.</summary>
+    public async Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
+        TelegramChatOption chat, int days, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(chat);
+        if (days is < 1 or > 7) throw new ArgumentOutOfRangeException(nameof(days));
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            GetVerifiedUserId();
+            // Resolve the peer using the same authenticated account. An ID alone is not
+            // enough for channels: access_hash must come from Telegram, not settings.
+            var dialogs = await AwaitRemoteAsync(_client!.Messages_GetAllDialogs(), cancellationToken);
+            var target = dialogs.dialogs.Select(dialog => dialogs.UserOrChat(dialog))
+                .OfType<TL.ChatBase>()
+                .FirstOrDefault(item => item.IsActive && item.ID == chat.PeerId &&
+                    (item is TL.Chat ? "Chat" : "Channel") == chat.PeerType);
+            if (target is null)
+                throw new TelegramAuthenticationException("telegram.chat_not_found",
+                    "Выбранный чат недоступен в текущем Telegram-аккаунте.");
+
+            TL.InputPeer peer = target;
+            var cutoff = DateTime.UtcNow.AddDays(-days);
+            var collected = new List<TelegramChatMessage>();
+            var offsetId = 0;
+            const int MAX_PAGES = 5;
+            const int PAGE_LIMIT = 100;
+            for (var page = 0; page < MAX_PAGES; page++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var history = await AwaitRemoteAsync(
+                    _client.Messages_GetHistory(peer, offsetId, limit: PAGE_LIMIT), cancellationToken);
+                if (history.Messages.Length == 0) break;
+                var reachedCutoff = false;
+                foreach (var item in history.Messages)
+                {
+                    if (item is not TL.Message message) continue;
+                    if (message.date.ToUniversalTime() < cutoff)
+                    {
+                        reachedCutoff = true;
+                        break;
+                    }
+                    if (!string.IsNullOrWhiteSpace(message.message))
+                        collected.Add(new TelegramChatMessage(message.ID, message.message));
+                }
+                if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) break;
+                var nextOffset = history.Messages[^1].ID;
+                if (nextOffset <= 0 || nextOffset == offsetId) break;
+                offsetId = nextOffset;
+            }
+            return collected;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (_client is null) _authorizationEvents.ReportVerificationRequired();
+            throw;
+        }
+        catch (TelegramAuthenticationException) { throw; }
+        catch (TL.RpcException exception) when (IsAuthorizationLost(exception))
+        {
+            await DetachClientAsync();
+            _authorizationEvents.ReportAuthorizationLost();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram завершил авторизацию. Выполните повторный вход.");
+        }
+        catch (TL.RpcException exception)
+        {
+            Debug.WriteLine($"[ChatPulse][History] RPC error code={exception.Code}");
+            throw new TelegramAuthenticationException("telegram.history_load_failed",
+                "Не удалось загрузить историю чата. Повторите проверку позднее.");
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"[ChatPulse][History] Error type={exception.GetType().Name}");
+            throw new TelegramAuthenticationException("telegram.history_load_failed",
+                "Не удалось загрузить историю чата. Проверьте соединение и повторите попытку.");
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Нельзя использовать UserId из неподтверждённого файла сессии.</summary>
     public async Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken)
     {

@@ -15,6 +15,9 @@ public interface ITelegramAuthenticationClient
     Task CancelLoginAsync(CancellationToken cancellationToken);
     Task ResetSessionAsync(CancellationToken cancellationToken);
     Task<TelegramChatsSnapshot> GetChatsAsync(CancellationToken cancellationToken);
+    /// <summary>Read-only bounded history for a verified account; never marks messages read.</summary>
+    Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
+        TelegramChatOption chat, int days, CancellationToken cancellationToken);
     /// <summary>Возвращает ID уже проверенной авторизованной сессии без нового запроса к Telegram.</summary>
     Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken);
 }

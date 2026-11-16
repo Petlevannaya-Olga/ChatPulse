@@ -216,7 +216,8 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <StackPanel Margin="36,16,36,20" HorizontalAlignment="Center">
+                    <StackPanel Margin="36,16,36,20" HorizontalAlignment="Center"
+                                Visibility="{Binding SelectionVisibility}">
                         <Grid Width="72" Height="72" HorizontalAlignment="Center">
                             <Ellipse Fill="#F5EEFF" Stroke="#A74BF0" StrokeThickness="2.5" />
                             <!-- Иконка чатов вместо логотипа Telegram. -->
@@ -235,9 +236,47 @@
                         <TextBlock Text="Подключение чатов" FontSize="28" FontWeight="Bold"
                                    Foreground="{StaticResource TextPrimary}"
                                    TextAlignment="Center" Margin="0,9,0,0" />
-                        <TextBlock Text="Выберите Telegram-чаты для проверки. Соцсеть заданий определим по сообщениям."
+                        <TextBlock Text="Выберите Telegram-чаты, которые хотите подключить к ChatPulse."
                                    FontSize="14" Foreground="{StaticResource TextSecondary}"
                                    TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
+                    </StackPanel>
+                    <!-- Шапка проверки оформлена в стиле экрана выбора чатов. -->
+                    <StackPanel Margin="36,16,36,18" Visibility="{Binding ReviewVisibility}">
+                        <Grid Width="72" Height="72" HorizontalAlignment="Center">
+                            <Ellipse Fill="#F5EEFF" Stroke="#A74BF0" StrokeThickness="2.5" />
+                            <Viewbox Width="39" Height="39" HorizontalAlignment="Center"
+                                     VerticalAlignment="Center">
+                                <Canvas Width="48" Height="48">
+                                    <Path Data="M 12,8 H 35 A 7,7 0 0 1 42,15 V 27 A 7,7 0 0 1 35,34 H 29 L 24,40 V 34 H 12 A 7,7 0 0 1 5,27 V 15 A 7,7 0 0 1 12,8 Z"
+                                          Fill="Transparent" Stroke="#8241D8" StrokeThickness="3.3"
+                                          StrokeLineJoin="Round" />
+                                    <Path Data="M 14,19 H 33 M 14,25 H 27" Stroke="#8241D8"
+                                          StrokeThickness="3.3" StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round" />
+                                </Canvas>
+                            </Viewbox>
+                        </Grid>
+                        <TextBlock Text="Проверка чатов" FontSize="28" FontWeight="Bold"
+                                   Foreground="{StaticResource TextPrimary}"
+                                   TextAlignment="Center" Margin="0,9,0,0" />
+                        <TextBlock Text="Проверьте результаты перед подключением."
+                                   FontSize="14" Foreground="{StaticResource TextSecondary}"
+                                   TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0" />
+                        <!-- Название текущего чата и прогресс скрываются после завершения анализа. -->
+                        <StackPanel Margin="0,14,0,0" HorizontalAlignment="Center"
+                                    Visibility="{Binding IsAnalyzing, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock FontSize="13" Foreground="{StaticResource TextSecondary}"
+                                       TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                                       MaxWidth="480" ToolTip="{Binding CurrentAnalyzedChatName}">
+                                <Run Text="Проверяется: " />
+                                <Run Text="{Binding CurrentAnalyzedChatName, Mode=OneWay}"
+                                     FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" />
+                            </TextBlock>
+                            <ProgressBar Width="240" Height="4" Margin="0,8,0,0"
+                                         HorizontalAlignment="Center"
+                                         IsIndeterminate="True"
+                                         Foreground="#9042ED" Background="#EEE5FA" />
+                        </StackPanel>
                     </StackPanel>
                     <Grid Grid.Row="1" Margin="36,0,36,16">
                         <Grid Visibility="{Binding SelectionVisibility}">
@@ -325,7 +364,7 @@
                             </Grid>
                             <Border Grid.Row="2" BorderBrush="#E6DFF3" BorderThickness="1" CornerRadius="12">
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding VisibleRows}">
+                                    <ItemsControl ItemsSource="{Binding VisibleRows}" Margin="0,0,0,14">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Border Margin="12,10,12,0"
@@ -352,41 +391,82 @@
                                 </ScrollViewer>
                             </Border>
                         </Grid>
-                        <Grid Visibility="{Binding ReviewVisibility}">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <StackPanel Margin="0,10,0,12">
-                                <TextBlock Text="Результаты проверки" FontSize="20" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextPrimary}" />
-                                <TextBlock Text="Выбранные чаты показаны ниже. Анализ сообщений пока не подключён: статус и соцсеть не определены."
-                                           TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"
-                                           FontSize="13" Margin="0,6,0,0" />
-                            </StackPanel>
-                            <Border Grid.Row="1" BorderBrush="#E6DFF3" BorderThickness="1" CornerRadius="12">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding SelectedRows}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border Margin="12,10,12,0"
-                                                        Padding="12,10"
-                                                        Background="#FCFAFF"
-                                                        BorderBrush="#E7DCF7"
-                                                        BorderThickness="1"
-                                                        CornerRadius="10">
-                                                    <StackPanel>
-                                                        <TextBlock Text="{Binding Title}" FontSize="15"
-                                                                   FontWeight="SemiBold" Foreground="#24154C"
-                                                                   TextTrimming="CharacterEllipsis" />
-                                                        <TextBlock Text="Не анализировался · Соцсеть не определена"
-                                                                   FontSize="12" Margin="0,4,0,0" Foreground="#796C98" />
-                                                    </StackPanel>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </ScrollViewer>
+                        <Grid Visibility="{Binding ReviewVisibility}" Margin="0,0,0,0">
+                            <Border BorderBrush="#E6DFF3" BorderThickness="1"
+                                        Background="#FFFFFF" CornerRadius="12">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled"
+                                                  Padding="0,0,5,8">
+                                        <ItemsControl ItemsSource="{Binding AnalysisRows}" Margin="0,0,0,14">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border x:Name="ResultCard" Margin="12,12,8,0" Padding="0"
+                                                            Background="#FCFAFF" BorderBrush="#E7DCF7"
+                                                            BorderThickness="1" CornerRadius="11">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="4" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Border x:Name="CardAccent" Background="#AC76EE"
+                                                                    CornerRadius="10,0,0,10" />
+                                                            <StackPanel Grid.Column="1" Margin="15,12,14,12">
+                                                                <TextBlock Text="{Binding Title}"
+                                                                           FontSize="15" FontWeight="SemiBold"
+                                                                           Foreground="{StaticResource TextPrimary}"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           ToolTip="{Binding Title}" />
+                                                                <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                                                                    <materialDesign:PackIcon x:Name="ResultIcon"
+                                                                                             Kind="ClockOutline" Width="17" Height="17"
+                                                                                             Foreground="#7545C8"
+                                                                                             VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                                    <TextBlock x:Name="ResultSummary" Text="{Binding Summary}"
+                                                                               FontSize="13" FontWeight="SemiBold"
+                                                                               VerticalAlignment="Center" TextWrapping="Wrap"
+                                                                               Foreground="#7545C8" />
+                                                                </StackPanel>
+                                                                <Border x:Name="CardDivider" Height="1" Background="#EDE5F8"
+                                                                        Margin="0,10,0,8" />
+                                                                <TextBlock Text="{Binding Details}"
+                                                                           FontSize="12" TextWrapping="Wrap"
+                                                                           Foreground="{StaticResource TextSecondary}" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Border>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding StatusKind}" Value="Success">
+                                                            <Setter TargetName="ResultCard" Property="Background" Value="#F3FBF6" />
+                                                            <Setter TargetName="ResultCard" Property="BorderBrush" Value="#C8E8D2" />
+                                                            <Setter TargetName="CardAccent" Property="Background" Value="#28A565" />
+                                                            <Setter TargetName="ResultIcon" Property="Kind" Value="CheckCircleOutline" />
+                                                            <Setter TargetName="ResultIcon" Property="Foreground" Value="#238753" />
+                                                            <Setter TargetName="ResultSummary" Property="Foreground" Value="#20784B" />
+                                                            <Setter TargetName="CardDivider" Property="Background" Value="#D8EBDD" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding StatusKind}" Value="Warning">
+                                                            <Setter TargetName="ResultCard" Property="Background" Value="#FFFAF0" />
+                                                            <Setter TargetName="ResultCard" Property="BorderBrush" Value="#F3DDAF" />
+                                                            <Setter TargetName="CardAccent" Property="Background" Value="#E4A33A" />
+                                                            <Setter TargetName="ResultIcon" Property="Kind" Value="AlertCircleOutline" />
+                                                            <Setter TargetName="ResultIcon" Property="Foreground" Value="#BC7918" />
+                                                            <Setter TargetName="ResultSummary" Property="Foreground" Value="#98600C" />
+                                                            <Setter TargetName="CardDivider" Property="Background" Value="#F2E5CA" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding StatusKind}" Value="Error">
+                                                            <Setter TargetName="ResultCard" Property="Background" Value="#FFF7F7" />
+                                                            <Setter TargetName="ResultCard" Property="BorderBrush" Value="#F2CCCC" />
+                                                            <Setter TargetName="CardAccent" Property="Background" Value="#D75D66" />
+                                                            <Setter TargetName="ResultIcon" Property="Kind" Value="CloseCircleOutline" />
+                                                            <Setter TargetName="ResultIcon" Property="Foreground" Value="#BD414C" />
+                                                            <Setter TargetName="ResultSummary" Property="Foreground" Value="#AD3944" />
+                                                            <Setter TargetName="CardDivider" Property="Background" Value="#F2DEDF" />
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
                             </Border>
                         </Grid>
                     </Grid>
@@ -395,9 +475,6 @@
                             <Button HorizontalAlignment="Left" Content="←  Назад" Click="BackButton_OnClick"
                                     Style="{StaticResource OutlineBackButton}" />
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="К выбору" Click="ReturnToSelection_OnClick"
-                                        Visibility="{Binding ReviewVisibility}"
-                                        Style="{StaticResource OutlineBackButton}" Margin="0,0,12,0" />
                                 <Button Content="Продолжить  →" Click="ShowReview_OnClick"
                                         Visibility="{Binding SelectionVisibility}"
                                         IsEnabled="{Binding HasSelection}"

@@ -1,3 +1,4 @@
+using ChatPulse.Application.Features.Chats.Analyze;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -279,6 +280,36 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
                 await RefreshAsync(cancellationToken);
             }
         }
+    }
+
+    /// <summary>Preliminary analysis only. No settings updates and no read acknowledgements.</summary>
+    public async Task<(ChatActivityAnalysis Analysis, int Days, int Count)> AnalyzeChatAsync(
+        TelegramChatOption chat, CancellationToken cancellationToken = default)
+    {
+        if (!networkState.CanUseTelegram)
+            throw new TelegramAuthenticationException("telegram.network_unavailable",
+                "Нет подключения к Telegram. Дождитесь восстановления связи.");
+        var expectedUserId = _telegramUserId;
+        if (expectedUserId is not > 0)
+            throw new TelegramAuthenticationException("telegram.not_authorized",
+                "Не удалось подтвердить Telegram-аккаунт для анализа.");
+        using var scope = scopeFactory.CreateScope();
+        var operationGate = scope.ServiceProvider.GetRequiredService<ITelegramOperationGate>();
+        using var operation = await operationGate.EnterAsync(cancellationToken);
+        var telegram = scope.ServiceProvider.GetRequiredService<ITelegramAuthenticationClient>();
+        if (await telegram.GetAuthorizedUserIdAsync(cancellationToken) != expectedUserId)
+            throw new TelegramAuthenticationException("telegram.account_changed",
+                "Telegram-аккаунт изменился. Обновите список чатов.");
+        var lastDay = await telegram.GetRecentChatMessagesAsync(chat, 1, cancellationToken);
+        var analysis = ChatActivityAnalyzer.Analyze(lastDay.Select(message =>
+            new ChatActivityMessage(message.MessageId, message.Text)));
+        if (analysis.Classification != ChatActivityClassification.INSUFFICIENT_DATA)
+            return (analysis, 1, lastDay.Count);
+
+        var lastWeek = await telegram.GetRecentChatMessagesAsync(chat, 7, cancellationToken);
+        analysis = ChatActivityAnalyzer.Analyze(lastWeek.Select(message =>
+            new ChatActivityMessage(message.MessageId, message.Text)));
+        return (analysis, 7, lastWeek.Count);
     }
 
     public async Task SaveAsync(CancellationToken cancellationToken = default)

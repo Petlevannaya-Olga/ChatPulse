@@ -125,6 +125,15 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient
             ?? Task.FromResult(new TelegramChatsSnapshot(CurrentTelegramUserId, []));
     }
 
+    public Func<TelegramChatOption, int, CancellationToken, Task<IReadOnlyList<TelegramChatMessage>>>? ChatMessagesImpl { get; set; }
+    public Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
+        TelegramChatOption chat, int days, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ChatMessagesImpl?.Invoke(chat, days, cancellationToken)
+            ?? Task.FromResult<IReadOnlyList<TelegramChatMessage>>([]);
+    }
+
     public Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

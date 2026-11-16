@@ -1,3 +1,5 @@
+using ChatPulse.Application.Features.Chats.Analyze;
+using ChatPulse.Application.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -14,6 +16,11 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private string searchText = string.Empty;
     private bool isReview;
     private bool updating;
+    private CancellationTokenSource? analysisCancellation;
+    private long analysisEpoch;
+    private string analysisStatus = "";
+    private string currentAnalyzedChatName = string.Empty;
+    private bool isAnalyzing;
 
     public OnboardingStepThreeView()
     {
@@ -26,6 +33,38 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     public event PropertyChangedEventHandler? PropertyChanged;
     public ObservableCollection<ChatSelectionRow> Rows { get; } = [];
     public ObservableCollection<ChatSelectionRow> SelectedRows { get; } = [];
+    public ObservableCollection<ChatAnalysisResultRow> AnalysisRows { get; } = [];
+    public string AnalysisStatus { get => analysisStatus; private set { analysisStatus = value; Changed(); } }
+    public string CurrentAnalyzedChatName
+    {
+        get => currentAnalyzedChatName;
+        private set
+        {
+            if (currentAnalyzedChatName == value) return;
+            currentAnalyzedChatName = value;
+            Changed();
+        }
+    }
+    public bool IsAnalyzing
+    {
+        get => isAnalyzing;
+        private set
+        {
+            if (isAnalyzing == value) return;
+            isAnalyzing = value;
+            Changed();
+        }
+    }
+    public int RecognizedCount => AnalysisRows.Count(row => row.StatusKind == "Success");
+    public int AttentionCount => AnalysisRows.Count(row => row.StatusKind == "Warning");
+    public int ErrorCount => AnalysisRows.Count(row => row.StatusKind == "Error");
+
+    private void UpdateAnalysisCounts()
+    {
+        Changed(nameof(RecognizedCount));
+        Changed(nameof(AttentionCount));
+        Changed(nameof(ErrorCount));
+    }
     public ObservableCollection<ChatSelectionRow> VisibleRows { get; } = [];
     private FirstChatSetupViewModel? ViewModel => DataContext as FirstChatSetupViewModel;
 
@@ -49,7 +88,14 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
     private async void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (!IsVisible || ViewModel is not { } viewModel) return;
+        if (!IsVisible)
+        {
+            analysisCancellation?.Cancel();
+            IsAnalyzing = false;
+            CurrentAnalyzedChatName = string.Empty;
+            return;
+        }
+        if (ViewModel is not { } viewModel) return;
         await viewModel.EnsureLoadedAsync();
         SyncRows(viewModel.Chats);
     }
@@ -114,16 +160,73 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         Changed(nameof(HasSelection));
     }
 
-    private void ShowReview_OnClick(object sender, RoutedEventArgs e)
+    private async void ShowReview_OnClick(object sender, RoutedEventArgs e)
     {
         if (!HasSelection) return;
+        analysisCancellation?.Cancel();
+        analysisCancellation = new CancellationTokenSource();
+        var token = analysisCancellation.Token;
+        var epoch = ++analysisEpoch;
+        var chosen = SelectedRows.ToArray();
+        AnalysisRows.Clear();
+        foreach (var item in chosen)
+            AnalysisRows.Add(new ChatAnalysisResultRow(item.Title));
+        UpdateAnalysisCounts();
         isReview = true;
         Changed(nameof(SelectionVisibility));
         Changed(nameof(ReviewVisibility));
+        if (ViewModel is not { } vm) return;
+        IsAnalyzing = true;
+        try
+        {
+            for (var i = 0; i < chosen.Length; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                CurrentAnalyzedChatName = chosen[i].Title;
+                AnalysisStatus = $"Проверка {i + 1} из {chosen.Length}: {chosen[i].Title}";
+                try
+                {
+                    var (result, days, count) = await vm.AnalyzeChatAsync(chosen[i].Chat, token);
+                    if (epoch != analysisEpoch || token.IsCancellationRequested) return;
+                    AnalysisRows[i].SetResult(result, days, count);
+                    UpdateAnalysisCounts();
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+                catch (TelegramAuthenticationException exception)
+                {
+                    if (epoch != analysisEpoch || token.IsCancellationRequested) return;
+                    AnalysisRows[i].SetError(exception.Message);
+                    UpdateAnalysisCounts();
+                }
+                catch (Exception)
+                {
+                    if (epoch != analysisEpoch || token.IsCancellationRequested) return;
+                    AnalysisRows[i].SetError("Не удалось проверить этот чат. Повторите анализ.");
+                    UpdateAnalysisCounts();
+                }
+            }
+            if (epoch == analysisEpoch && !token.IsCancellationRequested)
+                AnalysisStatus = "Проверка завершена. Результаты предварительные; чаты ещё не подключены.";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { /* user left view */ }
+        finally
+        {
+            // An older cancelled analysis must not hide a newer analysis's progress.
+            if (epoch == analysisEpoch)
+            {
+                IsAnalyzing = false;
+                CurrentAnalyzedChatName = string.Empty;
+            }
+        }
     }
 
     private void ReturnToSelection_OnClick(object sender, RoutedEventArgs e)
     {
+        analysisEpoch++;
+        analysisCancellation?.Cancel();
+        IsAnalyzing = false;
+        CurrentAnalyzedChatName = string.Empty;
+        AnalysisStatus = string.Empty;
         isReview = false;
         Changed(nameof(SelectionVisibility));
         Changed(nameof(ReviewVisibility));
@@ -169,4 +272,46 @@ public sealed class ChatSelectionRow(TelegramChatOption chat) : INotifyPropertyC
         }
     }
     public event PropertyChangedEventHandler? PropertyChanged;
+}
+
+/// <summary>Presentation-only result; no automatic confirmation or settings mutation.</summary>
+public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
+{
+    private string summary = "Ожидает проверки…";
+    private string details = "";
+    private string statusKind = "Pending";
+    public string StatusKind { get => statusKind; private set { statusKind = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusKind))); } }
+    public string Title { get; } = title;
+    public string Summary { get => summary; private set { summary = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Summary))); } }
+    public string Details { get => details; private set { details = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Details))); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public void SetResult(ChatActivityAnalysis analysis, int days, int messageCount)
+    {
+        var network = analysis.Network switch
+        {
+            ChatTaskNetwork.INSTAGRAM => "Instagram",
+            ChatTaskNetwork.TELEGRAM => "Telegram",
+            _ => "Соцсеть не определена"
+        };
+        StatusKind = analysis.Classification switch
+        {
+            ChatActivityClassification.POSSIBLE_ACTIVITY => "Success",
+            ChatActivityClassification.CONFLICTING_NETWORKS => "Warning",
+            _ => "Warning"
+        };
+        Summary = analysis.Classification switch
+        {
+            ChatActivityClassification.POSSIBLE_ACTIVITY => $"Возможный чат активности · {network}",
+            ChatActivityClassification.CONFLICTING_NETWORKS => "Противоречивые признаки соцсетей",
+            _ => "Недостаточно данных для определения"
+        };
+        Details = $"Период: {days} дн. · Сообщений: {messageCount} · Заданий: {analysis.TaskCount} · Возможных: {analysis.PossibleTaskCount}";
+    }
+    public void SetError(string error)
+    {
+        StatusKind = "Error";
+        Summary = "Ошибка проверки";
+        Details = error;
+    }
 }
