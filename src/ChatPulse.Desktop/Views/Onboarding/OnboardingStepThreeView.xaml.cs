@@ -21,6 +21,9 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private string analysisStatus = "";
     private string currentAnalyzedChatName = string.Empty;
     private bool isAnalyzing;
+    private bool isConnecting;
+    private bool analysisCompleted;
+    private string connectionStatus = string.Empty;
 
     public OnboardingStepThreeView()
     {
@@ -55,6 +58,14 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             Changed();
         }
     }
+    public string ConnectionStatus
+    {
+        get => connectionStatus;
+        private set { connectionStatus = value; Changed(); }
+    }
+    public bool CanConnectChats => isReview && analysisCompleted && !IsAnalyzing && !isConnecting &&
+                                   AnalysisRows.Any(row => row.CanConnect && !row.IsConnected);
+    private void RefreshCanConnect() => Changed(nameof(CanConnectChats));
     public int RecognizedCount => AnalysisRows.Count(row => row.StatusKind == "Success");
     public int AttentionCount => AnalysisRows.Count(row => row.StatusKind == "Warning");
     public int ErrorCount => AnalysisRows.Count(row => row.StatusKind == "Error");
@@ -93,6 +104,8 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             analysisCancellation?.Cancel();
             IsAnalyzing = false;
             CurrentAnalyzedChatName = string.Empty;
+            analysisCompleted = false;
+            RefreshCanConnect();
             return;
         }
         if (ViewModel is not { } viewModel) return;
@@ -168,7 +181,10 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         var token = analysisCancellation.Token;
         var epoch = ++analysisEpoch;
         var chosen = SelectedRows.ToArray();
+        analysisCompleted = false;
+        ConnectionStatus = string.Empty;
         AnalysisRows.Clear();
+        RefreshCanConnect();
         foreach (var item in chosen)
             AnalysisRows.Add(new ChatAnalysisResultRow(item.Title));
         UpdateAnalysisCounts();
@@ -206,7 +222,10 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                 }
             }
             if (epoch == analysisEpoch && !token.IsCancellationRequested)
+            {
+                analysisCompleted = true;
                 AnalysisStatus = "Проверка завершена. Результаты предварительные; чаты ещё не подключены.";
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { /* user left view */ }
         finally
@@ -216,13 +235,51 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             {
                 IsAnalyzing = false;
                 CurrentAnalyzedChatName = string.Empty;
+                RefreshCanConnect();
             }
+        }
+    }
+
+    private async void ConnectChats_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (!CanConnectChats || ViewModel is not { } vm) return;
+        var candidates = SelectedRows.Zip(AnalysisRows)
+            .Where(pair => pair.Second.CanConnect && pair.Second.VerifiedNetwork.HasValue)
+            .ToArray();
+        if (candidates.Length == 0) return;
+
+        isConnecting = true;
+        RefreshCanConnect();
+        var connected = 0;
+        try
+        {
+            foreach (var (chat, result) in candidates)
+            {
+                // The application handler re-checks Telegram and evidence before writing settings.
+                var network = result.VerifiedNetwork == ChatTaskNetwork.INSTAGRAM ? "Instagram" : "Telegram";
+                var error = await vm.SaveVerifiedChatAsync(chat.Chat, network);
+                if (error is not null)
+                {
+                    ConnectionStatus = $"Не удалось подключить «{chat.Title}»: {error}";
+                    return;
+                }
+                result.MarkConnected();
+                connected++;
+                ConnectionStatus = $"Подключено: {connected} из {candidates.Length}";
+            }
+        }
+        finally
+        {
+            isConnecting = false;
+            RefreshCanConnect();
         }
     }
 
     private void ReturnToSelection_OnClick(object sender, RoutedEventArgs e)
     {
         analysisEpoch++;
+        analysisCompleted = false;
+        ConnectionStatus = string.Empty;
         analysisCancellation?.Cancel();
         IsAnalyzing = false;
         CurrentAnalyzedChatName = string.Empty;
@@ -230,6 +287,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         isReview = false;
         Changed(nameof(SelectionVisibility));
         Changed(nameof(ReviewVisibility));
+        RefreshCanConnect();
     }
 
     private void BackButton_OnClick(object sender, RoutedEventArgs e)
@@ -280,6 +338,9 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
     private string summary = "Ожидает проверки…";
     private string details = "";
     private string statusKind = "Pending";
+    public ChatTaskNetwork? VerifiedNetwork { get; private set; }
+    public bool IsConnected { get; private set; }
+    public bool CanConnect => StatusKind == "Success" && VerifiedNetwork.HasValue && !IsConnected;
     public string StatusKind { get => statusKind; private set { statusKind = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusKind))); } }
     public string Title { get; } = title;
     public string Summary { get => summary; private set { summary = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Summary))); } }
@@ -294,6 +355,8 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
             ChatTaskNetwork.TELEGRAM => "Telegram",
             _ => "Соцсеть не определена"
         };
+        VerifiedNetwork = analysis.Classification == ChatActivityClassification.POSSIBLE_ACTIVITY
+            ? analysis.Network : null;
         StatusKind = analysis.Classification switch
         {
             ChatActivityClassification.POSSIBLE_ACTIVITY => "Success",
@@ -308,8 +371,15 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
         };
         Details = $"Период: {days} дн. · Сообщений: {messageCount} · Заданий: {analysis.TaskCount} · Возможных: {analysis.PossibleTaskCount}";
     }
+    public void MarkConnected()
+    {
+        IsConnected = true;
+        Summary = "Чат подключён";
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanConnect)));
+    }
     public void SetError(string error)
     {
+        VerifiedNetwork = null;
         StatusKind = "Error";
         Summary = "Ошибка проверки";
         Details = error;

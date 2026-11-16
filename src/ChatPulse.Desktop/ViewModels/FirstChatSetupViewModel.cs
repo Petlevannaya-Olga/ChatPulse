@@ -314,6 +314,41 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
         return (analysis, 7, lastWeek.Count);
     }
 
+    /// <summary>Only called with a recognized result; the handler independently verifies it again.</summary>
+    public async Task<string?> SaveVerifiedChatAsync(TelegramChatOption chat, string network,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ChatTitlePolicy.IsEligible(chat.Title) || network is not ("Instagram" or "Telegram"))
+            return "Чат не соответствует требованиям подключения.";
+        if (!networkState.CanUseTelegram || _telegramUserId is not > 0)
+            return "Telegram недоступен. Повторите авторизацию или обновите список чатов.";
+        if (!Chats.Any(candidate => candidate.PeerId == chat.PeerId && candidate.PeerType == chat.PeerType))
+            return "Чат отсутствует в актуальном списке Telegram.";
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var handler = scope.ServiceProvider.GetRequiredService<ICommandHandler<bool, SaveChatCommand>>();
+            var command = new SaveChatCommand(chat.PeerId, chat.PeerType, chat.Title, chat.Title,
+                network, DateOnly.FromDateTime(DateTime.Today), _telegramUserId.Value);
+            var outcome = await handler.Handle(command, cancellationToken);
+            return outcome.IsFailure
+                ? outcome.Error.Errors?.FirstOrDefault()?.Message ?? outcome.Error.Message
+                : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return "Подключение отменено.";
+        }
+        catch (TelegramAuthenticationException exception)
+        {
+            return exception.Message;
+        }
+        catch (Exception)
+        {
+            return "Не удалось сохранить настройки чата.";
+        }
+    }
+
     public async Task SaveAsync(CancellationToken cancellationToken = default)
     {
         if (!CanSave) return;

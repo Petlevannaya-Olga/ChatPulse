@@ -474,13 +474,17 @@
                         <Grid>
                             <Button HorizontalAlignment="Left" Content="←  Назад" Click="BackButton_OnClick"
                                     Style="{StaticResource OutlineBackButton}" />
+                            <TextBlock Text="{Binding ConnectionStatus}" Foreground="#796C98"
+                                       FontSize="12" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="150,0,18,0"
+                                       HorizontalAlignment="Center" />
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button Content="Продолжить  →" Click="ShowReview_OnClick"
                                         Visibility="{Binding SelectionVisibility}"
                                         IsEnabled="{Binding HasSelection}"
                                         Style="{StaticResource ContinueButtonStyle}" />
-                                <Button Content="Подключить чаты" IsEnabled="False"
-                                        ToolTip="Подключение станет доступно после реализации анализа и подтверждения"
+                                <Button Content="Подключить чаты" IsEnabled="{Binding CanConnectChats}"
+                                        Click="ConnectChats_OnClick"
                                         Visibility="{Binding ReviewVisibility}"
                                         Style="{StaticResource ContinueButtonStyle}" />
                             </StackPanel>
