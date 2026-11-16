@@ -106,7 +106,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             .Select(row => (row.Chat.PeerId, row.Chat.PeerType)).ToHashSet();
         updating = true;
         Rows.Clear();
-        foreach (var chat in chats)
+        foreach (var chat in chats.Where(chat => ChatTitlePolicy.IsEligible(chat.Title)))
         {
             Rows.Add(new ChatSelectionRow(chat)
             {
@@ -162,7 +162,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
     private async void ShowReview_OnClick(object sender, RoutedEventArgs e)
     {
-        if (!HasSelection) return;
+        if (!HasSelection || SelectedRows.Any(row => !ChatTitlePolicy.IsEligible(row.Chat.Title))) return;
         analysisCancellation?.Cancel();
         analysisCancellation = new CancellationTokenSource();
         var token = analysisCancellation.Token;

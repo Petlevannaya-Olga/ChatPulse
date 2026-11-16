@@ -138,7 +138,7 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
         private set { _isSaved = value; Changed(); }
     }
     public bool CanRefresh => !IsBusy && networkState.CanUseTelegram;
-    public bool CanSave => networkState.CanUseTelegram && !IsBusy && _telegramUserId is > 0 && SelectedChat is not null
+    public bool CanSave => networkState.CanUseTelegram && !IsBusy && _telegramUserId is > 0 && SelectedChat is { } chat && ChatTitlePolicy.IsEligible(chat.Title)
         && !string.IsNullOrWhiteSpace(DisplayName)
         && SocialNetwork is not null && StartDate.HasValue;
 
@@ -226,7 +226,7 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
             var hasUnownedChats = appSettings.Chats?.Any(chat => chat.TelegramUserId <= 0) == true;
             _telegramUserId = snapshot.TelegramUserId;
             Chats.Clear();
-            foreach (var chat in snapshot.Chats)
+            foreach (var chat in snapshot.Chats.Where(chat => ChatTitlePolicy.IsEligible(chat.Title)))
                 Chats.Add(chat);
 
             var candidate = saved is not null
@@ -286,6 +286,8 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
     public async Task<(ChatActivityAnalysis Analysis, int Days, int Count)> AnalyzeChatAsync(
         TelegramChatOption chat, CancellationToken cancellationToken = default)
     {
+        if (!ChatTitlePolicy.IsEligible(chat.Title))
+            throw new ArgumentException("Название чата должно содержать отдельное слово «пост».", nameof(chat));
         if (!networkState.CanUseTelegram)
             throw new TelegramAuthenticationException("telegram.network_unavailable",
                 "Нет подключения к Telegram. Дождитесь восстановления связи.");

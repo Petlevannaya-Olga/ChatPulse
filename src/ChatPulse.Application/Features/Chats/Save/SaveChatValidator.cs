@@ -1,4 +1,5 @@
 using FluentValidation;
+using ChatPulse.Contracts.Telegram;
 
 namespace ChatPulse.Application.Features.Chats.Save;
 
@@ -14,7 +15,9 @@ public sealed class SaveChatValidator : AbstractValidator<SaveChatCommand>
             .Must(value => value is "Chat" or "Channel")
             .WithMessage("Неизвестный тип Telegram-чата.");
         RuleFor(x => x.TelegramTitle)
-            .NotEmpty().MaximumLength(255);
+            .NotEmpty().MaximumLength(255)
+            .Must(ChatTitlePolicy.IsEligible)
+            .WithMessage("Название чата должно содержать отдельное слово «пост».");
         RuleFor(x => x.DisplayName)
             .NotEmpty().WithMessage("Введите название чата.")
             .MaximumLength(100).WithMessage("Название чата слишком длинное.");
