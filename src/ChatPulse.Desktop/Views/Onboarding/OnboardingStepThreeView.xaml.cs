@@ -17,19 +17,19 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private string searchText = string.Empty;
     private bool isReview;
     private bool updating;
-    private CancellationTokenSource? analysisCancellation;
-    private long analysisEpoch;
+    private readonly ChatReviewRunGeneration analysisGeneration = new();
     private string analysisStatus = "";
     private string currentAnalyzedChatName = string.Empty;
     private bool isAnalyzing;
     private bool analysisCompleted;
+    private bool retryOnConnectionRestored;
+    private FirstChatSetupViewModel? subscribedViewModel;
     private string connectionStatus = string.Empty;
 
     public OnboardingStepThreeView()
     {
         InitializeComponent();
-        // Keep an explicit collection for the XAML ItemsControl: unlike a view
-        // proxy, this is always refreshed after the Telegram snapshot arrives.
+        DataContextChanged += OnDataContextChanged;
     }
 
     public event EventHandler? BackRequested;
@@ -98,20 +98,49 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     public Visibility SelectionVisibility => isReview ? Visibility.Collapsed : Visibility.Visible;
     public Visibility ReviewVisibility => isReview ? Visibility.Visible : Visibility.Collapsed;
 
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (subscribedViewModel is not null)
+            subscribedViewModel.TelegramConnectionRestored -= OnTelegramConnectionRestored;
+        subscribedViewModel = e.NewValue as FirstChatSetupViewModel;
+        if (subscribedViewModel is not null)
+            subscribedViewModel.TelegramConnectionRestored += OnTelegramConnectionRestored;
+    }
+
+    private void OnTelegramConnectionRestored(object? sender, EventArgs e)
+    {
+        if (!IsVisible || !isReview) return;
+        if (IsAnalyzing)
+        {
+            // Reconnection may happen while old Telegram requests are still finishing.
+            retryOnConnectionRestored = true;
+            return;
+        }
+        if (AnalysisRows.Any(row => row.NeedsConnectionRetry))
+            _ = AnalyzeSelectedChatsAsync(retryFailedOnly: true);
+    }
+
     private async void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (!IsVisible)
         {
-            analysisCancellation?.Cancel();
+            // Navigation invalidates the UI result, not the in-flight Telegram RPC.
+            // Cancelling WTelegram's RPC token can detach its client and falsely
+            // report a Telegram connection failure.
+            analysisGeneration.Advance();
             IsAnalyzing = false;
             CurrentAnalyzedChatName = string.Empty;
             analysisCompleted = false;
+            retryOnConnectionRestored = false;
             RefreshCanConnect();
             return;
         }
         if (ViewModel is not { } viewModel) return;
         await viewModel.EnsureLoadedAsync();
+        if (!IsVisible) return;
         SyncRows(viewModel.Chats);
+        if (isReview && !IsAnalyzing && !analysisCompleted && viewModel.IsTelegramAvailable)
+            await AnalyzeSelectedChatsAsync();
     }
 
     private void SyncRows(IEnumerable<TelegramChatOption> chats)
@@ -177,52 +206,69 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private async void ShowReview_OnClick(object sender, RoutedEventArgs e)
     {
         if (!HasSelection || SelectedRows.Any(row => !ChatTitlePolicy.IsEligible(row.Chat.Title))) return;
-        analysisCancellation?.Cancel();
-        analysisCancellation = new CancellationTokenSource();
-        var token = analysisCancellation.Token;
-        var epoch = ++analysisEpoch;
-        var chosen = SelectedRows.ToArray();
-        analysisCompleted = false;
-        ConnectionStatus = string.Empty;
-        AnalysisRows.Clear();
-        RefreshCanConnect();
-        foreach (var item in chosen)
-            AnalysisRows.Add(new ChatAnalysisResultRow(item.Title));
-        UpdateAnalysisCounts();
         isReview = true;
         Changed(nameof(SelectionVisibility));
         Changed(nameof(ReviewVisibility));
+        await AnalyzeSelectedChatsAsync();
+    }
+
+    private async Task AnalyzeSelectedChatsAsync(bool retryFailedOnly = false)
+    {
+        if (!IsVisible || !isReview || IsAnalyzing || !HasSelection) return;
+        if (retryFailedOnly && (AnalysisRows.Count != SelectedRows.Count ||
+                                !AnalysisRows.Any(row => row.NeedsConnectionRetry))) return;
+        retryOnConnectionRestored = false;
+        // A previous RPC may still be finishing. Do not cancel it on navigation:
+        // the operation gate serializes calls, and the generation discards its result.
+        using var analysisRequest = new CancellationTokenSource();
+        var token = analysisRequest.Token;
+        var epoch = analysisGeneration.Advance();
+        var chosen = SelectedRows.ToArray();
+        analysisCompleted = false;
+        ConnectionStatus = string.Empty;
+        if (!retryFailedOnly)
+        {
+            AnalysisRows.Clear();
+            foreach (var item in chosen)
+                AnalysisRows.Add(new ChatAnalysisResultRow(item.Title));
+        }
+        RefreshCanConnect();
+        UpdateAnalysisCounts();
         if (ViewModel is not { } vm) return;
         IsAnalyzing = true;
         try
         {
             for (var i = 0; i < chosen.Length; i++)
             {
+                // Stop after any in-flight request finishes if this view/run was left.
+                // Never cancel the Telegram request just to stop UI processing.
+                if (!analysisGeneration.IsCurrent(epoch) || !IsVisible || !isReview) return;
                 token.ThrowIfCancellationRequested();
+                if (retryFailedOnly && !AnalysisRows[i].NeedsConnectionRetry) continue;
                 CurrentAnalyzedChatName = chosen[i].Title;
                 AnalysisStatus = $"Проверка {i + 1} из {chosen.Length}: {chosen[i].Title}";
                 try
                 {
                     var (result, days, count) = await vm.AnalyzeChatAsync(chosen[i].Chat, token);
-                    if (epoch != analysisEpoch || token.IsCancellationRequested) return;
+                    if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
                     AnalysisRows[i].SetResult(result, days, count);
                     UpdateAnalysisCounts();
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
                 catch (TelegramAuthenticationException exception)
                 {
-                    if (epoch != analysisEpoch || token.IsCancellationRequested) return;
-                    AnalysisRows[i].SetError(exception.Message);
+                    if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
+                    AnalysisRows[i].SetError(exception.Message, needsConnectionRetry: true);
                     UpdateAnalysisCounts();
                 }
                 catch (Exception)
                 {
-                    if (epoch != analysisEpoch || token.IsCancellationRequested) return;
+                    if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
                     AnalysisRows[i].SetError("Не удалось проверить этот чат. Повторите анализ.");
                     UpdateAnalysisCounts();
                 }
             }
-            if (epoch == analysisEpoch && !token.IsCancellationRequested)
+            if (analysisGeneration.IsCurrent(epoch) && !token.IsCancellationRequested)
             {
                 analysisCompleted = true;
                 AnalysisStatus = "Проверка завершена. Результаты предварительные; чаты ещё не подключены.";
@@ -231,12 +277,18 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         catch (OperationCanceledException) when (token.IsCancellationRequested) { /* user left view */ }
         finally
         {
-            // An older cancelled analysis must not hide a newer analysis's progress.
-            if (epoch == analysisEpoch)
+            // An obsolete analysis must not hide a newer analysis's progress.
+            if (analysisGeneration.IsCurrent(epoch))
             {
                 IsAnalyzing = false;
                 CurrentAnalyzedChatName = string.Empty;
                 RefreshCanConnect();
+                if (retryOnConnectionRestored && IsVisible && isReview && vm.IsTelegramAvailable)
+                {
+                    retryOnConnectionRestored = false;
+                    if (AnalysisRows.Any(row => row.NeedsConnectionRetry))
+                        await AnalyzeSelectedChatsAsync(retryFailedOnly: true);
+                }
             }
         }
     }
@@ -263,10 +315,12 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
     private void ReturnToSelection_OnClick(object sender, RoutedEventArgs e)
     {
-        analysisEpoch++;
+        analysisGeneration.Advance();
         analysisCompleted = false;
+        retryOnConnectionRestored = false;
         ConnectionStatus = string.Empty;
-        analysisCancellation?.Cancel();
+        // Do not cancel the in-flight WTelegram RPC when returning to selection.
+        // The epoch check ignores its eventual response safely.
         IsAnalyzing = false;
         CurrentAnalyzedChatName = string.Empty;
         AnalysisStatus = string.Empty;
@@ -324,6 +378,7 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
     private string summary = "Ожидает проверки…";
     private string details = "";
     private string statusKind = "Pending";
+    public bool NeedsConnectionRetry { get; private set; }
     public ChatTaskNetwork? VerifiedNetwork { get; private set; }
     public bool IsConnected { get; private set; }
     public bool CanConnect => StatusKind == "Success" && VerifiedNetwork.HasValue && !IsConnected;
@@ -335,6 +390,7 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
 
     public void SetResult(ChatActivityAnalysis analysis, int days, int messageCount)
     {
+        NeedsConnectionRetry = false;
         var network = analysis.Network switch
         {
             ChatTaskNetwork.INSTAGRAM => "Instagram",
@@ -363,11 +419,23 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
         Summary = "Чат подключён";
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanConnect)));
     }
-    public void SetError(string error)
+    public void SetError(string error, bool needsConnectionRetry = false)
     {
+        NeedsConnectionRetry = needsConnectionRetry;
         VerifiedNetwork = null;
         StatusKind = "Error";
         Summary = "Ошибка проверки";
         Details = error;
     }
+}
+
+/// <summary>
+/// Invalidates UI results on navigation without cancelling an active Telegram RPC.
+/// WTelegram may detach the client if an in-flight request is cancelled.
+/// </summary>
+public sealed class ChatReviewRunGeneration
+{
+    private long current;
+    public long Advance() => ++current;
+    public bool IsCurrent(long generation) => generation == current;
 }

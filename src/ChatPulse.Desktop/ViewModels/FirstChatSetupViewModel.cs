@@ -18,6 +18,7 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
     private readonly IServiceScopeFactory scopeFactory;
     private readonly ISettingsService settings;
     private readonly ITelegramConnectionState networkState;
+    private bool wasTelegramAvailable;
 
     public FirstChatSetupViewModel(IServiceScopeFactory scopeFactory,
         ISettingsService settings, ITelegramConnectionState networkState)
@@ -25,6 +26,7 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
         this.scopeFactory = scopeFactory;
         this.settings = settings;
         this.networkState = networkState;
+        wasTelegramAvailable = networkState.CanUseTelegram;
         networkState.StateChanged += OnNetworkStateChanged;
     }
     private TelegramChatOption? _selectedChat;
@@ -41,15 +43,24 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
     private long? _telegramUserId;
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    public event EventHandler? TelegramConnectionRestored;
+
+    public bool IsTelegramAvailable => networkState.CanUseTelegram;
 
     // No network RPC is started when the global monitor reports an outage.
     // UI updates are dispatched by the monitor on the WPF thread.
     private void OnNetworkStateChanged()
     {
+        var available = networkState.CanUseTelegram;
+        var restored = available && !wasTelegramAvailable;
+        wasTelegramAvailable = available;
         Changed(nameof(CanRefresh));
         Changed(nameof(CanSave));
-        if (networkState.CanUseTelegram && _initialized && Chats.Count == 0)
+        Changed(nameof(IsTelegramAvailable));
+        if (available && _initialized && Chats.Count == 0)
             _initialized = false;
+        if (restored)
+            TelegramConnectionRestored?.Invoke(this, EventArgs.Empty);
     }
 
     public long? CurrentTelegramUserId => _telegramUserId;
