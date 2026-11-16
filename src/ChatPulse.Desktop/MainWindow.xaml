@@ -31,6 +31,9 @@
                                            BackRequested="ThirdStepScreen_OnBackRequested"
                                            Visibility="Collapsed" />
 
+        <onboarding:OnboardingStepFourView x:Name="FourthStepScreen"
+                                          Visibility="Collapsed" />
+
         <!-- Единый индикатор связи. Не модальный: пользователь сохраняет доступ к интерфейсу. -->
         <Border x:Name="ConnectionNotice" Panel.ZIndex="8"
                 MaxWidth="490" HorizontalAlignment="Right" VerticalAlignment="Top"

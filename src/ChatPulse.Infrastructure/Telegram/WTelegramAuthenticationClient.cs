@@ -507,7 +507,7 @@ public sealed class WTelegramAuthenticationClient(
         TelegramChatOption chat, int days, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(chat);
-        if (days is < 1 or > 7) throw new ArgumentOutOfRangeException(nameof(days));
+        if (days is < 1 or > 30) throw new ArgumentOutOfRangeException(nameof(days));
 
         await _gate.WaitAsync(cancellationToken);
         try
@@ -529,14 +529,15 @@ public sealed class WTelegramAuthenticationClient(
             var cutoff = DateTime.UtcNow.AddDays(-days);
             var collected = new List<TelegramChatMessage>();
             var offsetId = 0;
-            const int MAX_PAGES = 5;
+            const int MAX_PAGES = 500;
             const int PAGE_LIMIT = 100;
+            var historyComplete = false;
             for (var page = 0; page < MAX_PAGES; page++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var history = await AwaitRemoteAsync(
                     _client.Messages_GetHistory(peer, offsetId, limit: PAGE_LIMIT), cancellationToken);
-                if (history.Messages.Length == 0) break;
+                if (history.Messages.Length == 0) { historyComplete = true; break; }
                 var reachedCutoff = false;
                 foreach (var item in history.Messages)
                 {
@@ -549,11 +550,16 @@ public sealed class WTelegramAuthenticationClient(
                     if (!string.IsNullOrWhiteSpace(message.message))
                         collected.Add(new TelegramChatMessage(message.ID, message.message));
                 }
-                if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) break;
+                if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) { historyComplete = true; break; }
                 var nextOffset = history.Messages[^1].ID;
-                if (nextOffset <= 0 || nextOffset == offsetId) break;
+                if (nextOffset <= 0 || nextOffset == offsetId)
+                    throw new TelegramAuthenticationException("telegram.history_incomplete",
+                        "Telegram вернул неполную историю. Повторите загрузку.");
                 offsetId = nextOffset;
             }
+            if (!historyComplete)
+                throw new TelegramAuthenticationException("telegram.history_incomplete",
+                    "Достигнут предел загрузки истории. Чат не считается синхронизированным.");
             return collected;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

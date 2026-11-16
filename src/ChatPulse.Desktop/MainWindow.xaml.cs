@@ -14,6 +14,7 @@ namespace ChatPulse.Desktop;
 public partial class MainWindow : Window
 {
     private readonly ISettingsService _settings;
+    private readonly ChatSynchronizationService _synchronization;
     private readonly TelegramSetupViewModel _telegramSetup;
     private readonly FirstChatSetupViewModel _firstChatSetup;
     private readonly ILogger<MainWindow> _logger;
@@ -29,12 +30,16 @@ public partial class MainWindow : Window
         TelegramSetupViewModel telegramSetup,
         FirstChatSetupViewModel firstChatSetup,
         ISettingsService settings,
+        ChatSynchronizationService synchronization,
         ILogger<MainWindow> logger,
         ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents,
         TelegramConnectionMonitor connectionMonitor)
     {
         InitializeComponent();
         _settings = settings;
+        _synchronization = synchronization;
+        FourthStepScreen.Initialize(_settings, _synchronization, firstChatSetup);
+        FourthStepScreen.BackRequested += async (_, _) => await NavigateAsync(OnboardingStep.FirstChat);
         _telegramSetup = telegramSetup;
         _firstChatSetup = firstChatSetup;
         _logger = logger;
@@ -53,6 +58,20 @@ public partial class MainWindow : Window
         };
         SecondStepScreen.DataContext = telegramSetup;
         ThirdStepScreen.DataContext = _firstChatSetup;
+        ThirdStepScreen.SynchronizationRequested += async candidates =>
+        {
+            try
+            {
+                await _settings.SavePendingChatsAsync(candidates[0].TelegramUserId, candidates);
+                await NavigateAsync(OnboardingStep.Synchronization);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(exception, "Не удалось сохранить выбранные чаты перед синхронизацией");
+                MessageBox.Show(this, "Не удалось сохранить выбор чатов. Повторите попытку.",
+                    "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        };
         SecondStepScreen.TelegramPageRequested += SecondStepScreen_OnTelegramPageRequested;
     }
 
@@ -88,7 +107,7 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(new Action(async () =>
         {
             // Во время начальной инициализации навигация ещё не нужна.
-            if (!_hasInitialized || ThirdStepScreen.Visibility != Visibility.Visible) return;
+            if (!_hasInitialized || (ThirdStepScreen.Visibility != Visibility.Visible && FourthStepScreen.Visibility != Visibility.Visible)) return;
             _firstChatSetup.Invalidate();
             _telegramPage = TelegramOnboardingPage.Phone;
             await NavigateAsync(OnboardingStep.Telegram);
@@ -136,7 +155,7 @@ public partial class MainWindow : Window
         }
 
         // Некорректные/старые настройки не должны пропускать обязательное имя.
-        if (step is OnboardingStep.Telegram or OnboardingStep.FirstChat &&
+        if (step is OnboardingStep.Telegram or OnboardingStep.FirstChat or OnboardingStep.Synchronization &&
             string.IsNullOrWhiteSpace(settings.UserName))
         {
             step = OnboardingStep.Profile;
@@ -156,7 +175,7 @@ public partial class MainWindow : Window
                 await _settings.SaveOnboardingStepAsync(step, cancellationToken);
             }
         }
-        else if (step == OnboardingStep.FirstChat)
+        else if (step is OnboardingStep.FirstChat or OnboardingStep.Synchronization)
         {
             // Пока авторизация не проверена, не пропускаем обязательный шаг.
             step = OnboardingStep.Telegram;
@@ -185,6 +204,8 @@ public partial class MainWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         ThirdStepScreen.Visibility = step == OnboardingStep.FirstChat
             ? Visibility.Visible : Visibility.Collapsed;
+        FourthStepScreen.Visibility = step == OnboardingStep.Synchronization
+            ? Visibility.Visible : Visibility.Collapsed;
 
         if (step == OnboardingStep.Telegram)
             SecondStepScreen.ShowTelegramPage(_telegramPage);
@@ -194,6 +215,7 @@ public partial class MainWindow : Window
             OnboardingStep.Profile => "ChatPulse — Онбординг: шаг 1",
             OnboardingStep.Telegram => "ChatPulse — Онбординг: шаг 2",
             OnboardingStep.FirstChat => "ChatPulse — Онбординг: шаг 3",
+            OnboardingStep.Synchronization => "ChatPulse — Онбординг: шаг 4",
             _ => "ChatPulse — Пульс ваших чатов",
         };
     }

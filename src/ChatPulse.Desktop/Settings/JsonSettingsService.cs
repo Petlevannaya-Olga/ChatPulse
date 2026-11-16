@@ -1,4 +1,5 @@
 using System.IO;
+using ChatPulse.Contracts.Telegram;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -70,7 +71,63 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         => UpdateAsync(settings => settings.CurrentTelegramPage = page, cancellationToken);
 
     public Task CompleteOnboardingAsync(CancellationToken cancellationToken = default)
-        => UpdateAsync(settings => settings.IsOnboardingCompleted = true, cancellationToken);
+        => UpdateAsync(settings =>
+        {
+            if (settings.PendingChats?.Count > 0 || settings.Chats.Count == 0 ||
+                settings.Chats.Any(chat => chat.SynchronizationState != ChatSynchronizationState.COMPLETED))
+                throw new InvalidOperationException(
+                    "Онбординг нельзя завершить до синхронизации всех чатов.");
+            settings.IsOnboardingCompleted = true;
+        }, cancellationToken);
+
+    public Task SavePendingChatsAsync(long owner, IReadOnlyList<PendingChatConnection> chats,
+        CancellationToken cancellationToken = default)
+    {
+        if (owner <= 0 || chats.Count == 0 || chats.Any(chat =>
+                chat.TelegramUserId != owner || chat.PeerId <= 0 ||
+                string.IsNullOrWhiteSpace(chat.PeerType) || !ChatTitlePolicy.IsEligible(chat.TelegramTitle) ||
+                chat.SocialNetwork is not ("Instagram" or "Telegram") || chat.HistoryDays is < 1 or > 30))
+            throw new ArgumentException("Недопустимый список чатов для подключения.", nameof(chats));
+        if (chats.Select(chat => (chat.PeerId, chat.PeerType)).Distinct().Count() != chats.Count)
+            throw new ArgumentException("Повторяющиеся чаты.", nameof(chats));
+        return UpdateAsync(settings =>
+        {
+            settings.PendingChats ??= [];
+            var previous = settings.PendingChats.Where(chat => chat.TelegramUserId == owner)
+                .ToDictionary(chat => (chat.PeerId, chat.PeerType));
+            settings.PendingChats.RemoveAll(chat => chat.TelegramUserId == owner);
+            foreach (var chat in chats)
+            {
+                var pending = new PendingChatConnection
+                {
+                    TelegramUserId = owner, PeerId = chat.PeerId, PeerType = chat.PeerType,
+                    TelegramTitle = chat.TelegramTitle, SocialNetwork = chat.SocialNetwork,
+                    HistoryDays = previous.TryGetValue((chat.PeerId, chat.PeerType), out var prior)
+                        ? prior.HistoryDays : chat.HistoryDays
+                };
+                if (!settings.Chats.Any(saved => saved.TelegramUserId == owner &&
+                    saved.PeerId == pending.PeerId && saved.PeerType == pending.PeerType))
+                    settings.PendingChats.Add(pending);
+            }
+        }, cancellationToken);
+    }
+
+    public Task UpdatePendingChatPeriodAsync(long owner, long peerId, string peerType, int days,
+        CancellationToken cancellationToken = default)
+    {
+        if (days is < 1 or > 30) throw new ArgumentOutOfRangeException(nameof(days));
+        return UpdateAsync(settings =>
+        {
+            var chat = settings.PendingChats.Single(chat => chat.TelegramUserId == owner &&
+                chat.PeerId == peerId && chat.PeerType == peerType);
+            chat.HistoryDays = days;
+        }, cancellationToken);
+    }
+
+    public Task RemovePendingChatAsync(long owner, long peerId, string peerType,
+        CancellationToken cancellationToken = default)
+        => UpdateAsync(settings => settings.PendingChats.RemoveAll(chat => chat.TelegramUserId == owner &&
+            chat.PeerId == peerId && chat.PeerType == peerType), cancellationToken);
 
     public Task SaveChatAsync(ConfiguredChat chat, CancellationToken cancellationToken = default)
     {
@@ -85,8 +142,51 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             if (index < 0)
                 settings.Chats.Add(chat);
             else
+            {
+                var previous = settings.Chats[index];
+                chat.HistoryDays = previous.HistoryDays;
+                chat.SynchronizationState = previous.SynchronizationState;
+                chat.ImportedMessageCount = previous.ImportedMessageCount;
+                chat.SynchronizationError = previous.SynchronizationError;
+                chat.LastProcessedMessageId = previous.LastProcessedMessageId;
                 settings.Chats[index] = chat;
+            }
         }, cancellationToken);
+    }
+
+    public Task UpdateChatPeriodAsync(long owner, long peerId, string peerType, int days,
+        CancellationToken cancellationToken = default)
+    {
+        if (days is < 1 or > 30) throw new ArgumentOutOfRangeException(nameof(days));
+        return UpdateAsync(settings =>
+        {
+            var chat = FindChat(settings, owner, peerId, peerType);
+            if (chat.SynchronizationState == ChatSynchronizationState.COMPLETED)
+                throw new InvalidOperationException("Нельзя изменить период завершённой синхронизации.");
+            chat.HistoryDays = days;
+        }, cancellationToken);
+    }
+
+    public Task UpdateChatSyncAsync(long owner, long peerId, string peerType,
+        ChatSynchronizationState state, int messageCount, long? lastMessageId, string? error,
+        CancellationToken cancellationToken = default)
+    {
+        if (messageCount < 0) throw new ArgumentOutOfRangeException(nameof(messageCount));
+        return UpdateAsync(settings =>
+        {
+            var chat = FindChat(settings, owner, peerId, peerType);
+            chat.SynchronizationState = state;
+            chat.ImportedMessageCount = messageCount;
+            chat.LastProcessedMessageId = lastMessageId;
+            chat.SynchronizationError = error;
+        }, cancellationToken);
+    }
+
+    private static ConfiguredChat FindChat(AppSettings settings, long owner, long peerId, string peerType)
+    {
+        if (owner <= 0) throw new ArgumentOutOfRangeException(nameof(owner));
+        return settings.Chats.Single(chat => chat.TelegramUserId == owner &&
+            chat.PeerId == peerId && chat.PeerType == peerType);
     }
 
     private async Task UpdateAsync(Action<AppSettings> update, CancellationToken cancellationToken)

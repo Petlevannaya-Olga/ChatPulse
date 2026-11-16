@@ -52,6 +52,8 @@ public sealed class FirstChatSetupViewModel : INotifyPropertyChanged
             _initialized = false;
     }
 
+    public long? CurrentTelegramUserId => _telegramUserId;
+
     public ObservableCollection<TelegramChatOption> Chats { get; } = [];
     public IReadOnlyList<string> SocialNetworks { get; } = ["Instagram", "Telegram", "TikTok"];
 

@@ -50,6 +50,11 @@ public partial class App : System.Windows.Application
                 provider.GetRequiredService<TelegramConnectionMonitor>());
             builder.Services.AddSingleton<TelegramSetupViewModel>();
             builder.Services.AddSingleton<FirstChatSetupViewModel>();
+            builder.Services.AddSingleton<ChatSynchronizationService>(provider =>
+                new ChatSynchronizationService(
+                    provider.GetRequiredService<ISettingsService>(),
+                    provider.GetRequiredService<ITelegramAuthenticationClient>(),
+                    Path.Combine(dataDirectory, "chatpulse.db")));
             builder.Services.AddSingleton<MainWindow>();
 
             _host = builder.Build();

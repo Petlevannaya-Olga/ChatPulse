@@ -483,7 +483,7 @@
                                         Visibility="{Binding SelectionVisibility}"
                                         IsEnabled="{Binding HasSelection}"
                                         Style="{StaticResource ContinueButtonStyle}" />
-                                <Button Content="Подключить чаты" IsEnabled="{Binding CanConnectChats}"
+                                <Button Content="Продолжить  →" IsEnabled="{Binding CanConnectChats}"
                                         Click="ConnectChats_OnClick"
                                         Visibility="{Binding ReviewVisibility}"
                                         Style="{StaticResource ContinueButtonStyle}" />
@@ -492,7 +492,7 @@
                     </Border>
                 </Grid>
             </Border>
-            <TextBlock Grid.Row="1" Text="Шаг 3 из 3" Foreground="#F6F0FF"
+            <TextBlock Grid.Row="1" Text="Шаг 3 из 4" Foreground="#F6F0FF"
                        HorizontalAlignment="Center" FontSize="15" Margin="0,10,0,0" />
         </Grid>
     </Grid>

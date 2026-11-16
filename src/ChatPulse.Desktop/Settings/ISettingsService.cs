@@ -17,4 +17,20 @@ public interface ISettingsService
     Task CompleteOnboardingAsync(CancellationToken cancellationToken = default);
 
     Task SaveChatAsync(ConfiguredChat chat, CancellationToken cancellationToken = default);
+
+    Task SavePendingChatsAsync(long owner, IReadOnlyList<PendingChatConnection> chats,
+        CancellationToken cancellationToken = default);
+
+    Task UpdatePendingChatPeriodAsync(long owner, long peerId, string peerType, int days,
+        CancellationToken cancellationToken = default);
+
+    Task RemovePendingChatAsync(long owner, long peerId, string peerType,
+        CancellationToken cancellationToken = default);
+
+    Task UpdateChatPeriodAsync(long owner, long peerId, string peerType, int days,
+        CancellationToken cancellationToken = default);
+
+    Task UpdateChatSyncAsync(long owner, long peerId, string peerType,
+        ChatSynchronizationState state, int messageCount, long? lastMessageId, string? error,
+        CancellationToken cancellationToken = default);
 }

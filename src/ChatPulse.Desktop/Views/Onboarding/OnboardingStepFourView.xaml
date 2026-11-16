@@ -1,0 +1,251 @@
+<UserControl x:Class="ChatPulse.Desktop.Views.Onboarding.OnboardingStepFourView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             IsVisibleChanged="OnVisibilityChanged" FontFamily="Segoe UI">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolVisibility" />
+        <LinearGradientBrush x:Key="BackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#171038" Offset="0" />
+            <GradientStop Color="#26144E" Offset="0.48" />
+            <GradientStop Color="#401365" Offset="1" />
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="PrimaryBrush" StartPoint="0,0" EndPoint="1,0.1">
+            <GradientStop Offset="0" Color="#7545F9" />
+            <GradientStop Offset="0.53" Color="#BA35E8" />
+            <GradientStop Offset="1" Color="#FB239D" />
+        </LinearGradientBrush>
+        <Style x:Key="OutlineBackButton" TargetType="Button">
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="Foreground" Value="#24154C" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F4EFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ContinueButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="48" />
+            <Setter Property="MinWidth" Value="176" />
+            <Setter Property="Padding" Value="22,0" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9"
+                                Background="{StaticResource PrimaryBrush}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.75" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Background" Value="#B9B0CF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="RetryButtonStyle" TargetType="Button">
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="Foreground" Value="#7840C5" />
+            <Setter Property="Background" Value="#F5EFFF" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="#E1CFF9" BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EDE1FF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#E2CEFC" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+    <Grid Background="{StaticResource BackgroundBrush}" ClipToBounds="True">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Viewbox Grid.RowSpan="3" Stretch="Fill" IsHitTestVisible="False">
+            <Canvas Width="1600" Height="900">
+                <Ellipse Width="690" Height="690" Canvas.Left="1120" Canvas.Top="-220">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Offset="0" Color="#48AE61F3" />
+                            <GradientStop Offset="1" Color="#00AE61F3" />
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                </Ellipse>
+                <Ellipse Width="620" Height="620" Canvas.Left="-280" Canvas.Top="510">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Offset="0" Color="#366C46E7" />
+                            <GradientStop Offset="1" Color="#006C46E7" />
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                </Ellipse>
+            </Canvas>
+        </Viewbox>
+        <Grid Grid.Row="0" Width="350" Height="74" Margin="28,6,28,0" HorizontalAlignment="Left">
+            <Image Source="pack://application:,,,/Resources/ChatPulseLogo.png"
+                   RenderOptions.BitmapScalingMode="HighQuality" Width="64" Height="64"
+                   HorizontalAlignment="Left" VerticalAlignment="Center" Stretch="Uniform" />
+            <StackPanel Margin="76,0,0,0" VerticalAlignment="Center">
+                <TextBlock FontSize="28" FontWeight="SemiBold">
+                    <Run Text="Chat" Foreground="White" /><Run Text="Pulse" Foreground="#F251D2" />
+                </TextBlock>
+                <TextBlock Text="Пульс ваших чатов" Foreground="#E4DEFF" FontSize="13" />
+            </StackPanel>
+        </Grid>
+        <!-- Полноценный четвёртый шаг в том же индикаторе онбординга. -->
+        <Grid Grid.Row="1" MaxWidth="770" Height="64" HorizontalAlignment="Stretch" Margin="24,0,24,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="44" />
+                <RowDefinition Height="20" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="112" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="112" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="112" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="142" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Width="40" Height="40" CornerRadius="20" Background="#7647C4" HorizontalAlignment="Center">
+                <TextBlock Text="✓" Foreground="White" FontSize="19" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <Border Grid.Column="1" Height="3" CornerRadius="2" Background="#A66CE9" VerticalAlignment="Center" Margin="4,0" />
+            <Border Grid.Column="2" Width="40" Height="40" CornerRadius="20" Background="#7647C4" HorizontalAlignment="Center">
+                <TextBlock Text="✓" Foreground="White" FontSize="19" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <Border Grid.Column="3" Height="3" CornerRadius="2" Background="#A66CE9" VerticalAlignment="Center" Margin="4,0" />
+            <Border Grid.Column="4" Width="40" Height="40" CornerRadius="20" Background="#7647C4" HorizontalAlignment="Center">
+                <TextBlock Text="✓" Foreground="White" FontSize="19" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <Border Grid.Column="5" Height="3" CornerRadius="2" Background="#A66CE9" VerticalAlignment="Center" Margin="4,0" />
+            <Border Grid.Column="6" Width="40" Height="40" CornerRadius="20" Background="{StaticResource PrimaryBrush}" HorizontalAlignment="Center">
+                <TextBlock Text="4" Foreground="White" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="О себе" Foreground="White" FontWeight="SemiBold" FontSize="14" TextAlignment="Center" />
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="Telegram" Foreground="White" FontWeight="SemiBold" FontSize="14" TextAlignment="Center" />
+            <TextBlock Grid.Row="1" Grid.Column="4" Text="Чаты" Foreground="White" FontWeight="SemiBold" FontSize="14" TextAlignment="Center" />
+            <TextBlock Grid.Row="1" Grid.Column="6" Text="Синхронизация" Foreground="White" FontWeight="SemiBold" FontSize="14" TextAlignment="Center" />
+        </Grid>
+        <Grid Grid.Row="2" Margin="42,14,42,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" MaxWidth="900" Background="White" CornerRadius="22" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Padding="26,18">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <StackPanel HorizontalAlignment="Center" Margin="0,0,0,20">
+                    <Grid Width="72" Height="72" HorizontalAlignment="Center">
+                        <Ellipse Fill="#F5EEFF" Stroke="#A74BF0" StrokeThickness="2.5" />
+                        <Viewbox Width="39" Height="39" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Canvas Width="48" Height="48">
+                                <Path Data="M 12,8 H 35 A 7,7 0 0 1 42,15 V 27 A 7,7 0 0 1 35,34 H 29 L 24,40 V 34 H 12 A 7,7 0 0 1 5,27 V 15 A 7,7 0 0 1 12,8 Z"
+                                      Fill="Transparent" Stroke="#8241D8" StrokeThickness="3.3" StrokeLineJoin="Round" />
+                                <Path Data="M 14,19 H 33 M 14,25 H 27" Stroke="#8241D8" StrokeThickness="3.3"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            </Canvas>
+                        </Viewbox>
+                    </Grid>
+                    <TextBlock Text="Синхронизация чатов" FontWeight="Bold" FontSize="28" Foreground="#24154C"
+                               TextAlignment="Center" Margin="0,9,0,0" />
+                    <TextBlock Text="Выберите период загрузки для каждого чата (от 1 до 30 дней)."
+                               Foreground="#796C98" Margin="0,5,0,0" FontSize="14" TextAlignment="Center" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Margin="0,0,0,12">
+                    <TextBlock Text="Текущий этап" Foreground="#796C98" FontSize="12" />
+                    <TextBlock Text="{Binding CurrentActivity}" FontWeight="SemiBold" Foreground="#633AA3" Margin="0,5,0,6"/>
+                    <ProgressBar Height="4" Foreground="#9042ED" Background="#EEE5FA" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolVisibility}}"/>
+                </StackPanel>
+                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Chats}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="12" BorderBrush="#E3D8F5" BorderThickness="1"
+                                        Background="#FBF9FF" Padding="17" Margin="0,0,12,14">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" Foreground="#24154C" />
+                                            <TextBlock Text="{Binding Status}" FontSize="13" Foreground="#796C98" Margin="0,7,0,0" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding Details}" FontSize="12" Foreground="#796C98" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="Период, дней" FontSize="12" Foreground="#796C98" HorizontalAlignment="Center"/>
+                                            <ComboBox ItemsSource="{Binding AvailableDays}" SelectedItem="{Binding Days, Mode=TwoWay}"
+                                                      IsEnabled="{Binding CanEditPeriod}" Margin="5,5,5,0"/>
+                                            <Button Content="Повторить" Click="RetryButton_OnClick" Tag="{Binding}"
+                                                    IsEnabled="{Binding CanRetry}" Visibility="{Binding CanRetry, Converter={StaticResource BoolVisibility}}" Style="{StaticResource RetryButtonStyle}" Margin="0,8,0,0"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+                <Border Grid.Row="3" BorderBrush="#E6DFF3" BorderThickness="0,1,0,0" Padding="10,15,10,0" Margin="0,12,0,0">
+                    <Grid>
+                        <Button Content="←  Назад" HorizontalAlignment="Left" Click="BackButton_OnClick"
+                                Style="{StaticResource OutlineBackButton}" />
+                        <Button Content="Подключить и синхронизировать" HorizontalAlignment="Right"
+                                Style="{StaticResource ContinueButtonStyle}" Click="StartButton_OnClick"
+                                IsEnabled="{Binding CanStart}" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+            <TextBlock Grid.Row="1" Text="Шаг 4 из 4" Foreground="#F6F0FF"
+                       HorizontalAlignment="Center" FontSize="15" Margin="0,10,0,0" />
+        </Grid>
+    </Grid>
+</UserControl>

@@ -6,11 +6,12 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using ChatPulse.Contracts.Telegram;
+using ChatPulse.Desktop.Settings;
 using ChatPulse.Desktop.ViewModels;
 
 namespace ChatPulse.Desktop.Views.Onboarding;
 
-/// <summary>Первый UI-этап массового подключения. Анализ и сохранение ещё не реализованы.</summary>
+/// <summary>Выбор и проверка чатов. На этом экране подключение не выполняется.</summary>
 public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChanged
 {
     private string searchText = string.Empty;
@@ -21,7 +22,6 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private string analysisStatus = "";
     private string currentAnalyzedChatName = string.Empty;
     private bool isAnalyzing;
-    private bool isConnecting;
     private bool analysisCompleted;
     private string connectionStatus = string.Empty;
 
@@ -33,6 +33,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     }
 
     public event EventHandler? BackRequested;
+    public event Action<IReadOnlyList<PendingChatConnection>>? SynchronizationRequested;
     public event PropertyChangedEventHandler? PropertyChanged;
     public ObservableCollection<ChatSelectionRow> Rows { get; } = [];
     public ObservableCollection<ChatSelectionRow> SelectedRows { get; } = [];
@@ -63,8 +64,8 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         get => connectionStatus;
         private set { connectionStatus = value; Changed(); }
     }
-    public bool CanConnectChats => isReview && analysisCompleted && !IsAnalyzing && !isConnecting &&
-                                   AnalysisRows.Any(row => row.CanConnect && !row.IsConnected);
+    public bool CanConnectChats => isReview && analysisCompleted && !IsAnalyzing &&
+                                   AnalysisRows.Any(row => row.CanConnect);
     private void RefreshCanConnect() => Changed(nameof(CanConnectChats));
     public int RecognizedCount => AnalysisRows.Count(row => row.StatusKind == "Success");
     public int AttentionCount => AnalysisRows.Count(row => row.StatusKind == "Warning");
@@ -240,39 +241,24 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         }
     }
 
-    private async void ConnectChats_OnClick(object sender, RoutedEventArgs e)
+    private void ConnectChats_OnClick(object sender, RoutedEventArgs e)
     {
-        if (!CanConnectChats || ViewModel is not { } vm) return;
+        if (!CanConnectChats || ViewModel is not { CurrentTelegramUserId: > 0 } vm) return;
         var candidates = SelectedRows.Zip(AnalysisRows)
-            .Where(pair => pair.Second.CanConnect && pair.Second.VerifiedNetwork.HasValue)
-            .ToArray();
-        if (candidates.Length == 0) return;
-
-        isConnecting = true;
-        RefreshCanConnect();
-        var connected = 0;
-        try
-        {
-            foreach (var (chat, result) in candidates)
+            .Where(pair => pair.Second.CanConnect && pair.Second.VerifiedNetwork.HasValue &&
+                           ChatTitlePolicy.IsEligible(pair.First.Chat.Title))
+            .Select(pair => new PendingChatConnection
             {
-                // The application handler re-checks Telegram and evidence before writing settings.
-                var network = result.VerifiedNetwork == ChatTaskNetwork.INSTAGRAM ? "Instagram" : "Telegram";
-                var error = await vm.SaveVerifiedChatAsync(chat.Chat, network);
-                if (error is not null)
-                {
-                    ConnectionStatus = $"Не удалось подключить «{chat.Title}»: {error}";
-                    return;
-                }
-                result.MarkConnected();
-                connected++;
-                ConnectionStatus = $"Подключено: {connected} из {candidates.Length}";
-            }
-        }
-        finally
-        {
-            isConnecting = false;
-            RefreshCanConnect();
-        }
+                TelegramUserId = vm.CurrentTelegramUserId!.Value,
+                PeerId = pair.First.Chat.PeerId,
+                PeerType = pair.First.Chat.PeerType,
+                TelegramTitle = pair.First.Chat.Title,
+                SocialNetwork = pair.Second.VerifiedNetwork == ChatTaskNetwork.INSTAGRAM
+                    ? "Instagram" : "Telegram",
+                HistoryDays = 7
+            }).ToArray();
+        if (candidates.Length > 0)
+            SynchronizationRequested?.Invoke(candidates);
     }
 
     private void ReturnToSelection_OnClick(object sender, RoutedEventArgs e)
@@ -365,7 +351,7 @@ public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
         };
         Summary = analysis.Classification switch
         {
-            ChatActivityClassification.POSSIBLE_ACTIVITY => $"Возможный чат активности · {network}",
+            ChatActivityClassification.POSSIBLE_ACTIVITY => $"Проверка пройдена · {network}",
             ChatActivityClassification.CONFLICTING_NETWORKS => "Противоречивые признаки соцсетей",
             _ => "Недостаточно данных для определения"
         };
