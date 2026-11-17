@@ -183,7 +183,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                          TaskFilter.Skipped => task.IsSkipped,
                          TaskFilter.Completed => !task.IsSkipped && task.IsCompleted,
                          _ => !task.IsSkipped && !task.IsCompleted
-                     }))
+                     }).OrderByDescending(task => task.MessageId))
                 Tasks.Add(new WorkspaceTaskCard(task));
         }
         TaskSummary = SelectedChat is null

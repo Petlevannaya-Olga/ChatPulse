@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using ChatPulse.Contracts.Telegram;
 
@@ -23,23 +23,79 @@ public sealed record WorkspaceTaskPresentation(
         var matches = INSTAGRAM_POST_URL.Matches(text).Cast<Match>()
             .Where(match => match.Success)
             .ToArray();
-        if (matches.Length == 0)
-            return new WorkspaceTaskPresentation(text, customEmojiJson, string.Empty, string.Empty);
-
         var reelUrl = matches.FirstOrDefault(match =>
             string.Equals(match.Groups["kind"].Value, "reel", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
         var feedPostUrl = matches.FirstOrDefault(match =>
             string.Equals(match.Groups["kind"].Value, "p", StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
 
-        // Remove only recognized Instagram post links, retaining the rest of the text.
-        var visible = new System.Text.StringBuilder(text.Length);
-        var position = 0;
+        // Build the displayed text without changing the original Telegram message.
+        // Every kept UTF-16 code unit remembers its original offset so that custom
+        // emoji entities can be remapped after URL removal and whitespace cleanup.
+        var removed = new bool[text.Length];
         foreach (var match in matches)
+            for (var index = match.Index; index < match.Index + match.Length; index++)
+                removed[index] = true;
+
+        var visibleCharacters = new List<(char Character, int OriginalOffset)>(text.Length);
+        for (var index = 0; index < text.Length; index++)
         {
-            visible.Append(text, position, match.Index - position);
-            position = match.Index + match.Length;
+            if (removed[index])
+                continue;
+
+            // Normalize line endings for presentation without touching SQLite.
+            if (text[index] == '\r')
+            {
+                if (index + 1 < text.Length && text[index + 1] == '\n')
+                    continue;
+                visibleCharacters.Add(('\n', index));
+            }
+            else
+                visibleCharacters.Add((text[index], index));
         }
-        visible.Append(text, position, text.Length - position);
+
+        var lines = new List<List<(char Character, int OriginalOffset)>>();
+        var line = new List<(char Character, int OriginalOffset)>();
+        foreach (var character in visibleCharacters)
+        {
+            if (character.Character == '\n')
+            {
+                lines.Add(line);
+                line = new List<(char Character, int OriginalOffset)>();
+            }
+            else
+                line.Add(character);
+        }
+        lines.Add(line);
+
+        var builder = new System.Text.StringBuilder(text.Length);
+        var offsetMap = Enumerable.Repeat(-1, text.Length).ToArray();
+        var hasContent = false;
+        var blankLinesSinceContent = 0;
+        foreach (var currentLine in lines)
+        {
+            if (currentLine.All(character => char.IsWhiteSpace(character.Character)))
+            {
+                if (hasContent)
+                    blankLinesSinceContent++;
+                continue;
+            }
+
+            if (hasContent)
+            {
+                builder.Append('\n');
+                if (blankLinesSinceContent > 0)
+                    builder.Append('\n');
+            }
+
+            // Keep meaningful indentation and spacing within a content line.
+            foreach (var character in currentLine)
+            {
+                offsetMap[character.OriginalOffset] = builder.Length;
+                builder.Append(character.Character);
+            }
+            hasContent = true;
+            blankLinesSinceContent = 0;
+        }
 
         TelegramCustomEmoji[] entities;
         try { entities = JsonSerializer.Deserialize<TelegramCustomEmoji[]>(customEmojiJson) ?? []; }
@@ -52,16 +108,26 @@ public sealed record WorkspaceTaskPresentation(
             {
                 if (entity.Offset < 0 || entity.Length <= 0 || entity.Offset > text.Length - entity.Length)
                     continue;
-                // An emoji overlapping a removed URL cannot be remapped safely.
-                if (matches.Any(match => entity.Offset < match.Index + match.Length &&
-                                         entity.Offset + entity.Length > match.Index))
+
+                var newOffset = offsetMap[entity.Offset];
+                if (newOffset < 0)
                     continue;
-                var removedBefore = matches.Where(match => match.Index + match.Length <= entity.Offset)
-                    .Sum(match => match.Length);
-                adjusted.Add(entity with { Offset = entity.Offset - removedBefore });
+
+                // All UTF-16 code units belonging to an emoji must survive together.
+                var intact = true;
+                for (var position = 1; position < entity.Length; position++)
+                {
+                    if (offsetMap[entity.Offset + position] != newOffset + position)
+                    {
+                        intact = false;
+                        break;
+                    }
+                }
+                if (intact)
+                    adjusted.Add(entity with { Offset = newOffset });
             }
             customEmojiJson = JsonSerializer.Serialize(adjusted);
         }
-        return new WorkspaceTaskPresentation(visible.ToString(), customEmojiJson, reelUrl, feedPostUrl);
+        return new WorkspaceTaskPresentation(builder.ToString(), customEmojiJson, reelUrl, feedPostUrl);
     }
 }
