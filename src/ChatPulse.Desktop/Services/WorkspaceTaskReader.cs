@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Application.Features.Chats.Analyze;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
@@ -37,6 +37,9 @@ public sealed class WorkspaceTaskReader(string databasePath)
         var emojiTable = connection.CreateCommand();
         emojiTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageCustomEmoji'";
         var hasEmojis = (long)(await emojiTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        var datesTable = connection.CreateCommand();
+        datesTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageDates'";
+        var hasDates = (long)(await datesTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
         var command = connection.CreateCommand();
         var ownReactionColumn = hasReactionStates ? "reaction.HasOwnReaction" : "NULL";
         var ownReactionJoin = hasReactionStates ? """
@@ -59,12 +62,20 @@ public sealed class WorkspaceTaskReader(string databasePath)
              AND emoji.PeerType = message.PeerType
              AND emoji.PeerId = message.PeerId AND emoji.MessageId = message.MessageId
             """ : string.Empty;
+        var timestampColumn = hasDates ? "dates.SentAtUnixSeconds" : "NULL";
+        var timestampJoin = hasDates ? """
+            LEFT JOIN ImportedMessageDates AS dates
+              ON dates.TelegramUserId = message.TelegramUserId
+             AND dates.PeerType = message.PeerType
+             AND dates.PeerId = message.PeerId AND dates.MessageId = message.MessageId
+            """ : string.Empty;
         command.CommandText = $"""
-            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}, {emojiColumn}
+            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}, {emojiColumn}, {timestampColumn}
             FROM ImportedChatMessages AS message
             {ownReactionJoin}
             {authorJoin}
             {emojiJoin}
+            {timestampJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             ORDER BY message.MessageId DESC
             """;
@@ -88,13 +99,15 @@ public sealed class WorkspaceTaskReader(string databasePath)
                 ? $"https://t.me/c/{chat.PeerId}/{messageId}"
                 : string.Empty;
             var authorName = reader.IsDBNull(3) ? "Автор неизвестен" : reader.GetString(3);
+            DateTimeOffset? sentAt = reader.IsDBNull(5)
+                ? null : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5));
             tasks.Add(new WorkspaceDetectedTask(messageId, messageText, postUrl,
                 !reader.IsDBNull(2) && reader.GetInt64(2) == 1, authorName, sourceUrl,
-                reader.IsDBNull(4) ? string.Empty : reader.GetString(4)));
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4), sentAt));
         }
         return tasks;
     }
 }
 
 public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl,
-    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "", string CustomEmojiJson = "");
+    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "", string CustomEmojiJson = "", DateTimeOffset? SentAtUtc = null);

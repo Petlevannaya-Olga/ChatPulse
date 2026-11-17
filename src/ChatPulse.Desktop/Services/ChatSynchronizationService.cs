@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Settings;
@@ -60,6 +60,7 @@ public sealed class ChatSynchronizationService(
                 progress?.Invoke("Сохраняем сообщения в SQLite…");
                 await SaveHistoryAsync(current, messages, cancellationToken);
                 await SaveAuthorsAsync(current, messages, cancellationToken);
+            await SaveMessageDatesAsync(current, messages, cancellationToken);
                 await SaveCustomEmojiAsync(current, messages, cancellationToken);
                 await SaveReactionStatesAsync(current, messages, cancellationToken);
                 await SaveParticipantsAsync(current, messages, cancellationToken);
@@ -115,6 +116,7 @@ public sealed class ChatSynchronizationService(
             progress?.Invoke("Заменяем историю чата в SQLite…");
             await ReplaceHistoryAsync(current, messages, cancellationToken);
             await SaveAuthorsAsync(current, messages, cancellationToken);
+            await SaveMessageDatesAsync(current, messages, cancellationToken);
                 await SaveCustomEmojiAsync(current, messages, cancellationToken);
             await SaveReactionStatesAsync(current, messages, cancellationToken);
             await SaveParticipantsAsync(current, messages, cancellationToken);
@@ -154,6 +156,7 @@ public sealed class ChatSynchronizationService(
             progress?.Invoke("Проверяем реакции на задания…");
             var messages = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
             await SaveAuthorsAsync(current, messages, cancellationToken);
+            await SaveMessageDatesAsync(current, messages, cancellationToken);
             await SaveCustomEmojiAsync(current, messages, cancellationToken);
             await SaveParticipantsAsync(current, messages, cancellationToken);
             return await SaveReactionStatesAsync(current, messages, cancellationToken);
@@ -166,6 +169,60 @@ public sealed class ChatSynchronizationService(
     /// Refresh only updates already-imported message IDs and never changes reaction states.
     /// </summary>
     /// <summary>Stores entity offsets separately without rewriting the original message.</summary>
+    /// <summary>
+    /// Stores the original Telegram publication timestamp independently of message text.
+    /// Older history is populated on the next explicit Telegram refresh; unknown dates stay unknown.
+    /// </summary>
+    private async Task SaveMessageDatesAsync(ConfiguredChat chat,
+        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
+    {
+        if (!messages.Any(message => message.SentAtUtc.HasValue)) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var setup = connection.CreateCommand();
+        setup.CommandText = """
+            CREATE TABLE IF NOT EXISTS ImportedMessageDates (
+                TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
+                PeerId INTEGER NOT NULL, MessageId INTEGER NOT NULL,
+                SentAtUnixSeconds INTEGER NOT NULL,
+                PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
+            );
+            """;
+        await setup.ExecuteNonQueryAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var upsert = connection.CreateCommand();
+        upsert.Transaction = transaction;
+        upsert.CommandText = """
+            INSERT INTO ImportedMessageDates
+                (TelegramUserId, PeerType, PeerId, MessageId, SentAtUnixSeconds)
+            SELECT $owner, $type, $peer, $id, $timestamp
+            WHERE EXISTS (
+                SELECT 1 FROM ImportedChatMessages
+                WHERE TelegramUserId = $owner AND PeerType = $type
+                  AND PeerId = $peer AND MessageId = $id
+            )
+            ON CONFLICT(TelegramUserId, PeerType, PeerId, MessageId)
+            DO UPDATE SET SentAtUnixSeconds = excluded.SentAtUnixSeconds
+            """;
+        upsert.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+        upsert.Parameters.AddWithValue("$type", chat.PeerType);
+        upsert.Parameters.AddWithValue("$peer", chat.PeerId);
+        var id = upsert.Parameters.Add("$id", SqliteType.Integer);
+        var timestamp = upsert.Parameters.Add("$timestamp", SqliteType.Integer);
+        foreach (var message in messages)
+        {
+            if (message.SentAtUtc is not { } sentAt) continue;
+            id.Value = message.MessageId;
+            timestamp.Value = new DateTimeOffset(sentAt.ToUniversalTime()).ToUnixTimeSeconds();
+            await upsert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     private async Task SaveCustomEmojiAsync(ConfiguredChat chat,
         IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
     {

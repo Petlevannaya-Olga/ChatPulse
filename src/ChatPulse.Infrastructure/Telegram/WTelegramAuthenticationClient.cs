@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using ChatPulse.Application.Services;
@@ -680,7 +680,7 @@ public sealed class WTelegramAuthenticationClient(
                         .Select(entity => new TelegramCustomEmoji(entity.offset, entity.length, entity.document_id))
                         .ToArray() ?? [];
                     collected.Add(new TelegramChatMessage(message.ID, message.message,
-                        TelegramOwnReactionEvidence.Read(message), author, customEmojis));
+                        TelegramOwnReactionEvidence.Read(message), author, customEmojis, message.date.ToUniversalTime()));
                 }
                 if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) { historyComplete = true; break; }
                 var nextOffset = history.Messages[^1].ID;

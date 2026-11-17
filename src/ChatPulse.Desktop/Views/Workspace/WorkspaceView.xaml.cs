@@ -1,6 +1,8 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
+using System.Windows.Data;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -35,6 +37,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         InitializeComponent();
         DataContext = this;
+        CollectionViewSource.GetDefaultView(Tasks).GroupDescriptions.Add(
+            new PropertyGroupDescription(nameof(WorkspaceTaskCard.DateGroupLabel)));
         UpdateNavigationVisuals();
     }
 
@@ -373,6 +377,20 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
 
 public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
 {
+    private static readonly CultureInfo RUSSIAN_CULTURE = CultureInfo.GetCultureInfo("ru-RU");
+    private DateTime? LocalDate => task.SentAtUtc?.ToLocalTime().DateTime;
+    public string DateGroupLabel
+    {
+        get
+        {
+            if (LocalDate is not { } date) return "Дата неизвестна";
+            var today = DateTime.Today;
+            if (date.Date == today) return "Сегодня";
+            if (date.Date == today.AddDays(-1)) return "Вчера";
+            return date.ToString("d MMMM yyyy", RUSSIAN_CULTURE);
+        }
+    }
+    public string TimeLabel => LocalDate?.ToString("HH:mm", RUSSIAN_CULTURE) ?? string.Empty;
     public string CustomEmojiJson => task.CustomEmojiJson;
     public string PostUrl => task.PostUrl;
     public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);
