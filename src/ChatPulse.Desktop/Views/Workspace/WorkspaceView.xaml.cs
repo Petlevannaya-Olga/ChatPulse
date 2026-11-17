@@ -278,6 +278,32 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         NotifyTaskFilter();
     }
 
+    private async void CompleteTaskButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (IsBusy || _synchronization is null || SelectedChat is null ||
+            sender is not Button { Tag: long messageId }) return;
+        var row = SelectedChat;
+        IsBusy = true;
+        try
+        {
+            await _synchronization.CompleteTaskAsync(row.Chat, messageId);
+            if (_taskCache.TryGetValue(row, out var tasks))
+                _taskCache[row] = tasks.Select(task => task.MessageId == messageId
+                    ? task with { IsCompleted = true } : task).ToArray();
+            UpdateSelectedTasks();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Не удалось завершить задание: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifyTaskFilter();
+        }
+    }
+
     private async void SkipTaskButton_OnClick(object sender, RoutedEventArgs args)
         => await SetTaskSkippedAsync(sender, true);
 
@@ -457,6 +483,7 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     public long MessageId => task.MessageId;
     public bool IsSkipped => task.IsSkipped;
     public bool CanSkip => !task.IsSkipped;
+    public bool CanComplete => !task.IsSkipped && !task.IsCompleted;
     public string CustomEmojiJson => task.CustomEmojiJson;
     public string PostUrl => task.PostUrl;
     public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);

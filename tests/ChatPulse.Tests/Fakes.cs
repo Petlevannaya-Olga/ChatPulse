@@ -1,4 +1,4 @@
-using ChatPulse.Application.Services;
+﻿using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
 
 namespace ChatPulse.Tests;
@@ -46,7 +46,7 @@ internal sealed class FakeCredentialsStore : ITelegramApiCredentialsStore
     }
 }
 
-internal sealed class FakeTelegramClient : ITelegramAuthenticationClient
+internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITelegramTaskReactionSender
 {
     public int ResetCalls { get; private set; }
     public int CancelCalls { get; private set; }
@@ -123,6 +123,17 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient
         GetChatsCalls++;
         return ChatsImpl?.Invoke(cancellationToken)
             ?? Task.FromResult(new TelegramChatsSnapshot(CurrentTelegramUserId, []));
+    }
+
+    public List<(long PeerId, int MessageId)> SentHeartReactions { get; } = [];
+    public Func<TelegramChatOption, int, CancellationToken, Task>? HeartReactionImpl { get; set; }
+    public async Task SendHeartReactionAsync(TelegramChatOption chat, int messageId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (HeartReactionImpl is not null)
+            await HeartReactionImpl(chat, messageId, cancellationToken);
+        SentHeartReactions.Add((chat.PeerId, messageId));
     }
 
     public Func<TelegramChatOption, int, CancellationToken, Task<IReadOnlyList<TelegramChatMessage>>>? ChatMessagesImpl { get; set; }

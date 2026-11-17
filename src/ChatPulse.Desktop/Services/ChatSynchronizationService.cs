@@ -18,6 +18,50 @@ public sealed class ChatSynchronizationService(
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
 
+    /// <summary>Only a successful Telegram RPC may mark a task completed locally.</summary>
+    public async Task CompleteTaskAsync(ConfiguredChat configured, long messageId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(configured);
+        if (messageId <= 0 || messageId > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(messageId));
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var current = FindConfigured(await settings.LoadAsync(cancellationToken), configured);
+            if (current.SynchronizationState != ChatSynchronizationState.COMPLETED)
+                throw new InvalidOperationException("История чата ещё не загружена.");
+            var store = new WorkspaceHeartReactionStore(databasePath);
+            if (!await store.RequiresReactionAsync(current, messageId, cancellationToken)) return;
+
+            var owner = await telegram.GetAuthorizedUserIdAsync(cancellationToken);
+            if (owner != current.TelegramUserId)
+                throw new InvalidOperationException("Telegram-аккаунт изменился.");
+            var snapshot = await telegram.GetChatsAsync(cancellationToken);
+            var chat = snapshot.Chats.SingleOrDefault(item => item.PeerId == current.PeerId &&
+                item.PeerType == current.PeerType);
+            if (snapshot.TelegramUserId != owner || chat is null ||
+                !ChatTitlePolicy.IsEligible(chat.Title))
+                throw new InvalidOperationException("Чат недоступен для отправки реакции.");
+            if (telegram is not ITelegramTaskReactionSender sender)
+                throw new InvalidOperationException("Отправка реакций недоступна в Telegram-клиенте.");
+
+            await sender.SendHeartReactionAsync(chat, checked((int)messageId), cancellationToken);
+            // The remote action cannot be rolled back if local persistence fails.
+            try
+            {
+                await store.ConfirmAsync(current, messageId, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    "Сердечко отправлено в Telegram, но статус не сохранился в SQLite. " +
+                    "Проверьте реакции через настройки, прежде чем повторять действие.", exception);
+            }
+        }
+        finally { _gate.Release(); }
+    }
+
     public Task<long> GetAccountIdAsync(CancellationToken cancellationToken = default)
         => telegram.GetAuthorizedUserIdAsync(cancellationToken);
 

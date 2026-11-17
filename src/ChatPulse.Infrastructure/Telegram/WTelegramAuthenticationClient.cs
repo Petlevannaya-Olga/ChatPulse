@@ -16,7 +16,7 @@ public sealed class WTelegramAuthenticationClient(
     string dataDirectory, ITelegramApiCredentialsStore credentialsStore,
     ITelegramCredentialChangeJournal? changeJournal = null,
     TelegramAuthorizationEvents? authorizationEvents = null)
-    : ITelegramAuthenticationClient, IDisposable
+    : ITelegramAuthenticationClient, ITelegramTaskReactionSender, IDisposable
 {
     private static readonly TimeSpan RemoteRequestTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(5);
@@ -720,6 +720,53 @@ public sealed class WTelegramAuthenticationClient(
             Debug.WriteLine($"[ChatPulse][History] Error type={exception.GetType().Name}");
             throw new TelegramAuthenticationException("telegram.history_load_failed",
                 "Не удалось загрузить историю чата. Проверьте соединение и повторите попытку.");
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Send a heart only for the requested message in a verified chat.</summary>
+    public async Task SendHeartReactionAsync(TelegramChatOption chat, int messageId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(chat);
+        if (messageId <= 0) throw new ArgumentOutOfRangeException(nameof(messageId));
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            GetVerifiedUserId();
+            var dialogs = await AwaitRemoteAsync(_client!.Messages_GetAllDialogs(), cancellationToken);
+            var target = dialogs.dialogs.Select(dialog => dialogs.UserOrChat(dialog))
+                .OfType<TL.ChatBase>()
+                .FirstOrDefault(item => item.IsActive && item.ID == chat.PeerId &&
+                    (item is TL.Chat ? "Chat" : "Channel") == chat.PeerType);
+            if (target is null)
+                throw new TelegramAuthenticationException("telegram.chat_not_found",
+                    "Чат недоступен для отправки реакции.");
+
+            TL.InputPeer peer = target;
+            await AwaitRemoteAsync(_client.Messages_SendReaction(peer, messageId,
+                reaction: [new TL.ReactionEmoji { emoticon = "❤️" }]), cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TelegramAuthenticationException) { throw; }
+        catch (TL.RpcException exception) when (IsAuthorizationLost(exception))
+        {
+            await DetachClientAsync();
+            _authorizationEvents.ReportAuthorizationLost();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram завершил авторизацию. Выполните повторный вход.");
+        }
+        catch (TL.RpcException exception)
+        {
+            Debug.WriteLine($"[ChatPulse][Reaction] RPC code={exception.Code}");
+            throw new TelegramAuthenticationException("telegram.reaction_failed",
+                "Telegram не разрешил поставить сердечко на это сообщение. Проверьте доступные реакции и повторите попытку.");
+        }
+        catch (Exception exception) when (TelegramNetworkErrors.IsTransportFailure(exception))
+        {
+            Debug.WriteLine($"[ChatPulse][Reaction] Transport error: {exception.GetType().Name}");
+            throw NetworkUnavailableException();
         }
         finally { _gate.Release(); }
     }
