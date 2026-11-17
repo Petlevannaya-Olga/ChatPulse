@@ -373,6 +373,7 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
 
 public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
 {
+    public string CustomEmojiJson => task.CustomEmojiJson;
     public string PostUrl => task.PostUrl;
     public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);
     public string SourceUrl => task.SourceUrl;

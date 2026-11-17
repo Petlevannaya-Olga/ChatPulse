@@ -1,6 +1,7 @@
-﻿<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
+<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:ChatPulse.Desktop.Views.Workspace"
              IsVisibleChanged="OnVisibilityChanged"
              FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True">
     <UserControl.Resources>
@@ -572,7 +573,9 @@
                                                                 <TextBlock Text="{Binding Title}" Foreground="#24154C"
                                                                            FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
                                                                            FontSize="13" FontWeight="SemiBold" />
-                                                                <TextBlock Text="{Binding Description}" Foreground="#80708E"
+                                                                <TextBlock local:CustomEmojiText.Text="{Binding Description}"
+                                                                           local:CustomEmojiText.Entities="{Binding CustomEmojiJson}"
+                                                                           Foreground="#80708E"
                                                                            FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
                                                                            FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0" />
                                                             </StackPanel>

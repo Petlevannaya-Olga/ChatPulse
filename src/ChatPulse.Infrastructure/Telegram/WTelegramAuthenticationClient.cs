@@ -1,3 +1,4 @@
+using System.IO;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using ChatPulse.Application.Services;
@@ -503,6 +504,132 @@ public sealed class WTelegramAuthenticationClient(
     }
 
     /// <summary>Получает сообщения с текстом, именем отправителя и реакциями за указанный период.</summary>
+    /// <summary>
+    /// Download one still frame (Telegram document thumbnail) for each unique custom emoji.
+    /// This deliberately does not download photos or other message media.
+    /// </summary>
+    private async Task CacheCustomEmojiPreviewsAsync(
+        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
+    {
+        var ids = messages.SelectMany(message => message.CustomEmojis ?? [])
+            .Select(emoji => emoji.DocumentId).Distinct().ToArray();
+        if (ids.Length == 0) return;
+
+        var directory = Path.Combine(dataDirectory, "custom-emoji");
+        Directory.CreateDirectory(directory);
+        foreach (var batch in ids.Chunk(100))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var missing = batch.Where(id => !File.Exists(Path.Combine(directory, $"{id}.png")) &&
+                                           !File.Exists(Path.Combine(directory, $"{id}.jpg"))).ToArray();
+            if (missing.Length == 0) continue;
+            try
+            {
+                var documents = await AwaitRemoteAsync(_client!.Messages_GetCustomEmojiDocuments(missing),
+                    cancellationToken);
+                Debug.WriteLine($"[ChatPulse][Emoji] Requested={missing.Length}, received={documents.Count()}");
+                foreach (var item in documents)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (item is not TL.Document document) continue;
+                    // Download real image thumbnails only. PhotoStrippedSize is embedded
+                    // and cannot be fetched as a normal document thumbnail.
+                    var preview = document.thumbs?.OfType<TL.PhotoSize>().FirstOrDefault();
+                    var directImage = document.mime_type is "image/png" or "image/jpeg";
+                    var tgs = document.mime_type == "application/x-tgsticker";
+                    // TGS needs its full document if Telegram provided no usable thumbnail.
+                    // WEBM is still supported when Telegram provides an image thumbnail.
+                    if (preview is null && !directImage && !tgs)
+                    {
+                        Debug.WriteLine($"[ChatPulse][Emoji] No still preview: document={document.id}, mime={document.mime_type}");
+                        continue;
+                    }
+                    if (preview is null && document.size > 1024 * 1024) continue;
+                    var temp = Path.Combine(directory, $"{document.id}.tmp");
+                    var pngTemp = Path.Combine(directory, $"{document.id}.png.tmp");
+                    try
+                    {
+                        await using (var stream = File.Create(temp))
+                        {
+                            await _client.DownloadFileAsync(document, stream,
+                                thumbSize: preview, progress: (_, _) => cancellationToken.ThrowIfCancellationRequested());
+                        }
+                        if (new FileInfo(temp).Length > 1024 * 1024) continue;
+
+                        var signature = new byte[8];
+                        await using (var file = File.OpenRead(temp))
+                        {
+                            if (await file.ReadAsync(signature, cancellationToken) < 8) continue;
+                        }
+                        var isPng = signature.AsSpan().SequenceEqual(
+                            new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+                        var isJpeg = signature[0] == 0xFF && signature[1] == 0xD8 && signature[2] == 0xFF;
+                        if (isPng || isJpeg)
+                        {
+                            File.Move(temp, Path.Combine(directory, $"{document.id}.{(isPng ? "png" : "jpg")}"), true);
+                            continue;
+                        }
+
+                        // Some Telegram document thumbnails use WebP, unsupported by
+                        // the standard WPF bitmap decoder on some Windows installations.
+                        var isWebp = false;
+                        if (signature.AsSpan(0, 4).SequenceEqual("RIFF"u8))
+                        {
+                            var webpHeader = new byte[12];
+                            await using var webpFile = File.OpenRead(temp);
+                            isWebp = await webpFile.ReadAsync(webpHeader, cancellationToken) == 12 &&
+                                webpHeader.AsSpan(8, 4).SequenceEqual("WEBP"u8);
+                        }
+                        if (isWebp && TelegramCustomEmojiPreview.TryConvertWebp(temp, pngTemp))
+                        {
+                            File.Move(pngTemp, Path.Combine(directory, $"{document.id}.png"), true);
+                            continue;
+                        }
+
+                        // A thumb request can return an unsupported format. For TGS,
+                        // retry the actual document before deciding it cannot be drawn.
+                        if (tgs && preview is not null)
+                        {
+                            await using (var full = File.Create(temp))
+                            {
+                                await _client.DownloadFileAsync(document, full,
+                                    progress: (_, _) => cancellationToken.ThrowIfCancellationRequested());
+                            }
+                            if (new FileInfo(temp).Length > 1024 * 1024) continue;
+                            await using var source = File.OpenRead(temp);
+                            if (await source.ReadAsync(signature, cancellationToken) < 8) continue;
+                        }
+
+                        // Telegram TGS is gzipped Bodymovin JSON. The image is rendered
+                        // locally once and then reused by the existing WPF PNG renderer.
+                        if (tgs && signature[0] == 0x1F && signature[1] == 0x8B &&
+                            TelegramCustomEmojiPreview.TryRenderTgs(temp, pngTemp))
+                        {
+                            File.Move(pngTemp, Path.Combine(directory, $"{document.id}.png"), true);
+                            continue;
+                        }
+                        Debug.WriteLine($"[ChatPulse][Emoji] Unsupported thumbnail: document={document.id}, mime={document.mime_type}");
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                    catch (Exception exception)
+                    {
+                        Debug.WriteLine($"[ChatPulse][Emoji] Preview unavailable for document={document.id}, mime={document.mime_type}, reason={exception.GetType().Name}");
+                    }
+                    finally
+                    {
+                        if (File.Exists(temp)) File.Delete(temp);
+                        if (File.Exists(pngTemp)) File.Delete(pngTemp);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                Debug.WriteLine($"[ChatPulse][Emoji] Telegram request unavailable: {exception.GetType().Name}");
+            }
+        }
+    }
+
     public async Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
         TelegramChatOption chat, int days, CancellationToken cancellationToken)
     {
@@ -548,8 +675,12 @@ public sealed class WTelegramAuthenticationClient(
                         break;
                     }
                     var author = ResolveMessageAuthor(message, history, dialogs, chat.Title);
+                    var customEmojis = message.entities?.OfType<TL.MessageEntityCustomEmoji>()
+                        .Where(entity => entity.document_id > 0 && entity.offset >= 0 && entity.length > 0)
+                        .Select(entity => new TelegramCustomEmoji(entity.offset, entity.length, entity.document_id))
+                        .ToArray() ?? [];
                     collected.Add(new TelegramChatMessage(message.ID, message.message,
-                        TelegramOwnReactionEvidence.Read(message), author));
+                        TelegramOwnReactionEvidence.Read(message), author, customEmojis));
                 }
                 if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) { historyComplete = true; break; }
                 var nextOffset = history.Messages[^1].ID;
@@ -561,6 +692,8 @@ public sealed class WTelegramAuthenticationClient(
             if (!historyComplete)
                 throw new TelegramAuthenticationException("telegram.history_incomplete",
                     "Достигнут предел загрузки истории. Чат не считается синхронизированным.");
+            // Emoji files are a best-effort cache. Missing media must never fail history sync.
+            await CacheCustomEmojiPreviewsAsync(collected, cancellationToken);
             return collected;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

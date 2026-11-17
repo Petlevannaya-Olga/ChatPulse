@@ -34,6 +34,9 @@ public sealed class WorkspaceTaskReader(string databasePath)
         var authorTable = connection.CreateCommand();
         authorTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageAuthors'";
         var hasAuthors = (long)(await authorTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        var emojiTable = connection.CreateCommand();
+        emojiTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageCustomEmoji'";
+        var hasEmojis = (long)(await emojiTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
         var command = connection.CreateCommand();
         var ownReactionColumn = hasReactionStates ? "reaction.HasOwnReaction" : "NULL";
         var ownReactionJoin = hasReactionStates ? """
@@ -49,11 +52,19 @@ public sealed class WorkspaceTaskReader(string databasePath)
              AND author.PeerType = message.PeerType
              AND author.PeerId = message.PeerId AND author.MessageId = message.MessageId
             """ : string.Empty;
+        var emojiColumn = hasEmojis ? "emoji.EntitiesJson" : "NULL";
+        var emojiJoin = hasEmojis ? """
+            LEFT JOIN ImportedMessageCustomEmoji AS emoji
+              ON emoji.TelegramUserId = message.TelegramUserId
+             AND emoji.PeerType = message.PeerType
+             AND emoji.PeerId = message.PeerId AND emoji.MessageId = message.MessageId
+            """ : string.Empty;
         command.CommandText = $"""
-            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}
+            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}, {emojiColumn}
             FROM ImportedChatMessages AS message
             {ownReactionJoin}
             {authorJoin}
+            {emojiJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             ORDER BY message.MessageId DESC
             """;
@@ -78,11 +89,12 @@ public sealed class WorkspaceTaskReader(string databasePath)
                 : string.Empty;
             var authorName = reader.IsDBNull(3) ? "Автор неизвестен" : reader.GetString(3);
             tasks.Add(new WorkspaceDetectedTask(messageId, messageText, postUrl,
-                !reader.IsDBNull(2) && reader.GetInt64(2) == 1, authorName, sourceUrl));
+                !reader.IsDBNull(2) && reader.GetInt64(2) == 1, authorName, sourceUrl,
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4)));
         }
         return tasks;
     }
 }
 
 public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl,
-    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "");
+    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "", string CustomEmojiJson = "");
