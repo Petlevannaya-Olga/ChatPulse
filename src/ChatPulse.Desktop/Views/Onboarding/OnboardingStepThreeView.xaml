@@ -363,8 +363,9 @@
                                            FontSize="13" FontWeight="SemiBold" Foreground="#7545C8" />
                             </Grid>
                             <Border Grid.Row="2" BorderBrush="#E6DFF3" BorderThickness="1" CornerRadius="12">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding VisibleRows}" Margin="0,0,0,14">
+                                <Grid>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding VisibleRows}" Margin="0,0,0,14">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Border Margin="12,10,12,0"
@@ -387,8 +388,24 @@
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </ScrollViewer>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                    <!-- Загрузка отображается поверх списка только пока Telegram выполняет запрос. -->
+                                    <Border Background="#FCFAFF" CornerRadius="11"
+                                            Visibility="{Binding IsLoadingChatList, Converter={StaticResource BoolToVisibility}}">
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                    Margin="24,24,24,24">
+                                            <TextBlock Text="Загружаем чаты из Telegram…"
+                                                       FontSize="15" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimary}"
+                                                       HorizontalAlignment="Center" />
+                                            <ProgressBar Width="240" Height="5" Margin="0,14,0,0"
+                                                         HorizontalAlignment="Center"
+                                                         IsIndeterminate="True"
+                                                         Foreground="#9042ED" Background="#EEE5FA" />
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
                             </Border>
                         </Grid>
                         <Grid Visibility="{Binding ReviewVisibility}" Margin="0,0,0,0">

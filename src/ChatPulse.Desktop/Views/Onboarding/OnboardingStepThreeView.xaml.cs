@@ -96,18 +96,50 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     }
 
     public string SelectedCountText => $"Выбрано: {Rows.Count(row => row.IsSelected)} / 10";
-    public string ListStatus => Rows.Count == 0 ? "Доступных чатов пока нет" : $"Доступно чатов: {Rows.Count}";
-    public bool HasSelection => Rows.Any(row => row.IsSelected);
+    public bool IsLoadingChatList => ViewModel?.IsBusy == true;
+    public string ListStatus => IsLoadingChatList
+        ? "Загружаем список чатов из Telegram…"
+        : ViewModel is { HasError: true } vm ? vm.Error
+        : Rows.Count == 0 ? "Доступных чатов пока нет" : $"Доступно чатов: {Rows.Count}";
+    public bool HasSelection => !IsLoadingChatList && Rows.Any(row => row.IsSelected);
     public Visibility SelectionVisibility => isReview ? Visibility.Collapsed : Visibility.Visible;
     public Visibility ReviewVisibility => isReview ? Visibility.Visible : Visibility.Collapsed;
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (subscribedViewModel is not null)
+        {
             subscribedViewModel.TelegramConnectionRestored -= OnTelegramConnectionRestored;
+            subscribedViewModel.PropertyChanged -= OnChatListStateChanged;
+        }
         subscribedViewModel = e.NewValue as FirstChatSetupViewModel;
         if (subscribedViewModel is not null)
+        {
             subscribedViewModel.TelegramConnectionRestored += OnTelegramConnectionRestored;
+            subscribedViewModel.PropertyChanged += OnChatListStateChanged;
+        }
+        Changed(nameof(IsLoadingChatList));
+        Changed(nameof(ListStatus));
+        Changed(nameof(HasSelection));
+    }
+
+    private void OnChatListStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!ReferenceEquals(sender, subscribedViewModel)) return;
+        if (e.PropertyName == nameof(FirstChatSetupViewModel.IsBusy))
+        {
+            Changed(nameof(IsLoadingChatList));
+            Changed(nameof(ListStatus));
+            Changed(nameof(HasSelection));
+            // EnsureLoadedAsync can return while an earlier refresh is still running.
+            // The finished request must still populate the visible selection list.
+            if (!subscribedViewModel!.IsBusy && IsVisible && !isReview)
+                SyncRows(subscribedViewModel.Chats);
+        }
+        else if (e.PropertyName == nameof(FirstChatSetupViewModel.Error))
+        {
+            Changed(nameof(ListStatus));
+        }
     }
 
     private void OnTelegramConnectionRestored(object? sender, EventArgs e)

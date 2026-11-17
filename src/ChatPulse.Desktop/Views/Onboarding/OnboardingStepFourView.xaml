@@ -42,7 +42,7 @@
         </Style>
         <Style x:Key="ContinueButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="48" />
-            <Setter Property="MinWidth" Value="176" />
+            <Setter Property="MinWidth" Value="260" />
             <Setter Property="Padding" Value="22,0" />
             <Setter Property="Foreground" Value="White" />
             <Setter Property="FontSize" Value="16" />
@@ -53,7 +53,8 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Surface" CornerRadius="9"
-                                Background="{StaticResource PrimaryBrush}">
+                                Background="{StaticResource PrimaryBrush}"
+                                Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -222,98 +223,186 @@
                     <ItemsControl ItemsSource="{Binding Chats}" IsEnabled="{Binding CanModifyPeriods}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border CornerRadius="12" BorderBrush="#E3D8F5" BorderThickness="1"
-                                        Background="#FBF9FF" Padding="16,12" Margin="0,0,12,12">
-                                    <!-- Two balanced columns: chat information and history-period settings. -->
+                                <!-- Статус подчёркнут вертикальным акцентом; информацию и период разделяем. -->
+                                <Border Background="#FCFAFF" BorderBrush="#E4D7F6" BorderThickness="1"
+                                        CornerRadius="12" Margin="0,0,12,12" ClipToBounds="True">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" MinWidth="230" />
-                                            <ColumnDefinition Width="1" />
-                                            <ColumnDefinition Width="*" MinWidth="250" />
+                                            <ColumnDefinition Width="4" />
+                                            <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
+                                        <Border x:Name="StateAccent" Grid.Column="0" Background="#9C55E8" />
+                                        <Grid Grid.Column="1" Margin="18,14,18,14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" MinWidth="215" />
+                                                <ColumnDefinition Width="1" />
+                                                <ColumnDefinition Width="*" MinWidth="250" />
+                                            </Grid.ColumnDefinitions>
 
-                                        <!-- Left: chat identity, import result and optional known social network. -->
-                                        <StackPanel Grid.Column="0" Margin="0,0,20,0" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
-                                                       Foreground="#24154C" TextWrapping="Wrap" />
-                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
-                                                        Visibility="{Binding IsComplete, Converter={StaticResource BoolVisibility}}">
-                                                <Border Background="#E7F7EC" Width="18" Height="18" CornerRadius="9"
-                                                        VerticalAlignment="Center" Margin="0,0,8,0">
-                                                    <TextBlock Text="✓" Foreground="#17864B" FontSize="12"
-                                                               FontWeight="Bold" TextAlignment="Center" VerticalAlignment="Center" />
-                                                </Border>
-                                                <TextBlock Text="{Binding ImportedMessageCount}" FontSize="12"
-                                                           Foreground="#796C98" VerticalAlignment="Center" />
-                                                <TextBlock Text=" сообщений загружено" FontSize="12"
-                                                           Foreground="#796C98" VerticalAlignment="Center" />
-                                            </StackPanel>
-                                            <StackPanel x:Name="PendingStatus" Visibility="Collapsed" Margin="0,7,0,0">
-                                                <TextBlock Text="{Binding Status}" FontSize="13" Foreground="#796C98"
-                                                           TextWrapping="Wrap" />
-                                                <TextBlock Text="{Binding Details}" FontSize="12" Foreground="#796C98"
-                                                           Margin="0,3,0,0" TextWrapping="Wrap" />
-                                            </StackPanel>
-                                            <TextBlock Text="{Binding Network}"
-                                                       x:Name="SocialNetworkLabel" FontSize="12" Foreground="#796C98"
-                                                       Margin="0,6,0,0" Visibility="Collapsed" />
-                                            <Button Content="Повторить" Click="RetryButton_OnClick" Tag="{Binding}"
-                                                    x:Name="RetryButton" HorizontalAlignment="Left"
-                                                    Margin="0,10,0,0" IsEnabled="{Binding CanRetry}"
-                                                    Visibility="{Binding CanRetry, Converter={StaticResource BoolVisibility}}"
-                                                    Style="{StaticResource RetryButtonStyle}" />
-                                        </StackPanel>
-
-                                        <Border Grid.Column="1" Background="#E8DFF3" Margin="0,3,0,3" />
-
-                                        <!-- Right: current selected period and its existing (possibly disabled) slider. -->
-                                        <StackPanel Grid.Column="2" Margin="20,0,0,0" VerticalAlignment="Center">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Text="Период загрузки" FontSize="12" Foreground="#796C98"
-                                                           VerticalAlignment="Center" />
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                                    <TextBlock Text="{Binding Days}" FontSize="14" FontWeight="SemiBold"
-                                                               Foreground="#633AA3" />
-                                                    <TextBlock Text=" дн." FontSize="13" Foreground="#796C98" />
+                                            <!-- Чат и его фактический статус. -->
+                                            <StackPanel Grid.Column="0" Margin="0,0,20,0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
+                                                           Foreground="#24154C" TextWrapping="Wrap" />
+                                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                    <!-- Векторные значки соцсетей вместо текстового бейджа. -->
+                                                    <Grid x:Name="SocialNetworkIcons" Width="30" Height="30"
+                                                          HorizontalAlignment="Left" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                          Visibility="Collapsed" ToolTip="{Binding Network}">
+                                                        <Border x:Name="InstagramIcon" Width="30" Height="30"
+                                                                CornerRadius="8" Visibility="Collapsed">
+                                                            <Border.Background>
+                                                                <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
+                                                                    <GradientStop Color="#F9B249" Offset="0" />
+                                                                    <GradientStop Color="#EF487F" Offset="0.5" />
+                                                                    <GradientStop Color="#9747E8" Offset="1" />
+                                                                </LinearGradientBrush>
+                                                            </Border.Background>
+                                                            <Viewbox Width="23" Height="23">
+                                                                <Canvas Width="24" Height="24">
+                                                                    <Rectangle Canvas.Left="3" Canvas.Top="3" Width="18" Height="18"
+                                                                               RadiusX="5" RadiusY="5" Stroke="White"
+                                                                               StrokeThickness="2.2" />
+                                                                    <Ellipse Canvas.Left="8.5" Canvas.Top="8.5" Width="7" Height="7"
+                                                                             Stroke="White" StrokeThickness="2.1" />
+                                                                    <Ellipse Canvas.Left="16.8" Canvas.Top="6.15"
+                                                                             Width="2.2" Height="2.2" Fill="White" />
+                                                                </Canvas>
+                                                            </Viewbox>
+                                                        </Border>
+                                                        <Border x:Name="TelegramIcon" Width="30" Height="30"
+                                                                CornerRadius="8" Background="#299DD5"
+                                                                Visibility="Collapsed">
+                                                            <Viewbox Width="23" Height="23">
+                                                                <Canvas Width="24" Height="24">
+                                                                    <Path Fill="White" Data="M 21.4,3.3 C 22.2,3 22.7,3.4 22.5,4.2 L 19.5,20 C 19.35,20.8 18.7,20.8 18.1,20.4 L 12.5,16.5 L 9.8,19.1 C 9.5,19.45 9,19.3 9,18.85 L 9.2,14.25 L 18.7,5.8 L 6.8,13 L 2.8,11.65 C 2,11.4 1.95,10.85 2.75,10.5 Z" />
+                                                                </Canvas>
+                                                            </Viewbox>
+                                                        </Border>
+                                                        <!-- Анализатор также поддерживает TikTok: не показываем вместо него неверный значок. -->
+                                                        <Border x:Name="TikTokIcon" Width="30" Height="30"
+                                                                CornerRadius="8" Background="#21202D"
+                                                                Visibility="Collapsed">
+                                                            <Viewbox Width="22" Height="22">
+                                                                <Canvas Width="24" Height="24">
+                                                                    <Path Fill="White" Data="M 13,2 L 16.5,2 C 16.9,4.4 18.5,5.9 21,6.1 L 21,9.45 C 19.2,9.4 17.65,8.8 16.5,7.9 L 16.5,15.1 C 16.5,19 13.9,21.7 10,21.7 C 6.4,21.7 3.8,19.1 3.8,15.7 C 3.8,12.15 6.55,9.5 10.05,9.5 C 10.45,9.5 10.85,9.55 11.25,9.65 L 11.25,13.05 C 10.85,12.9 10.5,12.8 10.05,12.8 C 8.4,12.8 7.25,14.1 7.25,15.7 C 7.25,17.3 8.45,18.45 10,18.45 C 11.7,18.45 13,17.25 13,15.35 Z" />
+                                                                </Canvas>
+                                                            </Viewbox>
+                                                        </Border>
+                                                    </Grid>
+                                                    <Border x:Name="StatusBadge" Background="#F0E8FF" CornerRadius="7"
+                                                            HorizontalAlignment="Left" Padding="9,5" Margin="0" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Ellipse x:Name="StatusDot" Fill="#9651E1"
+                                                                     Width="7" Height="7" VerticalAlignment="Center"
+                                                                     Margin="0,0,7,0" />
+                                                            <TextBlock x:Name="StatusLabel" Text="{Binding Status}"
+                                                                       Foreground="#6B3CB0" FontSize="12"
+                                                                       FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                        </StackPanel>
+                                                    </Border>
                                                 </StackPanel>
-                                            </Grid>
-                                            <Slider Minimum="1" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True"
-                                                    AutoToolTipPlacement="TopLeft" AutoToolTipPrecision="0"
-                                                    Value="{Binding Days, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                    LostMouseCapture="PeriodSlider_OnInteractionCompleted"
-                                                    LostKeyboardFocus="PeriodSlider_OnInteractionCompleted"
-                                                    IsEnabled="{Binding CanEditPeriod}" Foreground="#9042ED"
-                                                    Margin="0,9,0,0" />
-                                            <Grid Margin="0,2,0,0">
-                                                <TextBlock Text="1 день" FontSize="11" Foreground="#9B90B2" />
-                                                <TextBlock Text="30 дней" FontSize="11" Foreground="#9B90B2"
-                                                           HorizontalAlignment="Right" />
-                                            </Grid>
-                                            <Button Content="Перезагрузить историю" Tag="{Binding}"
-                                                    Click="ReloadHistoryButton_OnClick"
-                                                    IsEnabled="{Binding CanReloadHistory}"
-                                                    Visibility="{Binding HasPeriodChange, Converter={StaticResource BoolVisibility}}"
-                                                    Style="{StaticResource RetryButtonStyle}"
-                                                    HorizontalAlignment="Left" Margin="0,8,0,0" />
-                                        </StackPanel>
+                                                <TextBlock x:Name="StatusDetails" Text="{Binding Details}"
+                                                           Foreground="#796C98" FontSize="12" Margin="0,6,0,0"
+                                                           TextWrapping="Wrap" />
+                                                <StackPanel x:Name="CompletedSummary" Orientation="Horizontal"
+                                                            Visibility="Collapsed" Margin="0,6,0,0">
+                                                    <TextBlock Text="Загружено сообщений: " FontSize="12" Foreground="#796C98" />
+                                                    <TextBlock Text="{Binding ImportedMessageCount}" FontSize="12"
+                                                               FontWeight="SemiBold" Foreground="#286F4D" />
+                                                </StackPanel>
+                                                <Button Content="Повторить" Click="RetryButton_OnClick" Tag="{Binding}"
+                                                        HorizontalAlignment="Left" Margin="0,10,0,0"
+                                                        IsEnabled="{Binding CanRetry}"
+                                                        Visibility="{Binding CanRetry, Converter={StaticResource BoolVisibility}}"
+                                                        Style="{StaticResource RetryButtonStyle}" />
+                                            </StackPanel>
+
+                                            <Border Grid.Column="1" Background="#E7DBF4" Margin="0,2,0,2" />
+
+                                            <!-- Период — одна компактная область с акцентом на выбранном значении. -->
+                                            <Border Grid.Column="2" Margin="20,0,0,0" Background="#F7F2FF"
+                                                    CornerRadius="9" Padding="13,10" VerticalAlignment="Center">
+                                                <StackPanel>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Text="Период загрузки" FontSize="12"
+                                                                   Foreground="#796C98" VerticalAlignment="Center" />
+                                                        <Border Grid.Column="1" Background="#EBDFFF"
+                                                                CornerRadius="6" Padding="8,3">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <TextBlock Text="{Binding Days}" FontSize="14"
+                                                                           FontWeight="SemiBold" Foreground="#633AA3" />
+                                                                <TextBlock Text=" дн." FontSize="12"
+                                                                           Foreground="#633AA3" VerticalAlignment="Center" />
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </Grid>
+                                                    <Slider Minimum="1" Maximum="30" TickFrequency="1"
+                                                            IsSnapToTickEnabled="True"
+                                                            AutoToolTipPlacement="TopLeft" AutoToolTipPrecision="0"
+                                                            Value="{Binding Days, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                            LostMouseCapture="PeriodSlider_OnInteractionCompleted"
+                                                            LostKeyboardFocus="PeriodSlider_OnInteractionCompleted"
+                                                            IsEnabled="{Binding CanEditPeriod}" Foreground="#9042ED"
+                                                            Margin="0,8,0,0" />
+                                                    <Grid Margin="0,2,0,0">
+                                                        <TextBlock Text="1 день" FontSize="11" Foreground="#9486AC" />
+                                                        <TextBlock Text="30 дней" FontSize="11" Foreground="#9486AC"
+                                                                   HorizontalAlignment="Right" />
+                                                    </Grid>
+                                                    <Button Content="Перезагрузить историю" Tag="{Binding}"
+                                                            Click="ReloadHistoryButton_OnClick"
+                                                            IsEnabled="{Binding CanReloadHistory}"
+                                                            Visibility="{Binding HasPeriodChange, Converter={StaticResource BoolVisibility}}"
+                                                            Style="{StaticResource RetryButtonStyle}"
+                                                            HorizontalAlignment="Left" Margin="0,9,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
                                     </Grid>
                                 </Border>
                                 <DataTemplate.Triggers>
-                                    <DataTrigger Binding="{Binding IsComplete}" Value="False">
-                                        <Setter TargetName="PendingStatus" Property="Visibility" Value="Visible" />
+                                    <DataTrigger Binding="{Binding IsPendingConnection}" Value="True">
+                                        <Setter TargetName="StatusDetails" Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsComplete}" Value="True">
+                                        <Setter TargetName="StateAccent" Property="Background" Value="#32A86E" />
+                                        <Setter TargetName="StatusBadge" Property="Background" Value="#E8F7EF" />
+                                        <Setter TargetName="StatusDot" Property="Fill" Value="#229860" />
+                                        <Setter TargetName="StatusLabel" Property="Foreground" Value="#207A50" />
+                                        <Setter TargetName="StatusDetails" Property="Visibility" Value="Collapsed" />
+                                        <Setter TargetName="CompletedSummary" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Выполняется синхронизация">
+                                        <Setter TargetName="StateAccent" Property="Background" Value="#8D55E5" />
+                                        <Setter TargetName="StatusBadge" Property="Background" Value="#F0E8FF" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Ошибка загрузки — можно повторить">
+                                        <Setter TargetName="StateAccent" Property="Background" Value="#DA6575" />
+                                        <Setter TargetName="StatusBadge" Property="Background" Value="#FDECF0" />
+                                        <Setter TargetName="StatusDot" Property="Fill" Value="#C84057" />
+                                        <Setter TargetName="StatusLabel" Property="Foreground" Value="#AF324C" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Предыдущая загрузка прервана — можно повторить">
+                                        <Setter TargetName="StateAccent" Property="Background" Value="#E9A437" />
+                                        <Setter TargetName="StatusBadge" Property="Background" Value="#FFF3E1" />
+                                        <Setter TargetName="StatusDot" Property="Fill" Value="#CB8723" />
+                                        <Setter TargetName="StatusLabel" Property="Foreground" Value="#9D661B" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Network}" Value="Instagram">
-                                        <Setter TargetName="SocialNetworkLabel" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="SocialNetworkIcons" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="InstagramIcon" Property="Visibility" Value="Visible" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Network}" Value="Telegram">
-                                        <Setter TargetName="SocialNetworkLabel" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="SocialNetworkIcons" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="TelegramIcon" Property="Visibility" Value="Visible" />
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Network}" Value="TikTok">
-                                        <Setter TargetName="SocialNetworkLabel" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="SocialNetworkIcons" Property="Visibility" Value="Visible" />
+                                        <Setter TargetName="TikTokIcon" Property="Visibility" Value="Visible" />
                                     </DataTrigger>
                                 </DataTemplate.Triggers>
                             </DataTemplate>

@@ -259,6 +259,7 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         PeerId = chat.PeerId;
         PeerType = chat.PeerType;
         Title = chat.TelegramTitle;
+        Network = chat.SocialNetwork;
         _loadedDays = chat.HistoryDays is >= 1 and <= 30 ? chat.HistoryDays : 7;
         _days = chat.RequestedHistoryDays is >= 1 and <= 30
             ? chat.RequestedHistoryDays.Value : _loadedDays;
