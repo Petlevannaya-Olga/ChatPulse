@@ -4,159 +4,632 @@
              IsVisibleChanged="OnVisibilityChanged"
              FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True">
     <UserControl.Resources>
-        <BooleanToVisibilityConverter x:Key="BoolVisibility" />
-        <LinearGradientBrush x:Key="WorkspaceBackground" StartPoint="0,0.2" EndPoint="1,0.8">
-            <GradientStop Offset="0" Color="#171038" />
-            <GradientStop Offset="0.52" Color="#26144E" />
-            <GradientStop Offset="1" Color="#401365" />
+        <BooleanToVisibilityConverter x:Key="BoolVisible" />
+        <LinearGradientBrush x:Key="SidebarBrush" StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#171038" Offset="0" />
+            <GradientStop Color="#26144E" Offset="0.6" />
+            <GradientStop Color="#401365" Offset="1" />
         </LinearGradientBrush>
-        <Style x:Key="WorkspaceChatItemStyle" TargetType="ListBoxItem">
-            <Setter Property="Padding" Value="12,11" />
-            <Setter Property="Margin" Value="0,0,0,8" />
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <LinearGradientBrush x:Key="AccentBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#7545F9" Offset="0" />
+            <GradientStop Color="#BA35E8" Offset="0.54" />
+            <GradientStop Color="#FB239D" Offset="1" />
+        </LinearGradientBrush>
+        <Style x:Key="PanelCard" TargetType="Border">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#E9E1F5" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="22" />
+        </Style>
+        <!-- Векторная кнопка: размер и толщина стрелки не зависят от системного шрифта. -->
+        <Style x:Key="SidebarToggleButton" TargetType="Button">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,30,-16,0" />
+            <Setter Property="Background" Value="#493074" />
+            <Setter Property="BorderBrush" Value="#8764BB" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="ChatBackground" Background="White"
-                                CornerRadius="10" BorderBrush="#E9DEF8" BorderThickness="1"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter />
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <Path x:Name="Chevron" Data="M 13,4 L 7,10 L 13,16"
+                                  Width="20" Height="20" Stretch="None"
+                                  Stroke="#FFFFFF" StrokeThickness="2.4"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" RenderTransformOrigin="0.5,0.5"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="ChatBackground" Property="Background" Value="#EEE5FF" />
-                                <Setter TargetName="ChatBackground" Property="BorderBrush" Value="#A879E6" />
+                            <Trigger Property="Content" Value="›">
+                                <Setter TargetName="Chevron" Property="RenderTransform">
+                                    <Setter.Value><ScaleTransform ScaleX="-1" /></Setter.Value>
+                                </Setter>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ChatBackground" Property="BorderBrush" Value="#AE8CDD" />
+                                <Setter TargetName="Surface" Property="Background" Value="#65409A" />
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#C096F8" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#321D57" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSidebarExpanded}" Value="False">
+                    <Setter Property="Margin" Value="0,28,-16,0" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="NavigationButton" TargetType="Button">
+            <Setter Property="Height" Value="48" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="10"
+                                BorderBrush="Transparent" BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#7951B7" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSidebarExpanded}" Value="False">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="HorizontalContentAlignment" Value="Center" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="WorkspaceActionButton" TargetType="Button">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="17,0" />
+            <Setter Property="Background" Value="#F4EDFF" />
+            <Setter Property="Foreground" Value="#6738AE" />
+            <Setter Property="BorderBrush" Value="#D8C4F6" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.85" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.47" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="WorkspaceOpenLinkButton" TargetType="Button">
-            <Setter Property="Background" Value="#F0E6FF" />
-            <Setter Property="Foreground" Value="#6836AB" />
-            <Setter Property="BorderBrush" Value="#D9C3F3" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="14,8" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="FontSize" Value="13" />
+        <Style x:Key="WorkspaceChatItemStyle" TargetType="ListBoxItem">
             <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Margin" Value="0,0,0,5" />
+            <Setter Property="Padding" Value="7,8" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="ItemSurface" Background="Transparent" CornerRadius="10"
+                                BorderBrush="Transparent" BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Stretch" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemSurface" Property="Background" Value="#6534A0" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ItemSurface" Property="BorderBrush" Value="#8353B8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="FeatureTile" TargetType="Button">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#E7DBF5" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="17" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="FeatureSurface" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="15" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="FeatureSurface" Property="BorderBrush" Value="#AE83EC" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </UserControl.Resources>
-    <Grid Background="{StaticResource WorkspaceBackground}">
-        <Border Margin="25" CornerRadius="22" Background="White" ClipToBounds="True">
-            <Grid>
+
+    <Grid Background="#F7F6FC">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="SidebarColumn" Width="264" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Постоянная сворачиваемая навигация. -->
+        <Border Grid.Column="0" Background="{StaticResource SidebarBrush}">
+            <Grid Margin="14,24,14,18">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Margin="7,0,0,35">
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="pack://application:,,,/Resources/ChatPulseLogo.png"
+                               Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                               VerticalAlignment="Center">
+                            <Image.Style>
+                                <Style TargetType="Image">
+                                    <Setter Property="Width" Value="46" />
+                                    <Setter Property="Height" Value="46" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSidebarExpanded}" Value="False">
+                                            <Setter Property="Width" Value="40" />
+                                            <Setter Property="Height" Value="40" />
+                                             <Setter Property="Margin" Value="-7,0,0,0" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Image.Style>
+                        </Image>
+                        <TextBlock Text="ChatPulse" FontSize="20" FontWeight="Bold" Foreground="White"
+                                   Margin="12,0,0,0" VerticalAlignment="Center"
+                                   Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
+                    </StackPanel>
+
+                </Grid>
+
+                <Button x:Name="HomeButton" Grid.Row="1" Click="HomeButton_OnClick"
+                        Style="{StaticResource NavigationButton}" ToolTip="Главная">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⌂" FontSize="25" Width="34" TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock Text="Главная" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
+                    </StackPanel>
+                </Button>
+
+                <TextBlock Grid.Row="2" Text="ЧАТЫ" FontSize="10" FontWeight="SemiBold" Foreground="#BB9CDC"
+                           Margin="16,27,0,13"
+                           Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
+                <ListBox x:Name="ChatList" Grid.Row="3" ItemsSource="{Binding Chats}"
+                         SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
+                         SelectionChanged="ChatList_OnSelectionChanged"
+                         ItemContainerStyle="{StaticResource WorkspaceChatItemStyle}"
+                         BorderThickness="0" Background="Transparent"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <!-- При свёрнутой панели одинаковый промежуток между иконками навигации. -->
+                    <ListBox.Style>
+                        <Style TargetType="ListBox">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsSidebarExpanded}" Value="False">
+                                    <Setter Property="Margin" Value="0,4,0,0" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.Style>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" ToolTip="{Binding Title}">
+                                <Border Width="31" Height="31" Background="#3B256D" CornerRadius="9" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding NetworkSymbol}" FontSize="22" Foreground="#F17CCF"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center" />
+                                </Border>
+                                <StackPanel Margin="10,0,0,0" VerticalAlignment="Center"
+                                            Visibility="{Binding DataContext.IsSidebarExpanded, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolVisible}}">
+                                    <TextBlock Text="{Binding Title}" Foreground="White" FontWeight="SemiBold"
+                                               FontSize="12" TextTrimming="CharacterEllipsis" MaxWidth="166" />
+                                    <TextBlock Text="{Binding Network}" Foreground="#C3B2D9" FontSize="11" />
+                                </StackPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <Button x:Name="SettingsButton" Grid.Row="4" Click="SettingsButton_OnClick"
+                        Style="{StaticResource NavigationButton}" ToolTip="Настройки" Margin="0,14,0,8">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⚙" FontSize="21" Width="34" TextAlignment="Center" VerticalAlignment="Center" />
+                        <TextBlock Text="Настройки" VerticalAlignment="Center"
+                                   Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Кнопка на внешней границе боковой панели: не влияет на высоту навигации. -->
+        <Button x:Name="CollapseButton" Grid.Column="0" Panel.ZIndex="10"
+                Content="‹" Style="{StaticResource SidebarToggleButton}"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                ToolTip="Свернуть или раскрыть панель"
+                Click="ToggleSidebarButton_OnClick" />
+
+        <!-- Контент не зависит от состояния бокового меню. -->
+        <Grid Grid.Column="1" Margin="34,22,34,22">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid Margin="0,0,0,4">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="296" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Border Background="#F8F5FF" BorderBrush="#E9DEF8" BorderThickness="0,0,1,0">
-                    <Grid Margin="20,26,20,22">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,28">
-                            <Border Width="46" Height="46" CornerRadius="23" Background="#F0E5FF"
-                                    BorderBrush="#A74BF0" BorderThickness="2">
-                                <Viewbox Width="26" Height="26" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <Canvas Width="48" Height="48">
-                                        <Path Data="M 12,8 H 35 A 7,7 0 0 1 42,15 V 27 A 7,7 0 0 1 35,34 H 29 L 24,40 V 34 H 12 A 7,7 0 0 1 5,27 V 15 A 7,7 0 0 1 12,8 Z"
-                                              Fill="Transparent" Stroke="#8241D8" StrokeThickness="3.3" StrokeLineJoin="Round" />
-                                        <Path Data="M 14,19 H 33 M 14,25 H 27" Stroke="#8241D8" StrokeThickness="3.3"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                <!-- Заголовок выбранной страницы остаётся видимым при прокрутке содержимого. -->
+                <Grid Margin="0,0,18,0" VerticalAlignment="Center">
+                    <TextBlock Text="Главная" Foreground="#24154C" FontSize="32" FontWeight="Bold"
+                               TextTrimming="CharacterEllipsis"
+                               Visibility="{Binding IsHomeVisible, Converter={StaticResource BoolVisible}}" />
+                    <Grid Visibility="{Binding IsChatVisible, Converter={StaticResource BoolVisible}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Фирменная иконка выбирается по типу подключённого чата. -->
+                        <Grid Width="34" Height="34" Margin="0,0,12,0" VerticalAlignment="Center">
+                            <Border Width="34" Height="34" CornerRadius="9">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Setter Property="Background">
+                                            <Setter.Value>
+                                                <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
+                                                    <GradientStop Color="#FEDA75" Offset="0" />
+                                                    <GradientStop Color="#FA7E1E" Offset="0.25" />
+                                                    <GradientStop Color="#D62976" Offset="0.57" />
+                                                    <GradientStop Color="#962FBF" Offset="0.82" />
+                                                    <GradientStop Color="#4F5BD5" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedChatNetwork}" Value="Instagram">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Viewbox Margin="5.5">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 8,3.5 H 16 C 18.5,3.5 20.5,5.5 20.5,8 V 16 C 20.5,18.5 18.5,20.5 16,20.5 H 8 C 5.5,20.5 3.5,18.5 3.5,16 V 8 C 3.5,5.5 5.5,3.5 8,3.5 Z"
+                                              Fill="Transparent" Stroke="White" StrokeThickness="2.1" StrokeLineJoin="Round" />
+                                        <Ellipse Canvas.Left="8.2" Canvas.Top="8.2" Width="7.6" Height="7.6"
+                                                 Fill="Transparent" Stroke="White" StrokeThickness="2.1" />
+                                        <Ellipse Canvas.Left="16.5" Canvas.Top="6.3" Width="2.1" Height="2.1" Fill="White" />
                                     </Canvas>
                                 </Viewbox>
                             </Border>
-                            <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="ChatPulse" Foreground="#24154C" FontSize="22" FontWeight="Bold" />
-                                <TextBlock Text="Рабочая область" FontSize="12" Foreground="#796C98" />
+
+                            <Border Width="34" Height="34" Background="#229ED9" CornerRadius="17">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedChatNetwork}" Value="Telegram">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Viewbox Margin="5">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 3.4,11.4 L 20.4,4.7 C 21.2,4.4 21.7,4.8 21.5,5.9 L 18.6,19.2 C 18.4,20.1 17.9,20.4 17.1,19.9 L 12.8,16.8 L 10.6,18.9 C 10.2,19.3 9.8,19.1 9.8,18.5 L 9.8,15.3 L 17.7,8.1 C 18.1,7.7 17.7,7.5 17.2,7.8 L 7.6,14.0 L 3.5,12.7 C 2.5,12.4 2.5,11.8 3.4,11.4 Z"
+                                              Fill="White" />
+                                    </Canvas>
+                                </Viewbox>
+                            </Border>
+                        </Grid>
+
+                        <TextBlock Grid.Column="1" Text="{Binding SelectedChatTitle}"
+                                   Foreground="#24154C" FontSize="30" FontWeight="Bold"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Text="Настройки" Foreground="#24154C" FontSize="32" FontWeight="Bold"
+                               TextTrimming="CharacterEllipsis"
+                               Visibility="{Binding IsSettingsVisible, Converter={StaticResource BoolVisible}}" />
+                </Grid>
+                <Border Grid.Column="1" Background="White" CornerRadius="11" BorderBrush="#E8DDF3"
+                        BorderThickness="1" Padding="15,10" ToolTip="Автоматическая ежедневная проверка будет реализована позже">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="9" Height="9" Fill="#BA35E8" VerticalAlignment="Center" Margin="0,0,9,0" />
+                        <TextBlock Text="Ежедневная проверка · в разработке" Foreground="#65547D"
+                                   FontSize="12" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Главная: используем только реально прочитанные данные. -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding IsHomeVisible, Converter={StaticResource BoolVisible}}">
+                <StackPanel Margin="0,0,10,15">
+                    <TextBlock Text="Обзор подключённых чатов и найденных заданий"
+                               FontSize="14" Foreground="#837397" Margin="0,0,0,24" />
+
+                    <Grid Margin="0,0,0,20">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource PanelCard}" Margin="0,0,10,0" MinHeight="128">
+                            <StackPanel>
+                                <TextBlock Text="Найдено заданий" Foreground="#74658B" FontSize="13" />
+                                <TextBlock Text="{Binding TotalDetected}" Foreground="#24154C" FontWeight="Bold" FontSize="30" Margin="0,8,0,2" />
+                                <TextBlock Text="По загруженной истории" Foreground="#9385A8" FontSize="11" />
                             </StackPanel>
-                        </StackPanel>
-                        <TextBlock Grid.Row="1" Text="Подключённые чаты" FontSize="15" FontWeight="SemiBold"
-                                   Foreground="#24154C" Margin="4,0,0,14" />
-                        <ListBox x:Name="ChatList" Grid.Row="2" ItemsSource="{Binding Chats}"
-                                 SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
-                                 SelectionChanged="ChatList_OnSelectionChanged"
-                                 ItemContainerStyle="{StaticResource WorkspaceChatItemStyle}"
-                                 BorderThickness="0" Background="Transparent"
-                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14"
-                                                   Foreground="#24154C" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding Network}" FontSize="12" Foreground="#796C98"
-                                                   Margin="0,4,0,0" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                        <Border Grid.Row="3" CornerRadius="10" Background="#F0E8FF" Padding="12,10">
-                            <TextBlock Text="Чаты подключены и история загружена"
-                                       TextWrapping="Wrap" Foreground="#654293" FontSize="12" />
+                        </Border>
+                        <Border Grid.Column="1" Style="{StaticResource PanelCard}" Margin="5,0" MinHeight="128">
+                            <StackPanel>
+                                <TextBlock Text="Подключено чатов" Foreground="#74658B" FontSize="13" />
+                                <TextBlock Text="{Binding ConnectedChatCount}" Foreground="#24154C" FontWeight="Bold" FontSize="30" Margin="0,8,0,2" />
+                                <TextBlock Text="С загруженной историей" Foreground="#9385A8" FontSize="11" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" Style="{StaticResource PanelCard}" Margin="10,0,0,0" MinHeight="128">
+                            <StackPanel>
+                                <TextBlock Text="Выполнено сегодня" Foreground="#74658B" FontSize="13" />
+                                <TextBlock Text="—" Foreground="#24154C" FontWeight="Bold" FontSize="30" Margin="0,8,0,2" />
+                                <TextBlock Text="Учёт пока не подключён" Foreground="#9385A8" FontSize="11" />
+                            </StackPanel>
                         </Border>
                     </Grid>
-                </Border>
-                <Grid Grid.Column="1" Margin="34,28,34,28">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="Задания" FontWeight="Bold" Foreground="#24154C" FontSize="28" />
-                        <TextBlock Text="Предварительно найденные задания из загруженной истории."
-                                   Foreground="#796C98" FontSize="14" Margin="0,7,0,0" />
-                    </StackPanel>
-                    <Border Grid.Row="1" BorderBrush="#E8DEF5" BorderThickness="0,0,0,1"
-                            Margin="0,20,0,16" Padding="0,0,0,16">
+
+                    <Border Style="{StaticResource PanelCard}" Margin="0,0,0,20">
                         <StackPanel>
-                            <TextBlock Text="{Binding SelectedChatTitle}" FontSize="19" FontWeight="SemiBold"
-                                       Foreground="#24154C" />
-                            <TextBlock Text="{Binding TaskSummary}" Margin="0,4,0,0"
-                                       Foreground="#796C98" FontSize="13" TextWrapping="Wrap" />
+                            <TextBlock Text="Прогресс выполнения" Foreground="#24154C" FontSize="18" FontWeight="SemiBold" />
+                            <TextBlock Text="Появится после реализации отметок «Готово» и проверки выполнения."
+                                       Foreground="#81718F" TextWrapping="Wrap" FontSize="13" Margin="0,8,0,14" />
+                            <Border Height="9" Background="#F0E9FA" CornerRadius="5" />
                         </StackPanel>
                     </Border>
-                    <Grid Grid.Row="2">
-                        <TextBlock Text="Загружаем список заданий…" Foreground="#796C98"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Visibility="{Binding IsBusy, Converter={StaticResource BoolVisibility}}" />
-                        <TextBlock Text="В выбранном чате пока нет распознанных заданий."
-                                   TextWrapping="Wrap" Foreground="#796C98" TextAlignment="Center"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Visibility="{Binding HasNoTasks, Converter={StaticResource BoolVisibility}}" />
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                      Visibility="{Binding HasTasks, Converter={StaticResource BoolVisibility}}">
-                            <ItemsControl ItemsSource="{Binding Tasks}">
+
+                    <Border Style="{StaticResource PanelCard}" Margin="0,0,0,20">
+                        <StackPanel>
+                            <TextBlock Text="По чатам" Foreground="#24154C" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,13" />
+                            <ItemsControl ItemsSource="{Binding Chats}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border BorderBrush="#E5D8F8" BorderThickness="1" CornerRadius="12"
-                                                Background="#FCFAFF" Padding="16,14" Margin="0,0,8,12">
-                                            <StackPanel>
-                                                <TextBlock Text="Задание из Telegram" Foreground="#24154C"
-                                                           FontSize="15" FontWeight="SemiBold" />
-                                                <TextBlock Text="{Binding Text}" TextTrimming="CharacterEllipsis"
-                                                           TextWrapping="Wrap" MaxHeight="130" Margin="0,8,0,10"
-                                                           Foreground="#655A7E" FontSize="13" />
-                                                <Button Content="Открыть публикацию" Tag="{Binding PostUrl}"
-                                                        Click="OpenPostButton_OnClick" HorizontalAlignment="Left"
-                                                        Style="{StaticResource WorkspaceOpenLinkButton}" />
-                                            </StackPanel>
+                                        <Border BorderBrush="#F0E8F6" BorderThickness="0,0,0,1" Padding="0,12">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="35" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding NetworkSymbol}" FontSize="24" Foreground="#A242E6" VerticalAlignment="Center" />
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Title}" Foreground="#24154C" FontSize="14" FontWeight="SemiBold"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Network}" FontSize="11" Foreground="#827393" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="2" Text="{Binding DetectedLabel}" Foreground="#72638A"
+                                                           FontSize="12" VerticalAlignment="Center" Margin="6,0,14,0" />
+                                                <Button Grid.Column="3" Content="Открыть" Tag="{Binding}"
+                                                        Click="OpenChatButton_OnClick" Style="{StaticResource WorkspaceActionButton}" />
+                                            </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </ScrollViewer>
+                            <TextBlock Text="{Binding LoadMessage}" FontSize="12" Foreground="#8C6DAB" Margin="0,14,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource PanelCard}" Background="#F5EDFF">
+                        <StackPanel>
+                            <TextBlock Text="Дальше в ChatPulse" Foreground="#24154C" FontSize="17" FontWeight="SemiBold" />
+                            <TextBlock Text="Отметки выполнения, проверка подписок и ежедневный аудит будут добавлены по мере разработки."
+                                       Foreground="#71628A" FontSize="13" TextWrapping="Wrap" Margin="0,8,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Плитки чата закреплены над прокручиваемым списком заданий. -->
+            <Grid Grid.Row="1" Margin="0,16,10,18"
+                  Visibility="{Binding IsChatVisible, Converter={StaticResource BoolVisible}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="0,0,0,22">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Click="TasksTabButton_OnClick" Margin="0,0,10,0"
+                                Style="{StaticResource FeatureTile}" Background="#F1E8FF" MinHeight="116">
+                            <StackPanel>
+                                <TextBlock Text="▤  Задания" FontSize="15" FontWeight="SemiBold" Foreground="#693BBA" />
+                                <TextBlock Text="{Binding SelectedChatTaskCount}" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
+                                <TextBlock Text="Предварительно найдено" Foreground="#827092" FontSize="11" />
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="1" Click="SubscriptionsTabButton_OnClick" Margin="5,0"
+                                Style="{StaticResource FeatureTile}" Background="#FFF4F9" MinHeight="116">
+                            <StackPanel>
+                                <TextBlock Text="♡  Мои подписки" FontSize="15" FontWeight="SemiBold" Foreground="#AF328E" />
+                                <TextBlock Text="—" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
+                                <TextBlock Text="Проверка появится позже" Foreground="#827092" FontSize="11" />
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="2" Click="MembersTabButton_OnClick" Margin="10,0,0,0"
+                                Style="{StaticResource FeatureTile}" Background="#F6F0FF" MinHeight="116">
+                            <StackPanel>
+                                <TextBlock Text="◌  Активные участницы" FontSize="15" FontWeight="SemiBold" Foreground="#7545B9" />
+                                <TextBlock Text="—" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
+                                <TextBlock Text="Список появится позже" Foreground="#827092" FontSize="11" />
+                            </StackPanel>
+                        </Button>
                     </Grid>
-                </Grid>
+
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}"
+                            Visibility="{Binding IsTasksVisible, Converter={StaticResource BoolVisible}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="Задания" Foreground="#24154C" FontSize="21" FontWeight="Bold" />
+                            <TextBlock Grid.Row="1" Text="{Binding TaskSummary}" Foreground="#81718F" FontSize="12" Margin="0,6,0,14"
+                                       TextWrapping="Wrap" />
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,20">
+                                <Button x:Name="DetectedFilterButton" Content="Найденные" Click="DetectedFilterButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,0"
+                                        Background="{StaticResource AccentBrush}" Foreground="White" BorderThickness="0" />
+                                <Button x:Name="CompletedFilterButton" Content="Выполненные" Click="CompletedFilterButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Opacity="0.6" />
+                            </StackPanel>
+                            <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel>
+                                    <TextBlock Text="Загружаем задания…" Foreground="#876FA0" FontSize="13"
+                                               HorizontalAlignment="Center" Margin="0,25"
+                                               Visibility="{Binding IsBusy, Converter={StaticResource BoolVisible}}" />
+                                    <TextBlock Text="{Binding EmptyTasksMessage}" Foreground="#827393" FontSize="13"
+                                               TextWrapping="Wrap" HorizontalAlignment="Center" Margin="0,30"
+                                               Visibility="{Binding HasNoTasks, Converter={StaticResource BoolVisible}}" />
+                                    <ItemsControl ItemsSource="{Binding Tasks}"
+                                                  Visibility="{Binding HasTasks, Converter={StaticResource BoolVisible}}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="#ECE4F5" BorderThickness="1" Background="#FCFAFF"
+                                                        CornerRadius="12" Margin="0,0,0,10" Padding="15,13">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="42" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Width="34" Height="34" Background="#F0E5FF" CornerRadius="10">
+                                                            <TextBlock Text="▤" FontSize="19" Foreground="#9152D5"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,15,0">
+                                                            <TextBlock Text="{Binding Title}" Foreground="#24154C" FontSize="13" FontWeight="SemiBold" />
+                                                            <TextBlock Text="{Binding Description}" Foreground="#80708E" FontSize="12"
+                                                                       TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
+                                                        </StackPanel>
+                                                        <Button Grid.Column="2" Content="↗  Открыть" Tag="{Binding PostUrl}"
+                                                                Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                VerticalAlignment="Center" Margin="0,0,9,0" />
+                                                        <Button Grid.Column="3" Content="✓  Готово" IsEnabled="False"
+                                                                ToolTip="Отметка выполнения будет реализована позже"
+                                                                Style="{StaticResource WorkspaceActionButton}"
+                                                                Background="{StaticResource AccentBrush}" Foreground="White"
+                                                                BorderThickness="0" VerticalAlignment="Center" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}"
+                            Visibility="{Binding IsSubscriptionsVisible, Converter={StaticResource BoolVisible}}">
+                        <StackPanel>
+                            <TextBlock Text="Мои подписки" Foreground="#24154C" FontSize="22" FontWeight="SemiBold" />
+                            <TextBlock Text="Здесь можно будет проверять подписки на активных участниц выбранного чата."
+                                       Margin="0,11,0,8" Foreground="#766787" FontSize="14" TextWrapping="Wrap" />
+                            <TextBlock Text="Функциональность пока не реализована" Foreground="#B039A6" FontSize="12" />
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}"
+                            Visibility="{Binding IsMembersVisible, Converter={StaticResource BoolVisible}}">
+                        <StackPanel>
+                            <TextBlock Text="Активные участницы" Foreground="#24154C" FontSize="22" FontWeight="SemiBold" />
+                            <TextBlock Text="Здесь появится список активных участниц, а позже — проверка подписок на вас."
+                                       Margin="0,11,0,8" Foreground="#766787" FontSize="14" TextWrapping="Wrap" />
+                            <TextBlock Text="Функциональность пока не реализована" Foreground="#B039A6" FontSize="12" />
+                        </StackPanel>
+                    </Border>
             </Grid>
-        </Border>
+
+            <!-- Настройки — визуальный каркас, без ложного подключения чатов. -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding IsSettingsVisible, Converter={StaticResource BoolVisible}}">
+                <StackPanel Margin="0,0,10,0">
+                    <TextBlock Text="Управление ChatPulse" Foreground="#837397" FontSize="14" Margin="0,5,0,24" />
+                    <Border Style="{StaticResource PanelCard}" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="Подключённые чаты" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
+                            <TextBlock Text="{Binding ConnectedChatCount, StringFormat='Сейчас подключено: {0}'}"
+                                       Foreground="#75499F" Margin="0,9,0,6" FontSize="14" />
+                            <TextBlock Text="Добавление и удаление чатов появится здесь на следующем этапе разработки."
+                                       Foreground="#81718F" FontSize="13" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource PanelCard}">
+                        <StackPanel>
+                            <TextBlock Text="Ежедневная проверка" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
+                            <TextBlock Text="Автоматическая проверка и ограниченный ручной повтор будут настроены после реализации основной логики."
+                                       Foreground="#81718F" Margin="0,9,0,0" FontSize="13" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
     </Grid>
 </UserControl>
