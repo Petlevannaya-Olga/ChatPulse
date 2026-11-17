@@ -34,16 +34,20 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     public bool IsSynchronizationPhase => CurrentPhase == SynchronizationScreenPhase.SYNCHRONIZING;
     public bool IsHistoryResultPhase => CurrentPhase == SynchronizationScreenPhase.HISTORY_RESULT;
     public SynchronizationScreenPhase CurrentPhase => SynchronizationScreenPhaseResolver.Resolve(
-        Chats.Count, Chats.Count(row => row.IsComplete), IsBusy);
+        Chats.Count, Chats.Count(row => !row.NeedsSynchronization), IsBusy);
     public string PhaseSubtitle => CurrentPhase switch
     {
         SynchronizationScreenPhase.SYNCHRONIZING => "Получаем и сохраняем сообщения из Telegram.",
         SynchronizationScreenPhase.HISTORY_RESULT => "Настройте период загрузки истории для каждого чата.",
         _ => "Выберите период загрузки для каждого чата — от 1 до 30 дней."
     };
-    public int CompletedChatCount => Chats.Count(row => row.IsComplete);
+    public int CompletedChatCount => Chats.Count(row => !row.NeedsSynchronization);
     public int TotalChatCount => Chats.Count;
-    public string PrimaryButtonText => "Начать синхронизацию";
+    public string PrimaryButtonText => Chats.Any(row => row.IsComplete)
+        ? "Синхронизировать"
+        : "Начать синхронизацию";
+    public bool ShowSynchronizationButton => CanStart;
+    public bool ShowContinueButton => CanContinue;
 
     private void RefreshPhase()
     {
@@ -56,11 +60,14 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         Notify(nameof(TotalChatCount));
         Notify(nameof(CanStart));
         Notify(nameof(CanContinue));
+        Notify(nameof(ShowSynchronizationButton));
+        Notify(nameof(ShowContinueButton));
+        Notify(nameof(PrimaryButtonText));
     }
-    public bool CanStart => !IsBusy && Chats.Any(row => !row.IsComplete);
+    public bool CanStart => !IsBusy && SynchronizationBatchPlan.SelectPending(Chats).Length > 0;
     public bool CanModifyPeriods => !IsBusy;
     public bool CanContinue => !IsBusy && Chats.Count > 0 &&
-        Chats.All(row => row.IsComplete && !row.HasPeriodChange);
+        SynchronizationBatchPlan.SelectPending(Chats).Length == 0;
     public string CurrentActivity { get => _currentActivity; private set { _currentActivity = value; Notify(); } }
 
     public void Initialize(ISettingsService settings, ChatSynchronizationService synchronization,
@@ -114,8 +121,8 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     private void OnChatRowChanged(object? sender, PropertyChangedEventArgs args)
     {
         if (args.PropertyName is nameof(SynchronizationChatRow.HasPeriodChange) or
-            nameof(SynchronizationChatRow.IsComplete))
-            Notify(nameof(CanContinue));
+            nameof(SynchronizationChatRow.IsComplete) or nameof(SynchronizationChatRow.NeedsSynchronization))
+            RefreshPhase();
     }
 
     // Saving a period never starts a Telegram import or connects a pending chat.
@@ -153,11 +160,18 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         IsBusy = true;
         try
         {
-            // Explicit button click is the only entry point for the first history import.
-            // Persist *all* selected periods before any Telegram request or chat connection.
+            // One explicit action for first imports, retries and period changes.
+            // Capture the plan before rows start changing state during synchronization.
             await PersistPeriodsAsync();
-            foreach (var row in Chats.Where(row => !row.IsComplete).ToArray())
-                await SynchronizeRowAsync(row);
+            foreach (var row in SynchronizationBatchPlan.SelectPending(Chats))
+            {
+                if (row.IsComplete && row.HasPeriodChange)
+                    await ReloadCompletedRowAsync(row);
+                else
+                    await SynchronizeRowAsync(row);
+            }
+            if (Chats.All(row => !row.NeedsSynchronization))
+                CurrentActivity = "История сообщений загружена.";
         }
         catch (Exception exception)
         {
@@ -170,36 +184,30 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         }
     }
 
-    private async void ReloadHistoryButton_OnClick(object sender, RoutedEventArgs args)
+    private async Task ReloadCompletedRowAsync(SynchronizationChatRow row)
     {
-        if (sender is not Button { Tag: SynchronizationChatRow row } || IsBusy ||
-            !row.CanReloadHistory || _settings is null || _synchronization is null) return;
-        IsBusy = true;
+        if (_settings is null || _synchronization is null) return;
+        row.SetReloading();
+        CurrentActivity = $"{row.Title}: обновляем историю за {row.Days} дн.";
         try
         {
-            await PersistPeriodsAsync();
-            var chat = (await _settings.LoadAsync()).Chats.Single(item =>
-                item.TelegramUserId == row.Owner && item.PeerId == row.PeerId && item.PeerType == row.PeerType);
-            var count = await _synchronization.ReloadHistoryAsync(chat, row.Days, phase =>
-                CurrentActivity = $"{row.Title}: {phase}");
+            var configured = (await _settings.LoadAsync()).Chats.Single(chat =>
+                chat.TelegramUserId == row.Owner && chat.PeerId == row.PeerId &&
+                chat.PeerType == row.PeerType);
+            var count = await _synchronization.ReloadHistoryAsync(configured, row.Days, phase =>
+            {
+                row.SetReloadProgress(phase);
+                CurrentActivity = $"{row.Title}: {phase}";
+            });
             row.SetCompleted(count);
-            row.ConfirmPeriod();
         }
         catch (Exception exception)
         {
-            // Keep the last successful status and imported history on a failed reimport.
+            // ReloadHistoryAsync preserves the previous SQLite snapshot on fetch failure.
+            // Keep the old successful state; the new period remains pending for retry.
+            row.SetReloadFailed(exception.Message);
             CurrentActivity = $"{row.Title}: не удалось обновить историю — {exception.Message}";
-            MessageBox.Show(CurrentActivity, "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-        finally { IsBusy = false; RefreshPhase(); }
-    }
-
-    private async void RetryButton_OnClick(object sender, RoutedEventArgs args)
-    {
-        if (sender is not Button { Tag: SynchronizationChatRow row } || IsBusy || !row.CanRetry) return;
-        IsBusy = true;
-        try { await SynchronizeRowAsync(row); }
-        finally { IsBusy = false; Notify(nameof(CanStart)); }
     }
 
     private async Task SynchronizeRowAsync(SynchronizationChatRow row)
@@ -244,10 +252,21 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
             CurrentActivity = "История сообщений загружена.";
     }
 
-    private void ContinueButton_OnClick(object sender, RoutedEventArgs args)
+    private async void ContinueButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (CanContinue)
-            ContinueRequested?.Invoke(this, EventArgs.Empty);
+        if (!CanContinue) return;
+        try
+        {
+            // Wait for any outstanding slider save before completing onboarding.
+            await PersistPeriodsAsync();
+            if (CanContinue)
+                ContinueRequested?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception exception)
+        {
+            CurrentActivity = $"Не удалось сохранить период: {exception.Message}";
+            MessageBox.Show(CurrentActivity, "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private async void BackButton_OnClick(object sender, RoutedEventArgs args)
@@ -299,6 +318,11 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         };
         _details = chat.SynchronizationError ??
             (_state == ChatSynchronizationState.COMPLETED ? $"Сообщений: {_importedMessageCount}" : string.Empty);
+        if (HasPeriodChange)
+        {
+            _status = "Период изменён";
+            _details = "История будет обновлена после нажатия «Синхронизировать».";
+        }
     }
 
     public SynchronizationChatRow(PendingChatConnection pending)
@@ -337,17 +361,24 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
             if (!CanEditPeriod || value is < 1 or > 30 || _days == value) return;
             _days = value;
             Notify();
+            if (IsComplete)
+            {
+                Status = HasPeriodChange ? "Период изменён" : "История сообщений загружена";
+                Details = HasPeriodChange
+                    ? "История будет обновлена после нажатия «Синхронизировать»."
+                    : $"Сообщений: {_importedMessageCount}";
+            }
             Notify(nameof(HasPeriodChange));
-            Notify(nameof(CanReloadHistory));
+            Notify(nameof(NeedsSynchronization));
         }
     }
     public bool HasPeriodChange => IsComplete && _days != _loadedDays;
-    public bool CanReloadHistory => HasPeriodChange; 
+    public bool NeedsSynchronization => !IsComplete || HasPeriodChange; 
     public void ConfirmPeriod()
     {
         _loadedDays = _days;
         Notify(nameof(HasPeriodChange));
-        Notify(nameof(CanReloadHistory));
+        Notify(nameof(NeedsSynchronization));
     }
     public string Status { get => _status; private set { _status = value; Notify(); } }
     public string Details { get => _details; private set { _details = value; Notify(); } }
@@ -366,6 +397,7 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
     public void SetCompleted(int count)
     {
         _state = ChatSynchronizationState.COMPLETED;
+        _loadedDays = _days;
         _importedMessageCount = count;
         Notify(nameof(ImportedMessageCount));
         Status = "История сообщений загружена";
@@ -379,14 +411,38 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         Details = message;
         UpdateState();
     }
+    public void SetReloading()
+    {
+        // A reload does not invalidate the previously imported snapshot.
+        Status = "Обновляем историю";
+        Details = "Загружаем сообщения за новый период…";
+    }
+    public void SetReloadProgress(string phase) => Details = phase;
+    public void SetReloadFailed(string message)
+    {
+        Status = "Не удалось обновить историю";
+        Details = $"Прежняя история сохранена. {message}";
+        // _state and _loadedDays stay unchanged so the common button can retry.
+        UpdateState();
+    }
     private void UpdateState()
     {
         Notify(nameof(IsComplete));
         Notify(nameof(CanRetry));
         Notify(nameof(CanEditPeriod));
         Notify(nameof(HasPeriodChange));
-        Notify(nameof(CanReloadHistory));
+        Notify(nameof(NeedsSynchronization));
     }
     private void Notify([CallerMemberName] string? property = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+}
+
+/// <summary>
+/// Produces the immutable work list for one explicit click. Successfully imported chats
+/// without period changes must never be requested again by this batch.
+/// </summary>
+public static class SynchronizationBatchPlan
+{
+    public static SynchronizationChatRow[] SelectPending(IEnumerable<SynchronizationChatRow> chats)
+        => chats.Where(row => row.NeedsSynchronization).ToArray();
 }
