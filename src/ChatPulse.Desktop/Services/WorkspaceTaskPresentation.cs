@@ -36,6 +36,28 @@ public sealed record WorkspaceTaskPresentation(
             for (var index = match.Index; index < match.Index + match.Length; index++)
                 removed[index] = true;
 
+        // A standalone "или" between alternative Instagram Reel/Post URLs is
+        // part of the links' presentation, not of the task's instructions.
+        // Remove it only when the entire gap between consecutive URLs is
+        // whitespace and this conjunction. Ordinary text remains untouched.
+        for (var matchIndex = 0; matchIndex < matches.Length - 1; matchIndex++)
+        {
+            var first = matches[matchIndex];
+            var second = matches[matchIndex + 1];
+            if (string.Equals(first.Groups["kind"].Value, second.Groups["kind"].Value,
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var gapStart = first.Index + first.Length;
+            var gap = text.AsSpan(gapStart, second.Index - gapStart);
+            if (!gap.Trim().Equals("или".AsSpan(), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            for (var index = gapStart; index < second.Index; index++)
+                if (!char.IsWhiteSpace(text[index]))
+                    removed[index] = true;
+        }
+
         var visibleCharacters = new List<(char Character, int OriginalOffset)>(text.Length);
         for (var index = 0; index < text.Length; index++)
         {

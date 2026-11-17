@@ -99,4 +99,51 @@ public sealed class WorkspaceTaskPresentationTests
         Assert.Equal(original, WorkspaceTaskPresentation.Create(original, string.Empty).Text);
     }
 
+    [Theory]
+    [InlineData("или")]
+    [InlineData("ИЛИ")]
+    [InlineData("Или")]
+    public void RemovesStandaloneOrBetweenExtractedReelAndPost(string conjunction)
+    {
+        const string reel = "https://www.instagram.com/reel/abc123/";
+        const string post = "https://www.instagram.com/p/def456/";
+        var original = $"VIP LITE\n\n{reel}\n\n{conjunction}\n\n{post}\n\nПОДПИСКА";
+
+        var result = WorkspaceTaskPresentation.Create(original, string.Empty);
+
+        Assert.Equal("VIP LITE\n\nПОДПИСКА", result.Text);
+        Assert.Equal(reel, result.ReelUrl);
+        Assert.Equal(post, result.FeedPostUrl);
+    }
+
+    [Fact]
+    public void PreservesOrInTaskInstructionsAndWhenOnlyOnePostLinkExists()
+    {
+        const string reel = "https://www.instagram.com/reel/abc123/";
+        const string post = "https://www.instagram.com/p/def456/";
+        var instructions = $"Поставить лайк или написать комментарий\n{reel}\n{post}\nМожно сохранить или переслать";
+        var result = WorkspaceTaskPresentation.Create(instructions, string.Empty);
+        Assert.Equal("Поставить лайк или написать комментарий\nМожно сохранить или переслать", result.Text);
+
+        var standalone = WorkspaceTaskPresentation.Create($"{reel}\nили\nПроверить текст", string.Empty);
+        Assert.Equal("или\nПроверить текст", standalone.Text);
+    }
+
+    [Fact]
+    public void RemapsCustomEmojiAfterRemovingOrBetweenLinks()
+    {
+        const string reel = "https://www.instagram.com/reel/abc123/";
+        const string post = "https://www.instagram.com/p/def456/";
+        var original = $"{reel}\nИли\n{post}\n\n⚡ПОДПИСКА";
+        var emoji = new TelegramCustomEmoji(original.IndexOf('⚡'), 1, 123);
+
+        var result = WorkspaceTaskPresentation.Create(original, JsonSerializer.Serialize(new[] { emoji }));
+        var entities = JsonSerializer.Deserialize<TelegramCustomEmoji[]>(result.CustomEmojiJson);
+
+        Assert.Equal("⚡ПОДПИСКА", result.Text);
+        Assert.NotNull(entities);
+        Assert.Single(entities);
+        Assert.Equal(0, entities[0].Offset);
+    }
+
 }
