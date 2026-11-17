@@ -123,7 +123,7 @@ public sealed class WorkspaceTaskPresentationTests
         const string post = "https://www.instagram.com/p/def456/";
         var instructions = $"Поставить лайк или написать комментарий\n{reel}\n{post}\nМожно сохранить или переслать";
         var result = WorkspaceTaskPresentation.Create(instructions, string.Empty);
-        Assert.Equal("Поставить лайк или написать комментарий\nМожно сохранить или переслать", result.Text);
+        Assert.Equal("Поставить лайк или написать комментарий\n\nМожно сохранить или переслать", result.Text);
 
         var standalone = WorkspaceTaskPresentation.Create($"{reel}\nили\nПроверить текст", string.Empty);
         Assert.Equal("или\nПроверить текст", standalone.Text);
