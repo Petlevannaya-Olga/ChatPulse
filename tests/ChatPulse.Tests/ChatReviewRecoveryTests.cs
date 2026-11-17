@@ -40,6 +40,29 @@ public sealed class ChatReviewRecoveryTests
         Assert.False(row.NeedsConnectionRetry);
     }
     [Fact]
+    public void ErrorRow_RemainsRetryableWithoutConnectionStateTransition()
+    {
+        var row = new ChatAnalysisResultRow("14 Пост чат б/с");
+        row.SetError("Не удалось подтвердить Telegram-аккаунт для анализа.", needsConnectionRetry: true);
+
+        Assert.Equal("Error", row.StatusKind);
+        Assert.True(row.NeedsConnectionRetry);
+        Assert.False(row.CanConnect);
+    }
+
+    [Fact]
+    public void RetrySuccess_ClearsPreviousErrorState()
+    {
+        var row = new ChatAnalysisResultRow("14 Пост чат б/с");
+        row.SetError("Не удалось подтвердить Telegram-аккаунт для анализа.", needsConnectionRetry: true);
+        row.SetResult(ChatPulse.Application.Features.Chats.Analyze.ChatActivityAnalyzer.Analyze(
+            Array.Empty<ChatPulse.Application.Features.Chats.Analyze.ChatActivityMessage>()), 7, 0);
+
+        Assert.Equal("Warning", row.StatusKind);
+        Assert.False(row.NeedsConnectionRetry);
+    }
+
+    [Fact]
     public void Navigation_InvalidatesOldAnalysisWithoutCancellingTelegramRequest()
     {
         var generation = new ChatReviewRunGeneration();

@@ -66,6 +66,9 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     }
     public bool CanConnectChats => isReview && analysisCompleted && !IsAnalyzing &&
                                    AnalysisRows.Any(row => row.CanConnect);
+    public bool CanRetryReview => isReview && !IsAnalyzing &&
+                                  AnalysisRows.Any(row => row.StatusKind == "Error");
+    private void RefreshCanRetryReview() => Changed(nameof(CanRetryReview));
     private void RefreshCanConnect() => Changed(nameof(CanConnectChats));
     public int RecognizedCount => AnalysisRows.Count(row => row.StatusKind == "Success");
     public int AttentionCount => AnalysisRows.Count(row => row.StatusKind == "Warning");
@@ -133,6 +136,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             analysisCompleted = false;
             retryOnConnectionRestored = false;
             RefreshCanConnect();
+            RefreshCanRetryReview();
             return;
         }
         if (ViewModel is not { } viewModel) return;
@@ -233,11 +237,21 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                 AnalysisRows.Add(new ChatAnalysisResultRow(item.Title));
         }
         RefreshCanConnect();
+        RefreshCanRetryReview();
         UpdateAnalysisCounts();
         if (ViewModel is not { } vm) return;
         IsAnalyzing = true;
+        RefreshCanRetryReview();
         try
         {
+            // The Telegram owner can be reset when moving between onboarding steps.
+            // Restore it before attempting to analyze any chat; never treat a missing
+            // cached user id as proof of a network outage.
+            if (vm.CurrentTelegramUserId is not > 0)
+            {
+                await vm.EnsureLoadedAsync();
+                if (!analysisGeneration.IsCurrent(epoch) || !IsVisible || !isReview) return;
+            }
             for (var i = 0; i < chosen.Length; i++)
             {
                 // Stop after any in-flight request finishes if this view/run was left.
@@ -260,12 +274,14 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                     if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
                     AnalysisRows[i].SetError(exception.Message, needsConnectionRetry: true);
                     UpdateAnalysisCounts();
+                    RefreshCanRetryReview();
                 }
                 catch (Exception)
                 {
                     if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
                     AnalysisRows[i].SetError("Не удалось проверить этот чат. Повторите анализ.");
                     UpdateAnalysisCounts();
+                    RefreshCanRetryReview();
                 }
             }
             if (analysisGeneration.IsCurrent(epoch) && !token.IsCancellationRequested)
@@ -283,6 +299,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                 IsAnalyzing = false;
                 CurrentAnalyzedChatName = string.Empty;
                 RefreshCanConnect();
+                RefreshCanRetryReview();
                 if (retryOnConnectionRestored && IsVisible && isReview && vm.IsTelegramAvailable)
                 {
                     retryOnConnectionRestored = false;
@@ -291,6 +308,23 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                 }
             }
         }
+    }
+
+    private async void RetryReview_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (!CanRetryReview || ViewModel is not { } vm) return;
+        if (!vm.IsTelegramAvailable)
+        {
+            ConnectionStatus = "Telegram недоступен. Дождитесь восстановления соединения и повторите проверку.";
+            return;
+        }
+
+        // Retry is explicit even when the connection monitor never reported an
+        // outage (e.g. a stale cached Telegram account after navigation).
+        if (vm.CurrentTelegramUserId is not > 0)
+            await vm.RefreshAsync();
+        if (IsVisible && isReview)
+            await AnalyzeSelectedChatsAsync(retryFailedOnly: true);
     }
 
     private void ConnectChats_OnClick(object sender, RoutedEventArgs e)
@@ -328,6 +362,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         Changed(nameof(SelectionVisibility));
         Changed(nameof(ReviewVisibility));
         RefreshCanConnect();
+        RefreshCanRetryReview();
     }
 
     private void BackButton_OnClick(object sender, RoutedEventArgs e)

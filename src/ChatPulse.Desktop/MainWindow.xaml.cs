@@ -193,7 +193,10 @@ public partial class MainWindow : Window
 
     private void ShowStep(OnboardingStep step)
     {
-        if (step == OnboardingStep.FirstChat && ThirdStepScreen.Visibility != Visibility.Visible)
+        // Returning from synchronization must not discard the verified Telegram owner
+        // and the selected chats. Going forward from Telegram still refreshes them.
+        if (step == OnboardingStep.FirstChat && ThirdStepScreen.Visibility != Visibility.Visible &&
+            FourthStepScreen.Visibility != Visibility.Visible)
             _firstChatSetup.Invalidate();
 
         WelcomeScreen.Visibility = step == OnboardingStep.Welcome

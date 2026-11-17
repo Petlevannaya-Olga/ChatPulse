@@ -479,6 +479,9 @@
                                        TextTrimming="CharacterEllipsis" Margin="150,0,18,0"
                                        HorizontalAlignment="Center" />
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Повторить проверку" Click="RetryReview_OnClick"
+                                        Visibility="{Binding CanRetryReview, Converter={StaticResource BoolToVisibility}}"
+                                        Style="{StaticResource OutlineBackButton}" Margin="0,0,12,0" />
                                 <Button Content="Продолжить  →" Click="ShowReview_OnClick"
                                         Visibility="{Binding SelectionVisibility}"
                                         IsEnabled="{Binding HasSelection}"
