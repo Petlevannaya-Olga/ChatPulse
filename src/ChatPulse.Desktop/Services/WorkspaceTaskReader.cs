@@ -67,9 +67,10 @@ public sealed class WorkspaceTaskReader(string databasePath)
         {
             var messageId = reader.GetInt64(0);
             var messageText = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-            // Messages without URLs and participant registers are not task cards.
+            // URL-less messages, participant registers and post-chat rules are not task cards.
             if (!ParticipantListParser.HasAnyLink(messageText) ||
-                ParticipantListParser.TryParse(messageText, out _)) continue;
+                ParticipantListParser.TryParse(messageText, out _) ||
+                ChatRulesMessageClassifier.IsChatRules(messageText)) continue;
             var evidence = ChatActivityAnalyzer.AnalyzeMessage(new ChatActivityMessage(messageId, messageText));
             var postUrl = evidence.PostLinks.FirstOrDefault() ?? string.Empty;
             var sourceUrl = string.Equals(chat.PeerType, "Channel", StringComparison.OrdinalIgnoreCase)

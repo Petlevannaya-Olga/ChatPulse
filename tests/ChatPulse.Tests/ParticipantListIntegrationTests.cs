@@ -39,6 +39,73 @@ public sealed class ParticipantListIntegrationTests
         https://www.instagram.com/b.marina.88Х
         """;
 
+    private const string CHAT_RULES = """
+        ✨Это наш ПОСТ ЧАТ✨
+        ◇ Сюда мы скидываем ссылки для актива
+        ◇ Обязательно 2 ссылки
+        ◇ Лишнего ничего не пишем, только просьбы актива
+        ◇ Не более 4х ссылок в неделю, любой давности
+        ◇ Пост чат закрывается на выходные в пт в 23.00 и открывается в пн в 7.00
+        Суббота и Воскресенье выходные в чате
+        Аккаунт для репостов: https://www.instagram.com/repost.orion.chat
+        """;
+
+    [Fact]
+    public void ChatRules_RecognizesRulesButNotRealTasks()
+    {
+        Assert.True(ChatRulesMessageClassifier.IsChatRules(CHAT_RULES));
+        Assert.False(ChatRulesMessageClassifier.IsChatRules(null));
+        Assert.False(ChatRulesMessageClassifier.IsChatRules("Аккаунт для репостов: https://www.instagram.com/repost.orion.chat"));
+        Assert.False(ChatRulesMessageClassifier.IsChatRules(
+            "Реакции на https://www.instagram.com/p/abc123/ и https://www.instagram.com/repost.orion.chat"));
+        Assert.False(ChatRulesMessageClassifier.IsChatRules(
+            "Это наш пост чат, актив на https://www.instagram.com/p/abc123/"));
+        Assert.False(ChatRulesMessageClassifier.IsChatRules(
+            "Обязательно 2 ссылки https://www.instagram.com/p/abc123/"));
+    }
+
+    [Fact]
+    public async Task WorkspaceReader_HidesChatRulesWithoutDeletingImportedHistory()
+    {
+        using var temp = new TempDirectory();
+        var database = Path.Combine(temp.Path, "history.db");
+        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        {
+            await connection.OpenAsync();
+            var create = connection.CreateCommand();
+            create.CommandText = """
+                CREATE TABLE ImportedChatMessages (
+                    TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
+                    PeerId INTEGER NOT NULL, MessageId INTEGER NOT NULL, Text TEXT,
+                    PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
+                );
+                """;
+            await create.ExecuteNonQueryAsync();
+            foreach (var (id, content) in new (long, string)[]
+                     {
+                         (1, CHAT_RULES),
+                         (2, "Реакции https://www.instagram.com/p/abc123/"),
+                         (3, "Аккаунт для репостов https://www.instagram.com/repost.orion.chat")
+                     })
+            {
+                var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO ImportedChatMessages VALUES (123, 'Channel', 101, $id, $body)";
+                insert.Parameters.AddWithValue("$id", id);
+                insert.Parameters.AddWithValue("$body", content);
+                await insert.ExecuteNonQueryAsync();
+            }
+        }
+
+        var tasks = await new WorkspaceTaskReader(database).GetTasksAsync(Chat(101));
+        Assert.Equal(new long[] { 3, 2 }, tasks.Select(item => item.MessageId));
+
+        await using var check = new SqliteConnection($"Data Source={database}");
+        await check.OpenAsync();
+        var count = check.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM ImportedChatMessages";
+        Assert.Equal(3L, await count.ExecuteScalarAsync());
+    }
+
     [Fact]
     public void Register_SeparatesSubscriptionActivityAndPenaltySuffix()
     {
