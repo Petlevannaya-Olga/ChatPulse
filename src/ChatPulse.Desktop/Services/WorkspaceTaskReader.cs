@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using ChatPulse.Application.Features.Chats.Analyze;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
@@ -44,6 +44,17 @@ public sealed class WorkspaceTaskReader(string databasePath)
         var skipTable = connection.CreateCommand();
         skipTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageSkips'";
         var hasSkips = (long)(await skipTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        var hiddenTable = connection.CreateCommand();
+        hiddenTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageHidden'";
+        var hasHidden = (long)(await hiddenTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        var hiddenPredicate = hasHidden ? """
+            AND NOT EXISTS (
+                SELECT 1 FROM ImportedMessageHidden AS hidden
+                WHERE hidden.TelegramUserId = message.TelegramUserId
+                  AND hidden.PeerType = message.PeerType
+                  AND hidden.PeerId = message.PeerId AND hidden.MessageId = message.MessageId
+            )
+            """ : string.Empty;
         var command = connection.CreateCommand();
         var ownReactionColumn = hasReactionStates ? "reaction.HasOwnReaction" : "NULL";
         var ownReactionJoin = hasReactionStates ? """
@@ -89,6 +100,7 @@ public sealed class WorkspaceTaskReader(string databasePath)
             {timestampJoin}
             {skipJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
+            {hiddenPredicate}
             ORDER BY message.MessageId ASC
             """;
         command.Parameters.AddWithValue("$owner", chat.TelegramUserId);

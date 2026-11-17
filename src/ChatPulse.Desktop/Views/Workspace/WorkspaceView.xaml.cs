@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using ChatPulse.Desktop.Services;
+using ChatPulse.Desktop.Views.Dialogs;
 using ChatPulse.Desktop.Settings;
 
 namespace ChatPulse.Desktop.Views.Workspace;
@@ -20,6 +21,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private WorkspaceTaskReader? _reader;
     private ChatSynchronizationService? _synchronization;
     private WorkspaceTaskSkipStore? _skipStore;
+    private WorkspaceCompletedTaskHideStore? _hideStore;
     private WorkspaceChatRow? _selectedChat;
     private readonly Dictionary<WorkspaceChatRow, IReadOnlyList<WorkspaceDetectedTask>> _taskCache = [];
     private WorkspacePage _page = WorkspacePage.Home;
@@ -99,6 +101,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _reader = reader;
         _synchronization = synchronization;
         _skipStore = new WorkspaceTaskSkipStore(reader.DatabasePath);
+        _hideStore = new WorkspaceCompletedTaskHideStore(reader.DatabasePath);
     }
 
     private async void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -304,6 +307,55 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private async void HideCompletedTaskButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (IsBusy || _hideStore is null || SelectedChat is null ||
+            _taskFilter != TaskFilter.Completed ||
+            sender is not Button { Tag: long messageId }) return;
+
+        var row = SelectedChat;
+        if (!_taskCache.TryGetValue(row, out var items) ||
+            !items.Any(task => task.MessageId == messageId && task.IsCompleted && !task.IsSkipped)) return;
+
+        var owner = Window.GetWindow(this);
+        var dialog = new HideCompletedTaskDialog { Owner = owner };
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        bool confirmed;
+        try
+        {
+            confirmed = dialog.ShowDialog() == true;
+        }
+        finally
+        {
+            mainWindow?.HideDialogOverlay();
+        }
+
+        if (!confirmed) return;
+
+        IsBusy = true;
+        try
+        {
+            await _hideStore.HideAsync(row.Chat, messageId);
+            _taskCache[row] = items.Where(task => task.MessageId != messageId).ToArray();
+            row.DetectedCount = _taskCache[row].Count(task => !task.IsSkipped);
+            _totalDetected = _taskCache.Sum(pair => pair.Value.Count(task => !task.IsSkipped));
+            Notify(nameof(TotalDetected));
+            Notify(nameof(SelectedChatTaskCount));
+            UpdateSelectedTasks();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Не удалось удалить задание: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifyTaskFilter();
+        }
+    }
+
     private async void SkipTaskButton_OnClick(object sender, RoutedEventArgs args)
         => await SetTaskSkippedAsync(sender, true);
 
@@ -482,7 +534,8 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     public string TimeLabel => LocalDate?.ToString("HH:mm", RUSSIAN_CULTURE) ?? string.Empty;
     public long MessageId => task.MessageId;
     public bool IsSkipped => task.IsSkipped;
-    public bool CanSkip => !task.IsSkipped;
+    public bool CanSkip => !task.IsSkipped && !task.IsCompleted;
+    public bool CanHideCompleted => task.IsCompleted && !task.IsSkipped;
     public bool CanComplete => !task.IsSkipped && !task.IsCompleted;
     public string CustomEmojiJson => task.CustomEmojiJson;
     public string PostUrl => task.PostUrl;

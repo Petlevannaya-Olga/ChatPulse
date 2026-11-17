@@ -624,6 +624,11 @@
                                                                     Visibility="{Binding CanSkip, Converter={StaticResource BoolVisible}}"
                                                                     Click="SkipTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                     Margin="0,0,9,0" />
+                                                             <Button Content="Удалить" Tag="{Binding MessageId}"
+                                                                     Visibility="{Binding CanHideCompleted, Converter={StaticResource BoolVisible}}"
+                                                                     Click="HideCompletedTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                     Background="#BB496A" Foreground="White" BorderThickness="0"
+                                                                     Margin="0,0,9,0" />
                                                             <Button Content="Вернуть в задания" Tag="{Binding MessageId}"
                                                                     Visibility="{Binding IsSkipped, Converter={StaticResource BoolVisible}}"
                                                                     Click="RestoreTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
