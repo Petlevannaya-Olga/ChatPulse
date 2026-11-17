@@ -102,8 +102,14 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     }
 
     public string SelectedCountText => $"Выбрано: {Rows.Count(row => row.IsSelected)} / 10";
-    public string ListStatus => Rows.Count == 0 ? "Доступных чатов пока нет" : $"Доступно чатов: {Rows.Count}";
-    public bool HasSelection => Rows.Any(row => row.IsSelected);
+    // The chat-list loading overlay binds to the view, not to its DataContext.
+    // Keep this property in sync with the ViewModel's IsBusy notifications.
+    public bool IsLoadingChatList => ViewModel?.IsBusy == true;
+    public string ListStatus => IsLoadingChatList
+        ? "Загружаем список чатов из Telegram…"
+        : ViewModel is { HasError: true } vm ? vm.Error
+        : Rows.Count == 0 ? "Доступных чатов пока нет" : $"Доступно чатов: {Rows.Count}";
+    public bool HasSelection => !IsLoadingChatList && Rows.Any(row => row.IsSelected);
     public Visibility SelectionVisibility => isReview ? Visibility.Collapsed : Visibility.Visible;
     public Visibility ReviewVisibility => isReview ? Visibility.Visible : Visibility.Collapsed;
 
@@ -131,6 +137,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         Changed(nameof(SelectionVisibility));
         Changed(nameof(ReviewVisibility));
         Changed(nameof(SelectedCountText));
+        Changed(nameof(IsLoadingChatList));
         Changed(nameof(HasSelection));
         Changed(nameof(ListStatus));
         RefreshCanConnect();
@@ -146,13 +153,23 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName != nameof(FirstChatSetupViewModel.IsBusy) ||
-            sender is not FirstChatSetupViewModel vm || vm.IsBusy ||
-            !IsVisible || isReview || !ReferenceEquals(ViewModel, vm)) return;
+        if (sender is not FirstChatSetupViewModel vm || !ReferenceEquals(ViewModel, vm)) return;
 
-        // EnsureLoadedAsync may return while a previous refresh is still running.
-        // Apply its eventual result when the ViewModel finishes loading.
-        SyncRows(vm.Chats);
+        if (args.PropertyName == nameof(FirstChatSetupViewModel.IsBusy))
+        {
+            Changed(nameof(IsLoadingChatList));
+            Changed(nameof(ListStatus));
+            Changed(nameof(HasSelection));
+
+            // An earlier EnsureLoadedAsync call may have returned while a refresh
+            // was still running. Apply its result when the refresh actually ends.
+            if (!vm.IsBusy && IsVisible && !isReview)
+                SyncRows(vm.Chats);
+        }
+        else if (args.PropertyName == nameof(FirstChatSetupViewModel.Error))
+        {
+            Changed(nameof(ListStatus));
+        }
     }
 
     private void OnTelegramConnectionRestored(object? sender, EventArgs e)

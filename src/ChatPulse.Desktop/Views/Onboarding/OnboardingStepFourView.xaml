@@ -206,14 +206,6 @@
                 <!-- Phase information is visible only during the actual operation. -->
                 <StackPanel Grid.Row="1" Margin="0,0,0,12"
                             Visibility="{Binding IsSynchronizationPhase, Converter={StaticResource BoolVisibility}}">
-                    <Grid Margin="0,0,0,7">
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock Text="Готово: " Foreground="#796C98"/>
-                            <TextBlock Text="{Binding CompletedChatCount}" Foreground="#633AA3" FontWeight="SemiBold"/>
-                            <TextBlock Text=" из " Foreground="#796C98"/>
-                            <TextBlock Text="{Binding TotalChatCount}" Foreground="#633AA3" FontWeight="SemiBold"/>
-                        </StackPanel>
-                    </Grid>
                     <TextBlock Text="{Binding CurrentActivity}" Foreground="#633AA3" Margin="0,0,0,9"
                                FontSize="13" TextWrapping="Wrap"/>
                     <ProgressBar Height="5" Foreground="#9042ED" Background="#EEE5FA" IsIndeterminate="True"/>
