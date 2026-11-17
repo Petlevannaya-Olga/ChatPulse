@@ -31,21 +31,31 @@ public sealed class WorkspaceTaskReader(string databasePath)
         var stateTable = connection.CreateCommand();
         stateTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageReactionStates'";
         var hasReactionStates = (long)(await stateTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        var authorTable = connection.CreateCommand();
+        authorTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageAuthors'";
+        var hasAuthors = (long)(await authorTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
         var command = connection.CreateCommand();
-        command.CommandText = hasReactionStates ? """
-            SELECT message.MessageId, message.Text, reaction.HasOwnReaction
-            FROM ImportedChatMessages AS message
+        var ownReactionColumn = hasReactionStates ? "reaction.HasOwnReaction" : "NULL";
+        var ownReactionJoin = hasReactionStates ? """
             LEFT JOIN ImportedMessageReactionStates AS reaction
               ON reaction.TelegramUserId = message.TelegramUserId
              AND reaction.PeerType = message.PeerType
              AND reaction.PeerId = message.PeerId AND reaction.MessageId = message.MessageId
+            """ : string.Empty;
+        var authorColumn = hasAuthors ? "author.AuthorName" : "NULL";
+        var authorJoin = hasAuthors ? """
+            LEFT JOIN ImportedMessageAuthors AS author
+              ON author.TelegramUserId = message.TelegramUserId
+             AND author.PeerType = message.PeerType
+             AND author.PeerId = message.PeerId AND author.MessageId = message.MessageId
+            """ : string.Empty;
+        command.CommandText = $"""
+            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}
+            FROM ImportedChatMessages AS message
+            {ownReactionJoin}
+            {authorJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             ORDER BY message.MessageId DESC
-            """ : """
-            SELECT MessageId, Text, NULL
-            FROM ImportedChatMessages
-            WHERE TelegramUserId = $owner AND PeerType = $peerType AND PeerId = $peerId
-            ORDER BY MessageId DESC
             """;
         command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
         command.Parameters.AddWithValue("$peerType", chat.PeerType);
@@ -57,18 +67,19 @@ public sealed class WorkspaceTaskReader(string databasePath)
         {
             var messageId = reader.GetInt64(0);
             var messageText = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            // Every imported post-chat message is a task, even if there is no link.
             var evidence = ChatActivityAnalyzer.AnalyzeMessage(new ChatActivityMessage(messageId, messageText));
-            if (evidence.Classification != ChatMessageClassification.TASK || evidence.PostLinks.Count == 0)
-                continue;
-            if (!string.Equals(evidence.Network?.ToString(), chat.SocialNetwork,
-                    StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            tasks.Add(new WorkspaceDetectedTask(messageId, messageText, evidence.PostLinks[0],
-                !reader.IsDBNull(2) && reader.GetInt64(2) == 1));
+            var postUrl = evidence.PostLinks.FirstOrDefault() ?? string.Empty;
+            var sourceUrl = string.Equals(chat.PeerType, "Channel", StringComparison.OrdinalIgnoreCase)
+                ? $"https://t.me/c/{chat.PeerId}/{messageId}"
+                : string.Empty;
+            var authorName = reader.IsDBNull(3) ? "Автор неизвестен" : reader.GetString(3);
+            tasks.Add(new WorkspaceDetectedTask(messageId, messageText, postUrl,
+                !reader.IsDBNull(2) && reader.GetInt64(2) == 1, authorName, sourceUrl));
         }
         return tasks;
     }
 }
 
-public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl, bool IsCompleted = false);
+public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl,
+    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "");

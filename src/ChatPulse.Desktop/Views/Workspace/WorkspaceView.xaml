@@ -554,29 +554,42 @@
                                                 <Border BorderBrush="#ECE4F5" BorderThickness="1" Background="#FCFAFF"
                                                         CornerRadius="12" Margin="0,0,0,10" Padding="15,13">
                                                     <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="42" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="Auto" />
-                                                            <ColumnDefinition Width="Auto" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <Border Width="34" Height="34" Background="#F0E5FF" CornerRadius="10">
-                                                            <TextBlock Text="▤" FontSize="19" Foreground="#9152D5"
-                                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                        </Border>
-                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,15,0">
-                                                            <TextBlock Text="{Binding Title}" Foreground="#24154C" FontSize="13" FontWeight="SemiBold" />
-                                                            <TextBlock Text="{Binding Description}" Foreground="#80708E" FontSize="12"
-                                                                       TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="Auto" />
+                                                        </Grid.RowDefinitions>
+                                                        <Grid Grid.Row="0">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="42" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <Border Width="34" Height="34" Background="#F0E5FF" CornerRadius="10"
+                                                                    VerticalAlignment="Top">
+                                                                <TextBlock Text="▤" FontSize="19" Foreground="#9152D5"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            </Border>
+                                                            <StackPanel Grid.Column="1" Margin="0,0,0,12">
+                                                                <TextBlock Text="{Binding Title}" Foreground="#24154C"
+                                                                           FontSize="13" FontWeight="SemiBold" />
+                                                                <TextBlock Text="{Binding Description}" Foreground="#80708E"
+                                                                           FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                                                            <Button Content="↗  Задание" Tag="{Binding SourceUrl}"
+                                                                    IsEnabled="{Binding HasSourceUrl}"
+                                                                    Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                    Margin="0,0,9,0" />
+                                                            <Button Content="↗  Пост" Tag="{Binding PostUrl}"
+                                                                    Visibility="{Binding HasPostUrl, Converter={StaticResource BoolVisible}}"
+                                                                    Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                    Margin="0,0,9,0" />
+                                                            <Button Content="✓  Готово" IsEnabled="False"
+                                                                    ToolTip="Отметка выполнения будет реализована позже"
+                                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                                    Background="{StaticResource AccentBrush}" Foreground="White"
+                                                                    BorderThickness="0" />
                                                         </StackPanel>
-                                                        <Button Grid.Column="2" Content="↗  Открыть" Tag="{Binding PostUrl}"
-                                                                Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
-                                                                VerticalAlignment="Center" Margin="0,0,9,0" />
-                                                        <Button Grid.Column="3" Content="✓  Готово" IsEnabled="False"
-                                                                ToolTip="Отметка выполнения будет реализована позже"
-                                                                Style="{StaticResource WorkspaceActionButton}"
-                                                                Background="{StaticResource AccentBrush}" Foreground="White"
-                                                                BorderThickness="0" VerticalAlignment="Center" />
                                                     </Grid>
                                                 </Border>
                                             </DataTemplate>

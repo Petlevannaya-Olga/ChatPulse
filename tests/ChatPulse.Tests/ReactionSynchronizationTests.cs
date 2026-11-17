@@ -122,6 +122,52 @@ public sealed class ReactionSynchronizationTests
     }
 
     [Fact]
+    public async Task TaskReader_DoesNotFilterPostsWithoutLinks_AndKeepsCompleteTextAndAuthor()
+    {
+        using var temp = new TemporaryDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SaveChatAsync(CreateChat(101));
+        var client = CreateClient();
+        const string fullText = "Добрый день!\nПожалуйста, оставьте комментарий ❤️\nВторая строка задания.";
+        client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+            [new(10, fullText, false, "Мария Иванова"), new(11, "Объявление без ссылки", false, "@admin")]);
+        var database = Path.Combine(temp.Path, "history.db");
+        var sync = new ChatSynchronizationService(settings, client, database);
+        var chat = Assert.Single((await settings.LoadAsync()).Chats);
+        await sync.SynchronizeAsync(chat);
+        var tasks = await new WorkspaceTaskReader(database).GetTasksAsync(chat);
+        Assert.Equal(2, tasks.Count);
+        var first = tasks.Single(item => item.MessageId == 10);
+        Assert.Equal(fullText, first.Text);
+        Assert.Equal("Мария Иванова", first.AuthorName);
+        Assert.Equal("https://t.me/c/101/10", first.SourceUrl);
+        Assert.Equal(string.Empty, first.PostUrl);
+        Assert.Equal("@admin", tasks.Single(item => item.MessageId == 11).AuthorName);
+    }
+
+    [Fact]
+    public async Task ReactionRefresh_UpdatesAuthorWithoutRewritingHistory()
+    {
+        using var temp = new TemporaryDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SaveChatAsync(CreateChat(101));
+        var client = CreateClient();
+        client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+            [new(10, "Текст из первого импорта", true)]);
+        var database = Path.Combine(temp.Path, "history.db");
+        var sync = new ChatSynchronizationService(settings, client, database);
+        var chat = Assert.Single((await settings.LoadAsync()).Chats);
+        await sync.SynchronizeAsync(chat);
+        client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+            [new(10, "Изменённый в Telegram текст", null, "Анна")]);
+        await sync.RefreshReactionsAsync(chat);
+        var task = Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat));
+        Assert.Equal("Текст из первого импорта", task.Text);
+        Assert.Equal("Анна", task.AuthorName);
+        Assert.True(task.IsCompleted);
+    }
+
+    [Fact]
     public void ReactionEvidence_RecognizesOnlyCurrentAccountChosenFlag()
     {
         var msg = new TestMessage { reactions = new TestReactions

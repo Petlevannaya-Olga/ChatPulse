@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Security.Cryptography;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
@@ -502,7 +502,7 @@ public sealed class WTelegramAuthenticationClient(
         finally { _gate.Release(); }
     }
 
-    /// <summary>Получает только текст сообщений за указанный период. История не сохраняется на диск.</summary>
+    /// <summary>Получает сообщения с текстом, именем отправителя и реакциями за указанный период.</summary>
     public async Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
         TelegramChatOption chat, int days, CancellationToken cancellationToken)
     {
@@ -547,8 +547,9 @@ public sealed class WTelegramAuthenticationClient(
                         reachedCutoff = true;
                         break;
                     }
-                    if (!string.IsNullOrWhiteSpace(message.message))
-                        collected.Add(new TelegramChatMessage(message.ID, message.message, TelegramOwnReactionEvidence.Read(message)));
+                    var author = ResolveMessageAuthor(message, history, chat.Title);
+                    collected.Add(new TelegramChatMessage(message.ID, message.message,
+                        TelegramOwnReactionEvidence.Read(message), author));
                 }
                 if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) { historyComplete = true; break; }
                 var nextOffset = history.Messages[^1].ID;
@@ -612,6 +613,31 @@ public sealed class WTelegramAuthenticationClient(
                 "Telegram не подключён. Вернитесь к шагу авторизации.");
         }
         return user.id;
+    }
+
+    private static string ResolveMessageAuthor(TL.Message message, TL.Messages_MessagesBase history, string chatTitle)
+    {
+        if (message.from_id is TL.PeerUser sender)
+        {
+            // Resolve from the peer dictionary attached to this history page.
+            var user = history.UserOrChat(sender) as TL.User;
+            if (user is not null)
+            {
+                var displayName = string.Join(" ", new[] { user.first_name, user.last_name }
+                    .Where(part => !string.IsNullOrWhiteSpace(part)));
+                if (!string.IsNullOrWhiteSpace(displayName)) return displayName;
+                if (!string.IsNullOrWhiteSpace(user.username)) return "@" + user.username;
+            }
+        }
+        if (message.from_id is TL.PeerChannel channelPeer)
+        {
+            var channel = history.UserOrChat(channelPeer) as TL.Channel;
+            if (channel is not null && !string.IsNullOrWhiteSpace(channel.title)) return channel.title;
+        }
+        // Channel and supergroup messages may omit from_id when sent anonymously.
+        if (message.from_id is null && message.peer_id is TL.PeerChannel
+            && !string.IsNullOrWhiteSpace(chatTitle)) return chatTitle;
+        return "Автор неизвестен";
     }
 
     private static bool IsAuthorizationLost(TL.RpcException exception)

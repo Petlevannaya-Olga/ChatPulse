@@ -59,6 +59,7 @@ public sealed class ChatSynchronizationService(
 
                 progress?.Invoke("Сохраняем сообщения в SQLite…");
                 await SaveHistoryAsync(current, messages, cancellationToken);
+                await SaveAuthorsAsync(current, messages, cancellationToken);
                 await SaveReactionStatesAsync(current, messages, cancellationToken);
                 // SQLite is committed before the success flag. Crash/retry is safe because
                 // UNIQUE (account, peer type, peer id, message id) removes duplicates.
@@ -111,6 +112,7 @@ public sealed class ChatSynchronizationService(
             var messages = await telegram.GetRecentChatMessagesAsync(chat, days, cancellationToken);
             progress?.Invoke("Заменяем историю чата в SQLite…");
             await ReplaceHistoryAsync(current, messages, cancellationToken);
+            await SaveAuthorsAsync(current, messages, cancellationToken);
             await SaveReactionStatesAsync(current, messages, cancellationToken);
             var lastId = messages.Count == 0 ? current.LastProcessedMessageId :
                 Math.Max(current.LastProcessedMessageId ?? 0, messages.Max(message => message.MessageId));
@@ -147,9 +149,64 @@ public sealed class ChatSynchronizationService(
                 throw new InvalidOperationException("Чат недоступен для проверки реакций.");
             progress?.Invoke("Проверяем реакции на задания…");
             var messages = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
+            await SaveAuthorsAsync(current, messages, cancellationToken);
             return await SaveReactionStatesAsync(current, messages, cancellationToken);
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Metadata is stored separately, keeping the existing history schema intact.
+    /// Refresh only updates already-imported message IDs and never changes reaction states.
+    /// </summary>
+    private async Task SaveAuthorsAsync(ConfiguredChat chat,
+        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var setup = connection.CreateCommand();
+        setup.CommandText = """
+            CREATE TABLE IF NOT EXISTS ImportedMessageAuthors (
+                TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
+                PeerId INTEGER NOT NULL, MessageId INTEGER NOT NULL,
+                AuthorName TEXT NOT NULL,
+                PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
+            );
+            """;
+        await setup.ExecuteNonQueryAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var save = connection.CreateCommand();
+        save.Transaction = transaction;
+        save.CommandText = """
+            INSERT INTO ImportedMessageAuthors
+                (TelegramUserId, PeerType, PeerId, MessageId, AuthorName)
+            SELECT $owner, $type, $peer, $id, $author
+            WHERE EXISTS (
+                SELECT 1 FROM ImportedChatMessages
+                WHERE TelegramUserId = $owner AND PeerType = $type
+                  AND PeerId = $peer AND MessageId = $id
+            )
+            ON CONFLICT(TelegramUserId, PeerType, PeerId, MessageId)
+            DO UPDATE SET AuthorName = excluded.AuthorName
+            """;
+        save.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+        save.Parameters.AddWithValue("$type", chat.PeerType);
+        save.Parameters.AddWithValue("$peer", chat.PeerId);
+        var id = save.Parameters.Add("$id", SqliteType.Integer);
+        var author = save.Parameters.Add("$author", SqliteType.Text);
+        foreach (var message in messages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(message.AuthorName)) continue;
+            id.Value = message.MessageId;
+            author.Value = message.AuthorName;
+            await save.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<int> SaveReactionStatesAsync(ConfiguredChat chat,

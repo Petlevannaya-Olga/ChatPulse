@@ -340,7 +340,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
         catch (Exception)
         {
-            MessageBox.Show("Не удалось открыть публикацию.", "ChatPulse", MessageBoxButton.OK,
+            MessageBox.Show("Не удалось открыть ссылку.", "ChatPulse", MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }
     }
@@ -374,19 +374,10 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
 public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
 {
     public string PostUrl => task.PostUrl;
-    public string Title => "Задание из Telegram";
-    public string Description { get; } = CreateDescription(task.Text);
-
-    private static string CreateDescription(string text)
-    {
-        foreach (var part in text.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (part.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                part.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) continue;
-            var cleaned = part.Trim();
-            if (cleaned.Length == 0) continue;
-            return cleaned.Length > 110 ? cleaned[..107] + "…" : cleaned;
-        }
-        return "Публикация из подключённого чата";
-    }
+    public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);
+    public string SourceUrl => task.SourceUrl;
+    public bool HasSourceUrl => !string.IsNullOrWhiteSpace(task.SourceUrl);
+    public string Title => string.IsNullOrWhiteSpace(task.AuthorName) ? "Автор неизвестен" : task.AuthorName;
+    public string Description => string.IsNullOrWhiteSpace(task.Text)
+        ? "Сообщение без текста (возможно, содержит медиа)" : task.Text;
 }
