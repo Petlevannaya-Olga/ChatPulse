@@ -17,6 +17,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     private FirstChatSetupViewModel? _chatSetup;
     private bool _isBusy;
     private readonly SemaphoreSlim _periodSaveGate = new(1, 1);
+    private readonly OnboardingRequestGeneration _reloadGeneration = new();
     private string _currentActivity = "Выберите период загрузки истории.";
 
     public OnboardingStepFourView()
@@ -80,25 +81,29 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
 
     private async void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
-        if (IsVisible && _settings is not null && _synchronization is not null)
-            await ReloadAsync();
+        if (!IsVisible)
+        {
+            _reloadGeneration.Advance();
+            return;
+        }
+        if (_settings is not null && _synchronization is not null && !IsBusy)
+            await ReloadAsync(_reloadGeneration.Advance());
     }
 
-    private async Task ReloadAsync()
+    private async Task ReloadAsync(long generation)
     {
         if (_settings is null) return;
         try
         {
             var settings = await _settings.LoadAsync();
             var owner = await _synchronization!.GetAccountIdAsync();
+            if (!_reloadGeneration.IsCurrent(generation) || !IsVisible || IsBusy) return;
+            var restoredRows = SynchronizationScreenChatPolicy.CreateRows(settings, owner);
             foreach (var previous in Chats)
                 previous.PropertyChanged -= OnChatRowChanged;
             Chats.Clear();
-            foreach (var chat in settings.Chats.Where(chat => chat.TelegramUserId == owner))
-                AddChatRow(new SynchronizationChatRow(chat));
-            foreach (var pending in (settings.PendingChats ?? []).Where(chat => chat.TelegramUserId == owner &&
-                         !Chats.Any(saved => saved.PeerId == chat.PeerId && saved.PeerType == chat.PeerType)))
-                AddChatRow(new SynchronizationChatRow(pending));
+            foreach (var row in restoredRows)
+                AddChatRow(row);
             CurrentActivity = Chats.Count == 0
                 ? "Нет выбранных чатов. Вернитесь к выбору."
                 : Chats.All(chat => chat.IsComplete)
@@ -108,7 +113,8 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         }
         catch (Exception)
         {
-            CurrentActivity = "Не удалось восстановить настройки синхронизации.";
+            if (_reloadGeneration.IsCurrent(generation) && IsVisible && !IsBusy)
+                CurrentActivity = "Не удалось восстановить настройки синхронизации.";
         }
     }
 
@@ -157,6 +163,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     private async void StartButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (!CanStart || _settings is null || _synchronization is null) return;
+        _reloadGeneration.Advance(); // A late settings read must not replace working rows.
         IsBusy = true;
         try
         {

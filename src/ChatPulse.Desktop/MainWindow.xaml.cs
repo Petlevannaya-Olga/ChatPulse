@@ -152,42 +152,17 @@ public partial class MainWindow : Window
         _isOnboardingCompleted = settings.IsOnboardingCompleted;
         FirstStepScreen.RestoreName(settings.UserName);
 
-        var step = settings.IsOnboardingCompleted
-            ? OnboardingStep.Workspace : settings.CurrentOnboardingStep;
-        if (!settings.IsOnboardingCompleted && step == OnboardingStep.Workspace)
-            step = OnboardingStep.Synchronization;
-        if (!Enum.IsDefined(step))
-        {
-            step = OnboardingStep.Welcome;
-        }
-
-        // Некорректные/старые настройки не должны пропускать обязательное имя.
-        if (step is OnboardingStep.Telegram or OnboardingStep.FirstChat or OnboardingStep.Synchronization &&
-            string.IsNullOrWhiteSpace(settings.UserName))
-        {
-            step = OnboardingStep.Profile;
-        }
-
-        // Не предлагаем заново войти в Telegram после успешного восстановления.
-        // Третий шаг загружает список чатов только при открытии.
+        // The restore decision is pure and covered by navigation tests.
+        var restoreDecision = OnboardingRestorePolicy.Resolve(settings, _telegramSetup.IsAuthorized);
+        var step = restoreDecision.Step;
         if (_telegramSetup.IsAuthorized)
         {
             _telegramPage = TelegramOnboardingPage.Phone;
             if (settings.CurrentTelegramPage != TelegramOnboardingPage.Phone)
                 await _settings.SaveTelegramPageAsync(_telegramPage, cancellationToken);
-
-            if (step == OnboardingStep.Telegram)
-            {
-                step = OnboardingStep.FirstChat;
-                await _settings.SaveOnboardingStepAsync(step, cancellationToken);
-            }
         }
-        else if (step is OnboardingStep.FirstChat or OnboardingStep.Synchronization)
-        {
-            // Пока авторизация не проверена, не пропускаем обязательный шаг.
-            step = OnboardingStep.Telegram;
+        if (restoreDecision.PersistRedirect)
             await _settings.SaveOnboardingStepAsync(step, cancellationToken);
-        }
 
         ShowStep(step);
         _hasInitialized = true;

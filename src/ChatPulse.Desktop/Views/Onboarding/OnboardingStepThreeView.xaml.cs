@@ -18,6 +18,8 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private bool isReview;
     private bool updating;
     private readonly ChatReviewRunGeneration analysisGeneration = new();
+    private readonly OnboardingRequestGeneration listGeneration = new();
+    private long? rowsOwner;
     private string analysisStatus = "";
     private string currentAnalyzedChatName = string.Empty;
     private bool isAnalyzing;
@@ -65,7 +67,10 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         private set { connectionStatus = value; Changed(); }
     }
     public bool CanConnectChats => isReview && analysisCompleted && !IsAnalyzing &&
-                                   AnalysisRows.Any(row => row.CanConnect);
+                                   ViewModel is { CurrentTelegramUserId: > 0 } vm &&
+                                   rowsOwner == vm.CurrentTelegramUserId &&
+                                   ChatReviewCandidatePolicy.CreateCandidates(vm.CurrentTelegramUserId.Value,
+                                       SelectedRows.Select(row => row.Chat).ToArray(), AnalysisRows.ToArray()).Length > 0;
     public bool CanRetryReview => isReview && !IsAnalyzing &&
                                   AnalysisRows.Any(row => row.StatusKind == "Error");
     private void RefreshCanRetryReview() => Changed(nameof(CanRetryReview));
@@ -96,50 +101,57 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     }
 
     public string SelectedCountText => $"Выбрано: {Rows.Count(row => row.IsSelected)} / 10";
-    public bool IsLoadingChatList => ViewModel?.IsBusy == true;
-    public string ListStatus => IsLoadingChatList
-        ? "Загружаем список чатов из Telegram…"
-        : ViewModel is { HasError: true } vm ? vm.Error
-        : Rows.Count == 0 ? "Доступных чатов пока нет" : $"Доступно чатов: {Rows.Count}";
-    public bool HasSelection => !IsLoadingChatList && Rows.Any(row => row.IsSelected);
+    public string ListStatus => Rows.Count == 0 ? "Доступных чатов пока нет" : $"Доступно чатов: {Rows.Count}";
+    public bool HasSelection => Rows.Any(row => row.IsSelected);
     public Visibility SelectionVisibility => isReview ? Visibility.Collapsed : Visibility.Visible;
     public Visibility ReviewVisibility => isReview ? Visibility.Visible : Visibility.Collapsed;
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
+        if (ReferenceEquals(subscribedViewModel, e.NewValue)) return;
         if (subscribedViewModel is not null)
         {
             subscribedViewModel.TelegramConnectionRestored -= OnTelegramConnectionRestored;
-            subscribedViewModel.PropertyChanged -= OnChatListStateChanged;
+            subscribedViewModel.PropertyChanged -= OnViewModelPropertyChanged;
         }
+        // Results and selected peers must not leak into another Telegram account.
+        listGeneration.Advance();
+        analysisGeneration.Advance();
+        isReview = false;
+        analysisCompleted = false;
+        retryOnConnectionRestored = false;
+        IsAnalyzing = false;
+        CurrentAnalyzedChatName = string.Empty;
+        Rows.Clear();
+        SelectedRows.Clear();
+        rowsOwner = null;
+        VisibleRows.Clear();
+        AnalysisRows.Clear();
+        Changed(nameof(SelectionVisibility));
+        Changed(nameof(ReviewVisibility));
+        Changed(nameof(SelectedCountText));
+        Changed(nameof(HasSelection));
+        Changed(nameof(ListStatus));
+        RefreshCanConnect();
+        RefreshCanRetryReview();
+        UpdateAnalysisCounts();
         subscribedViewModel = e.NewValue as FirstChatSetupViewModel;
         if (subscribedViewModel is not null)
         {
             subscribedViewModel.TelegramConnectionRestored += OnTelegramConnectionRestored;
-            subscribedViewModel.PropertyChanged += OnChatListStateChanged;
+            subscribedViewModel.PropertyChanged += OnViewModelPropertyChanged;
         }
-        Changed(nameof(IsLoadingChatList));
-        Changed(nameof(ListStatus));
-        Changed(nameof(HasSelection));
     }
 
-    private void OnChatListStateChanged(object? sender, PropertyChangedEventArgs e)
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (!ReferenceEquals(sender, subscribedViewModel)) return;
-        if (e.PropertyName == nameof(FirstChatSetupViewModel.IsBusy))
-        {
-            Changed(nameof(IsLoadingChatList));
-            Changed(nameof(ListStatus));
-            Changed(nameof(HasSelection));
-            // EnsureLoadedAsync can return while an earlier refresh is still running.
-            // The finished request must still populate the visible selection list.
-            if (!subscribedViewModel!.IsBusy && IsVisible && !isReview)
-                SyncRows(subscribedViewModel.Chats);
-        }
-        else if (e.PropertyName == nameof(FirstChatSetupViewModel.Error))
-        {
-            Changed(nameof(ListStatus));
-        }
+        if (args.PropertyName != nameof(FirstChatSetupViewModel.IsBusy) ||
+            sender is not FirstChatSetupViewModel vm || vm.IsBusy ||
+            !IsVisible || isReview || !ReferenceEquals(ViewModel, vm)) return;
+
+        // EnsureLoadedAsync may return while a previous refresh is still running.
+        // Apply its eventual result when the ViewModel finishes loading.
+        SyncRows(vm.Chats);
     }
 
     private void OnTelegramConnectionRestored(object? sender, EventArgs e)
@@ -163,6 +175,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             // Cancelling WTelegram's RPC token can detach its client and falsely
             // report a Telegram connection failure.
             analysisGeneration.Advance();
+            listGeneration.Advance();
             IsAnalyzing = false;
             CurrentAnalyzedChatName = string.Empty;
             analysisCompleted = false;
@@ -172,8 +185,10 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
             return;
         }
         if (ViewModel is not { } viewModel) return;
+        var request = listGeneration.Advance();
         await viewModel.EnsureLoadedAsync();
-        if (!IsVisible) return;
+        if (!listGeneration.IsCurrent(request) || !IsVisible ||
+            !ReferenceEquals(ViewModel, viewModel)) return;
         SyncRows(viewModel.Chats);
         if (isReview && !IsAnalyzing && !analysisCompleted && viewModel.IsTelegramAvailable)
             await AnalyzeSelectedChatsAsync();
@@ -181,8 +196,12 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
     private void SyncRows(IEnumerable<TelegramChatOption> chats)
     {
-        var selectedKeys = Rows.Where(row => row.IsSelected)
-            .Select(row => (row.Chat.PeerId, row.Chat.PeerType)).ToHashSet();
+        var currentOwner = ViewModel?.CurrentTelegramUserId;
+        var selectedKeys = rowsOwner == currentOwner
+            ? Rows.Where(row => row.IsSelected)
+                .Select(row => (row.Chat.PeerId, row.Chat.PeerType)).ToHashSet()
+            : new HashSet<(long PeerId, string PeerType)>();
+        rowsOwner = currentOwner;
         updating = true;
         Rows.Clear();
         foreach (var chat in chats.Where(chat => ChatTitlePolicy.IsEligible(chat.Title)))
@@ -248,11 +267,13 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         await AnalyzeSelectedChatsAsync();
     }
 
-    private async Task AnalyzeSelectedChatsAsync(bool retryFailedOnly = false)
+    private async Task AnalyzeSelectedChatsAsync(bool retryFailedOnly = false,
+        bool includeOtherErrors = false)
     {
         if (!IsVisible || !isReview || IsAnalyzing || !HasSelection) return;
         if (retryFailedOnly && (AnalysisRows.Count != SelectedRows.Count ||
-                                !AnalysisRows.Any(row => row.NeedsConnectionRetry))) return;
+                                !AnalysisRows.Any(row => ChatReviewRetryPolicy.ShouldRetry(
+                                    row, includeOtherErrors)))) return;
         retryOnConnectionRestored = false;
         // A previous RPC may still be finishing. Do not cancel it on navigation:
         // the operation gate serializes calls, and the generation discards its result.
@@ -266,7 +287,8 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
         {
             AnalysisRows.Clear();
             foreach (var item in chosen)
-                AnalysisRows.Add(new ChatAnalysisResultRow(item.Title));
+                AnalysisRows.Add(new ChatAnalysisResultRow(item.Title,
+                    item.Chat.PeerId, item.Chat.PeerType));
         }
         RefreshCanConnect();
         RefreshCanRetryReview();
@@ -284,13 +306,28 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                 await vm.EnsureLoadedAsync();
                 if (!analysisGeneration.IsCurrent(epoch) || !IsVisible || !isReview) return;
             }
+            if (vm.CurrentTelegramUserId is not > 0 ||
+                rowsOwner != vm.CurrentTelegramUserId ||
+                !ChatReviewCandidatePolicy.AreSelectionsCurrent(
+                    chosen.Select(row => row.Chat), vm.Chats))
+            {
+                // A refreshed Telegram owner or changed chat list invalidates the review.
+                // Never analyze or connect a selection from the old snapshot.
+                ReturnToSelection_OnClick(this, new RoutedEventArgs());
+                Rows.Clear();
+                SelectedRows.Clear();
+                SyncRows(vm.Chats);
+                ConnectionStatus = "Список чатов изменился. Выберите чаты повторно.";
+                return;
+            }
             for (var i = 0; i < chosen.Length; i++)
             {
                 // Stop after any in-flight request finishes if this view/run was left.
                 // Never cancel the Telegram request just to stop UI processing.
                 if (!analysisGeneration.IsCurrent(epoch) || !IsVisible || !isReview) return;
                 token.ThrowIfCancellationRequested();
-                if (retryFailedOnly && !AnalysisRows[i].NeedsConnectionRetry) continue;
+                if (retryFailedOnly &&
+                    !ChatReviewRetryPolicy.ShouldRetry(AnalysisRows[i], includeOtherErrors)) continue;
                 CurrentAnalyzedChatName = chosen[i].Title;
                 AnalysisStatus = $"Проверка {i + 1} из {chosen.Length}: {chosen[i].Title}";
                 try
@@ -353,28 +390,20 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
         // Retry is explicit even when the connection monitor never reported an
         // outage (e.g. a stale cached Telegram account after navigation).
+        var epoch = analysisGeneration.Advance();
         if (vm.CurrentTelegramUserId is not > 0)
             await vm.RefreshAsync();
-        if (IsVisible && isReview)
-            await AnalyzeSelectedChatsAsync(retryFailedOnly: true);
+        if (analysisGeneration.IsCurrent(epoch) && IsVisible && isReview &&
+            ReferenceEquals(ViewModel, vm))
+            await AnalyzeSelectedChatsAsync(retryFailedOnly: true, includeOtherErrors: true);
     }
 
     private void ConnectChats_OnClick(object sender, RoutedEventArgs e)
     {
         if (!CanConnectChats || ViewModel is not { CurrentTelegramUserId: > 0 } vm) return;
-        var candidates = SelectedRows.Zip(AnalysisRows)
-            .Where(pair => pair.Second.CanConnect && pair.Second.VerifiedNetwork.HasValue &&
-                           ChatTitlePolicy.IsEligible(pair.First.Chat.Title))
-            .Select(pair => new PendingChatConnection
-            {
-                TelegramUserId = vm.CurrentTelegramUserId!.Value,
-                PeerId = pair.First.Chat.PeerId,
-                PeerType = pair.First.Chat.PeerType,
-                TelegramTitle = pair.First.Chat.Title,
-                SocialNetwork = pair.Second.VerifiedNetwork == ChatTaskNetwork.INSTAGRAM
-                    ? "Instagram" : "Telegram",
-                HistoryDays = 7
-            }).ToArray();
+        var candidates = ChatReviewCandidatePolicy.CreateCandidates(
+            vm.CurrentTelegramUserId.Value, SelectedRows.Select(row => row.Chat).ToArray(),
+            AnalysisRows.ToArray());
         if (candidates.Length > 0)
             SynchronizationRequested?.Invoke(candidates);
     }
@@ -411,8 +440,11 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
 
     private async void RefreshButton_OnClick(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is not { } viewModel) return;
+        if (ViewModel is not { CanRefresh: true } viewModel) return;
+        var request = listGeneration.Advance();
         await viewModel.RefreshAsync();
+        if (!listGeneration.IsCurrent(request) || !IsVisible || isReview ||
+            !ReferenceEquals(ViewModel, viewModel)) return;
         SyncRows(viewModel.Chats);
     }
 
@@ -440,8 +472,11 @@ public sealed class ChatSelectionRow(TelegramChatOption chat) : INotifyPropertyC
 }
 
 /// <summary>Presentation-only result; no automatic confirmation or settings mutation.</summary>
-public sealed class ChatAnalysisResultRow(string title) : INotifyPropertyChanged
+public sealed class ChatAnalysisResultRow(string title, long? peerId = null,
+    string? peerType = null) : INotifyPropertyChanged
 {
+    public long? PeerId { get; } = peerId;
+    public string? PeerType { get; } = peerType;
     private string summary = "Ожидает проверки…";
     private string details = "";
     private string statusKind = "Pending";

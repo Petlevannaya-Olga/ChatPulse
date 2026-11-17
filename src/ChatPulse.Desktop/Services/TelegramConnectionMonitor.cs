@@ -35,7 +35,7 @@ public sealed class TelegramConnectionMonitor : ITelegramConnectionState, INotif
     private bool _checking;
     private bool _retryAfterCurrentCheck;
     private bool _disposed;
-    private long _generation;
+    private readonly TelegramConnectionProbeGeneration _probeGeneration = new();
     private DateTimeOffset _nextCheckAt;
     private TelegramConnectionStatus _status = TelegramConnectionStatus.ONLINE;
 
@@ -96,7 +96,7 @@ public sealed class TelegramConnectionMonitor : ITelegramConnectionState, INotif
         if (!_active) return;
         _active = false;
         _canCheck = null;
-        Interlocked.Increment(ref _generation);
+        _probeGeneration.Advance();
         _checkCancellation?.Cancel();
         _retryAfterCurrentCheck = false;
         _networkAvailable = HasUsableNetworkRoute();
@@ -160,7 +160,7 @@ public sealed class TelegramConnectionMonitor : ITelegramConnectionState, INotif
         {
             if (_active)
             {
-                Interlocked.Increment(ref _generation);
+                _probeGeneration.Advance();
                 _checkCancellation?.Cancel();
             }
             // Report Wi-Fi loss even before Telegram authorization.
@@ -224,7 +224,7 @@ public sealed class TelegramConnectionMonitor : ITelegramConnectionState, INotif
             (_canCheck is not null && !_canCheck())) return;
 
         _checking = true;
-        var generation = Interlocked.Increment(ref _generation);
+        var generation = _probeGeneration.Advance();
         var cancellation = new CancellationTokenSource();
         _checkCancellation = cancellation;
         // Routine background probes stay silent; show CHECKING only after an
@@ -301,7 +301,7 @@ public sealed class TelegramConnectionMonitor : ITelegramConnectionState, INotif
     }
 
     private bool IsCurrent(long generation) =>
-        !_disposed && _active && _networkAvailable && generation == Interlocked.Read(ref _generation);
+        !_disposed && _active && _networkAvailable && _probeGeneration.IsCurrent(generation);
 
     private void OnVerificationRequired() => ReportVerificationRequired();
 
