@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
@@ -88,13 +88,12 @@ public sealed class WorkspaceTransitionTests
             await command.ExecuteNonQueryAsync();
         }
         var result = await new WorkspaceTaskReader(path).GetTasksAsync(CreateChat(101));
+        // Telegram-style chronological order: older messages first, newer messages last.
         Assert.Collection(result,
             task =>
             {
-                Assert.Equal(3, task.MessageId);
-                Assert.Equal("Реакции на https://t.me/testchannel/123", task.Text);
-                Assert.Equal("https://t.me/testchannel/123", task.PostUrl);
-                Assert.False(task.IsCompleted);
+                Assert.Equal(1, task.MessageId);
+                Assert.Contains("instagram.com/p/abc123", task.PostUrl);
             },
             task =>
             {
@@ -103,8 +102,10 @@ public sealed class WorkspaceTransitionTests
             },
             task =>
             {
-                Assert.Equal(1, task.MessageId);
-                Assert.Contains("instagram.com/p/abc123", task.PostUrl);
+                Assert.Equal(3, task.MessageId);
+                Assert.Equal("Реакции на https://t.me/testchannel/123", task.Text);
+                Assert.Equal("https://t.me/testchannel/123", task.PostUrl);
+                Assert.False(task.IsCompleted);
             });
         Assert.DoesNotContain(result, task => task.MessageId == 4);
     }

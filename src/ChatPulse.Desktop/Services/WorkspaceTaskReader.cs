@@ -89,7 +89,7 @@ public sealed class WorkspaceTaskReader(string databasePath)
             {timestampJoin}
             {skipJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
-            ORDER BY message.MessageId DESC
+            ORDER BY message.MessageId ASC
             """;
         command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
         command.Parameters.AddWithValue("$peerType", chat.PeerType);
