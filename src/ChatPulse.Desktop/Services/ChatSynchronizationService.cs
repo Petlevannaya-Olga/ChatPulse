@@ -7,9 +7,9 @@ using Microsoft.Data.Sqlite;
 namespace ChatPulse.Desktop.Services;
 
 /// <summary>
-/// Primary message history import. A completed chat is never imported again by this workflow.
+/// Primary message history import with separate safe own-reaction reconciliation.
 /// Only completed imports advance the chat cursor; repeated imports use SQLite uniqueness.
-/// Task extraction is deliberately NOT part of this service yet.
+/// Task extraction is separate; completed chats can refresh reaction evidence without replacing history.
 /// </summary>
 public sealed class ChatSynchronizationService(
     ISettingsService settings,
@@ -59,6 +59,7 @@ public sealed class ChatSynchronizationService(
 
                 progress?.Invoke("Сохраняем сообщения в SQLite…");
                 await SaveHistoryAsync(current, messages, cancellationToken);
+                await SaveReactionStatesAsync(current, messages, cancellationToken);
                 // SQLite is committed before the success flag. Crash/retry is safe because
                 // UNIQUE (account, peer type, peer id, message id) removes duplicates.
                 count = messages.Count;
@@ -110,6 +111,7 @@ public sealed class ChatSynchronizationService(
             var messages = await telegram.GetRecentChatMessagesAsync(chat, days, cancellationToken);
             progress?.Invoke("Заменяем историю чата в SQLite…");
             await ReplaceHistoryAsync(current, messages, cancellationToken);
+            await SaveReactionStatesAsync(current, messages, cancellationToken);
             var lastId = messages.Count == 0 ? current.LastProcessedMessageId :
                 Math.Max(current.LastProcessedMessageId ?? 0, messages.Max(message => message.MessageId));
             await settings.ConfirmChatHistoryReloadAsync(current.TelegramUserId, current.PeerId,
@@ -118,6 +120,89 @@ public sealed class ChatSynchronizationService(
             return messages.Count;
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Recheck reactions on existing history. Unknown reaction data never resets a saved status.
+    /// Does not change message texts, import cursors or synchronization completion markers.
+    /// </summary>
+    public async Task<int> RefreshReactionsAsync(ConfiguredChat configured,
+        Action<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(configured);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var current = FindConfigured(await settings.LoadAsync(cancellationToken), configured);
+            if (current.SynchronizationState != ChatSynchronizationState.COMPLETED)
+                throw new InvalidOperationException("Сначала нужно завершить импорт истории чата.");
+            var owner = await telegram.GetAuthorizedUserIdAsync(cancellationToken);
+            if (owner != current.TelegramUserId)
+                throw new InvalidOperationException("Telegram-аккаунт изменился.");
+            var snapshot = await telegram.GetChatsAsync(cancellationToken);
+            var chat = snapshot.Chats.SingleOrDefault(item => item.PeerId == current.PeerId &&
+                item.PeerType == current.PeerType);
+            if (snapshot.TelegramUserId != owner || chat is null ||
+                !ChatTitlePolicy.IsEligible(chat.Title))
+                throw new InvalidOperationException("Чат недоступен для проверки реакций.");
+            progress?.Invoke("Проверяем реакции на задания…");
+            var messages = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
+            return await SaveReactionStatesAsync(current, messages, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<int> SaveReactionStatesAsync(ConfiguredChat chat,
+        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
+    {
+        if (!messages.Any(message => message.HasOwnReaction.HasValue)) return 0;
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var setup = connection.CreateCommand();
+        setup.CommandText = """
+            CREATE TABLE IF NOT EXISTS ImportedMessageReactionStates (
+                TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
+                PeerId INTEGER NOT NULL, MessageId INTEGER NOT NULL,
+                HasOwnReaction INTEGER NOT NULL CHECK (HasOwnReaction IN (0, 1)),
+                PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
+            );
+            """;
+        await setup.ExecuteNonQueryAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = """
+            INSERT INTO ImportedMessageReactionStates
+                (TelegramUserId, PeerType, PeerId, MessageId, HasOwnReaction)
+            SELECT $owner, $peerType, $peerId, $id, $reaction
+            WHERE EXISTS (
+                SELECT 1 FROM ImportedChatMessages
+                WHERE TelegramUserId = $owner AND PeerType = $peerType
+                  AND PeerId = $peerId AND MessageId = $id
+            )
+            ON CONFLICT(TelegramUserId, PeerType, PeerId, MessageId)
+            DO UPDATE SET HasOwnReaction = excluded.HasOwnReaction
+            """;
+        update.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+        update.Parameters.AddWithValue("$peerType", chat.PeerType);
+        update.Parameters.AddWithValue("$peerId", chat.PeerId);
+        var id = update.Parameters.Add("$id", SqliteType.Integer);
+        var reaction = update.Parameters.Add("$reaction", SqliteType.Integer);
+        var total = 0;
+        foreach (var message in messages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!message.HasOwnReaction.HasValue) continue;
+            id.Value = message.MessageId;
+            reaction.Value = message.HasOwnReaction.Value ? 1 : 0;
+            total += await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return total;
     }
 
     private async Task ReplaceHistoryAsync(ConfiguredChat chat,

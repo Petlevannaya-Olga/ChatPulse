@@ -532,7 +532,7 @@
                             <TextBlock Grid.Row="1" Text="{Binding TaskSummary}" Foreground="#81718F" FontSize="12" Margin="0,6,0,14"
                                        TextWrapping="Wrap" />
                             <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,20">
-                                <Button x:Name="DetectedFilterButton" Content="Найденные" Click="DetectedFilterButton_OnClick"
+                                <Button x:Name="DetectedFilterButton" Content="Невыполненные" Click="DetectedFilterButton_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,0"
                                         Background="{StaticResource AccentBrush}" Foreground="White" BorderThickness="0" />
                                 <Button x:Name="CompletedFilterButton" Content="Выполненные" Click="CompletedFilterButton_OnClick"
@@ -626,6 +626,13 @@
                             <TextBlock Text="Ежедневная проверка" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
                             <TextBlock Text="Автоматическая проверка и ограниченный ручной повтор будут настроены после реализации основной логики."
                                        Foreground="#81718F" Margin="0,9,0,0" FontSize="13" TextWrapping="Wrap" />
+                            <TextBlock Text="Отдельно можно проверить свои реакции на уже загруженных сообщениях. Ежедневный аудит будет реализован позднее."
+                                       Foreground="#81718F" Margin="0,9,0,12" FontSize="13" TextWrapping="Wrap" />
+                            <Button Content="Проверить мои реакции" Click="CheckReactionsButton_OnClick"
+                                    Style="{StaticResource WorkspaceActionButton}" HorizontalAlignment="Left"
+                                    IsEnabled="{Binding IsNotBusy}" />
+                            <TextBlock Text="{Binding ReactionRefreshMessage}" Foreground="#75499F"
+                                       Margin="0,10,0,0" FontSize="12" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

@@ -43,7 +43,7 @@ public partial class MainWindow : Window
         FourthStepScreen.Initialize(_settings, _synchronization, firstChatSetup);
         FourthStepScreen.BackRequested += async (_, _) => await NavigateAsync(OnboardingStep.FirstChat);
         FourthStepScreen.ContinueRequested += FourthStepScreen_OnContinueRequested;
-        WorkspaceScreen.Initialize(_settings, workspaceTaskReader);
+        WorkspaceScreen.Initialize(_settings, workspaceTaskReader, _synchronization);
         _telegramSetup = telegramSetup;
         _firstChatSetup = firstChatSetup;
         _logger = logger;

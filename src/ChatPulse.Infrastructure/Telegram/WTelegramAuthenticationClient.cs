@@ -548,7 +548,7 @@ public sealed class WTelegramAuthenticationClient(
                         break;
                     }
                     if (!string.IsNullOrWhiteSpace(message.message))
-                        collected.Add(new TelegramChatMessage(message.ID, message.message));
+                        collected.Add(new TelegramChatMessage(message.ID, message.message, TelegramOwnReactionEvidence.Read(message)));
                 }
                 if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) { historyComplete = true; break; }
                 var nextOffset = history.Messages[^1].ID;

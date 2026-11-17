@@ -16,12 +16,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private ISettingsService? _settings;
     private WorkspaceTaskReader? _reader;
+    private ChatSynchronizationService? _synchronization;
     private WorkspaceChatRow? _selectedChat;
     private readonly Dictionary<WorkspaceChatRow, IReadOnlyList<WorkspaceDetectedTask>> _taskCache = [];
     private WorkspacePage _page = WorkspacePage.Home;
     private ChatPage _chatPage = ChatPage.Tasks;
     private string _taskSummary = string.Empty;
     private string _loadMessage = string.Empty;
+    private string _reactionRefreshMessage = string.Empty;
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
     private bool _showCompleted;
@@ -61,12 +63,18 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public string ConnectedChatCount => Chats.Count.ToString();
     public string TaskSummary { get => _taskSummary; private set { _taskSummary = value; Notify(); } }
     public string LoadMessage { get => _loadMessage; private set { _loadMessage = value; Notify(); } }
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(HasTasks)); Notify(nameof(HasNoTasks)); } }
-    public bool HasTasks => !IsBusy && Tasks.Count > 0 && !_showCompleted;
-    public bool HasNoTasks => !IsBusy && (Tasks.Count == 0 || _showCompleted);
+    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(HasTasks)); Notify(nameof(HasNoTasks)); Notify(nameof(IsNotBusy)); } }
+    public bool HasTasks => !IsBusy && Tasks.Count > 0;
+    public bool HasNoTasks => !IsBusy && Tasks.Count == 0;
+    public bool IsNotBusy => !IsBusy;
+    public string ReactionRefreshMessage
+    {
+        get => _reactionRefreshMessage;
+        private set { _reactionRefreshMessage = value; Notify(); }
+    }
     public string EmptyTasksMessage => _showCompleted
-        ? "Учёт выполненных заданий будет доступен после добавления отметки «Готово»."
-        : "В загруженной истории этого чата пока нет распознанных заданий.";
+        ? "В этом чате нет заданий с подтверждённой твоей реакцией."
+        : "Нет невыполненных заданий в загруженной истории.";
     public bool IsHomeVisible => _page == WorkspacePage.Home;
     public bool IsChatVisible => _page == WorkspacePage.Chat;
     public bool IsSettingsVisible => _page == WorkspacePage.Settings;
@@ -75,10 +83,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public bool IsMembersVisible => _chatPage == ChatPage.Members;
     public bool IsSidebarExpanded => _isSidebarExpanded;
 
-    public void Initialize(ISettingsService settings, WorkspaceTaskReader reader)
+    public void Initialize(ISettingsService settings, WorkspaceTaskReader reader,
+        ChatSynchronizationService synchronization)
     {
         _settings = settings;
         _reader = reader;
+        _synchronization = synchronization;
     }
 
     private async void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -155,12 +165,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         Tasks.Clear();
         if (SelectedChat is not null && _taskCache.TryGetValue(SelectedChat, out var detected))
         {
-            foreach (var task in detected)
+            foreach (var task in detected.Where(task => task.IsCompleted == _showCompleted))
                 Tasks.Add(new WorkspaceTaskCard(task));
         }
         TaskSummary = SelectedChat is null
             ? "Подключённых чатов пока нет."
-            : $"Предварительно найдено заданий: {Tasks.Count}. Статусы выполнения ещё не подключены.";
+            : $"{(_showCompleted ? "Выполненных" : "Невыполненных")}: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram.";
         Notify(nameof(HasTasks));
         Notify(nameof(HasNoTasks));
         Notify(nameof(EmptyTasksMessage));
@@ -190,6 +200,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         if (SelectedChat is null) return;
         _chatPage = ChatPage.Tasks;
         _showCompleted = false;
+        UpdateSelectedTasks();
         _page = WorkspacePage.Chat;
         NotifyPageState();
     }
@@ -229,13 +240,50 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private void DetectedFilterButton_OnClick(object sender, RoutedEventArgs args)
     {
         _showCompleted = false;
+        UpdateSelectedTasks();
         NotifyTaskFilter();
     }
 
     private void CompletedFilterButton_OnClick(object sender, RoutedEventArgs args)
     {
         _showCompleted = true;
+        UpdateSelectedTasks();
         NotifyTaskFilter();
+    }
+
+    private async void CheckReactionsButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (IsBusy || _settings is null || _synchronization is null) return;
+        IsBusy = true;
+        ReactionRefreshMessage = "Проверяем реакции в Telegram…";
+        try
+        {
+            var state = await _settings.LoadAsync();
+            var chats = state.Chats.Where(chat =>
+                chat.SynchronizationState == ChatSynchronizationState.COMPLETED).ToArray();
+            var updated = 0;
+            var errors = new List<string>();
+            foreach (var chat in chats)
+            {
+                try
+                {
+                    updated += await _synchronization.RefreshReactionsAsync(chat);
+                }
+                catch (Exception exception)
+                {
+                    errors.Add($"{chat.TelegramTitle}: {exception.Message}");
+                }
+            }
+            await ReloadAsync();
+            ReactionRefreshMessage = errors.Count == 0
+                ? $"Проверка завершена. Обновлено состояний реакций: {updated}."
+                : $"Не удалось проверить часть чатов: {string.Join("; ", errors)}";
+        }
+        catch (Exception exception)
+        {
+            ReactionRefreshMessage = $"Не удалось проверить реакции: {exception.Message}";
+        }
+        finally { IsBusy = false; }
     }
 
     private void ToggleSidebarButton_OnClick(object sender, RoutedEventArgs args)

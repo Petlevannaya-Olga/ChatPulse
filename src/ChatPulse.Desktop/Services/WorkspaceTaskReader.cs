@@ -7,7 +7,7 @@ namespace ChatPulse.Desktop.Services;
 
 /// <summary>
 /// Read-only preview of task-like messages from the imported Telegram history.
-/// This does not mark tasks as completed or send reactions.
+/// Status is derived only from saved, verified reactions of the authorized account.
 /// </summary>
 public sealed class WorkspaceTaskReader(string databasePath)
 {
@@ -28,9 +28,21 @@ public sealed class WorkspaceTaskReader(string databasePath)
         exists.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedChatMessages'";
         if ((long)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) == 0) return [];
 
+        var stateTable = connection.CreateCommand();
+        stateTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageReactionStates'";
+        var hasReactionStates = (long)(await stateTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
         var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT MessageId, Text
+        command.CommandText = hasReactionStates ? """
+            SELECT message.MessageId, message.Text, reaction.HasOwnReaction
+            FROM ImportedChatMessages AS message
+            LEFT JOIN ImportedMessageReactionStates AS reaction
+              ON reaction.TelegramUserId = message.TelegramUserId
+             AND reaction.PeerType = message.PeerType
+             AND reaction.PeerId = message.PeerId AND reaction.MessageId = message.MessageId
+            WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
+            ORDER BY message.MessageId DESC
+            """ : """
+            SELECT MessageId, Text, NULL
             FROM ImportedChatMessages
             WHERE TelegramUserId = $owner AND PeerType = $peerType AND PeerId = $peerId
             ORDER BY MessageId DESC
@@ -52,10 +64,11 @@ public sealed class WorkspaceTaskReader(string databasePath)
                     StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            tasks.Add(new WorkspaceDetectedTask(messageId, messageText, evidence.PostLinks[0]));
+            tasks.Add(new WorkspaceDetectedTask(messageId, messageText, evidence.PostLinks[0],
+                !reader.IsDBNull(2) && reader.GetInt64(2) == 1));
         }
         return tasks;
     }
 }
 
-public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl);
+public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl, bool IsCompleted = false);
