@@ -61,6 +61,7 @@ public sealed class ChatSynchronizationService(
                 await SaveHistoryAsync(current, messages, cancellationToken);
                 await SaveAuthorsAsync(current, messages, cancellationToken);
                 await SaveReactionStatesAsync(current, messages, cancellationToken);
+                await SaveParticipantsAsync(current, messages, cancellationToken);
                 // SQLite is committed before the success flag. Crash/retry is safe because
                 // UNIQUE (account, peer type, peer id, message id) removes duplicates.
                 count = messages.Count;
@@ -114,6 +115,7 @@ public sealed class ChatSynchronizationService(
             await ReplaceHistoryAsync(current, messages, cancellationToken);
             await SaveAuthorsAsync(current, messages, cancellationToken);
             await SaveReactionStatesAsync(current, messages, cancellationToken);
+            await SaveParticipantsAsync(current, messages, cancellationToken);
             var lastId = messages.Count == 0 ? current.LastProcessedMessageId :
                 Math.Max(current.LastProcessedMessageId ?? 0, messages.Max(message => message.MessageId));
             await settings.ConfirmChatHistoryReloadAsync(current.TelegramUserId, current.PeerId,
@@ -150,6 +152,7 @@ public sealed class ChatSynchronizationService(
             progress?.Invoke("Проверяем реакции на задания…");
             var messages = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
             await SaveAuthorsAsync(current, messages, cancellationToken);
+            await SaveParticipantsAsync(current, messages, cancellationToken);
             return await SaveReactionStatesAsync(current, messages, cancellationToken);
         }
         finally { _gate.Release(); }
@@ -314,6 +317,11 @@ public sealed class ChatSynchronizationService(
         }
         await transaction.CommitAsync(cancellationToken);
     }
+
+    private Task<int> SaveParticipantsAsync(ConfiguredChat chat,
+        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
+        => new ChatParticipantRegistry(databasePath).UpdateAsync(chat,
+            messages.Select(message => (message.MessageId, message.Text)), cancellationToken);
 
     private static ConfiguredChat FindConfigured(AppSettings appSettings, ConfiguredChat expected)
     {

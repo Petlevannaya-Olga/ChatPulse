@@ -122,13 +122,13 @@ public sealed class ReactionSynchronizationTests
     }
 
     [Fact]
-    public async Task TaskReader_DoesNotFilterPostsWithoutLinks_AndKeepsCompleteTextAndAuthor()
+    public async Task TaskReader_SkipsMessagesWithoutLinks_AndKeepsCompleteTextAndAuthor()
     {
         using var temp = new TemporaryDirectory();
         using var settings = new JsonSettingsService(temp.Path);
         await settings.SaveChatAsync(CreateChat(101));
         var client = CreateClient();
-        const string fullText = "Добрый день!\nПожалуйста, оставьте комментарий ❤️\nВторая строка задания.";
+        const string fullText = "Добрый день!\nПожалуйста, оставьте комментарий ❤️\nhttps://www.instagram.com/p/abc123/";
         client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
             [new(10, fullText, false, "Мария Иванова"), new(11, "Объявление без ссылки", false, "@admin")]);
         var database = Path.Combine(temp.Path, "history.db");
@@ -136,13 +136,13 @@ public sealed class ReactionSynchronizationTests
         var chat = Assert.Single((await settings.LoadAsync()).Chats);
         await sync.SynchronizeAsync(chat);
         var tasks = await new WorkspaceTaskReader(database).GetTasksAsync(chat);
-        Assert.Equal(2, tasks.Count);
-        var first = tasks.Single(item => item.MessageId == 10);
+        Assert.Single(tasks);
+        var first = Assert.Single(tasks);
         Assert.Equal(fullText, first.Text);
         Assert.Equal("Мария Иванова", first.AuthorName);
         Assert.Equal("https://t.me/c/101/10", first.SourceUrl);
-        Assert.Equal(string.Empty, first.PostUrl);
-        Assert.Equal("@admin", tasks.Single(item => item.MessageId == 11).AuthorName);
+        Assert.Equal("https://www.instagram.com/p/abc123/", first.PostUrl);
+        Assert.DoesNotContain(tasks, task => task.MessageId == 11);
     }
 
     [Fact]
