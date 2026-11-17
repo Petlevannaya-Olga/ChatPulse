@@ -65,7 +65,7 @@ public sealed class WorkspaceTransitionTests
     }
 
     [Fact]
-    public async Task WorkspaceReader_ExposesOnlyRecognizedTasksOfTheConfiguredNetwork()
+    public async Task WorkspaceReader_ExposesAllImportedMessagesOfTheConfiguredChat()
     {
         using var temporary = new TestDirectory();
         var path = Path.Combine(temporary.Path, "history.db");
@@ -88,9 +88,25 @@ public sealed class WorkspaceTransitionTests
             await command.ExecuteNonQueryAsync();
         }
         var result = await new WorkspaceTaskReader(path).GetTasksAsync(CreateChat(101));
-        var task = Assert.Single(result);
-        Assert.Equal(1, task.MessageId);
-        Assert.Contains("instagram.com/p/abc123", task.PostUrl);
+        Assert.Collection(result,
+            task =>
+            {
+                Assert.Equal(3, task.MessageId);
+                Assert.Equal("Реакции на https://t.me/testchannel/123", task.Text);
+                Assert.Equal("https://t.me/testchannel/123", task.PostUrl);
+                Assert.False(task.IsCompleted);
+            },
+            task =>
+            {
+                Assert.Equal(2, task.MessageId);
+                Assert.Equal("https://www.instagram.com/reel/abc123/", task.PostUrl);
+            },
+            task =>
+            {
+                Assert.Equal(1, task.MessageId);
+                Assert.Contains("instagram.com/p/abc123", task.PostUrl);
+            });
+        Assert.DoesNotContain(result, task => task.MessageId == 4);
     }
 
     private static ConfiguredChat CreateChat(long id) => new()
