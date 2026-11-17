@@ -30,6 +30,9 @@ public interface ISettingsService
     Task UpdateChatPeriodAsync(long owner, long peerId, string peerType, int days,
         CancellationToken cancellationToken = default);
 
+    Task ConfirmChatHistoryReloadAsync(long owner, long peerId, string peerType, int days,
+        int messageCount, long? lastMessageId, CancellationToken cancellationToken = default);
+
     Task UpdateChatSyncAsync(long owner, long peerId, string peerType,
         ChatSynchronizationState state, int messageCount, long? lastMessageId, string? error,
         CancellationToken cancellationToken = default);

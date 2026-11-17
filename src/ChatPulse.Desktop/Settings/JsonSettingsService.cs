@@ -149,6 +149,7 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
                 chat.ImportedMessageCount = previous.ImportedMessageCount;
                 chat.SynchronizationError = previous.SynchronizationError;
                 chat.LastProcessedMessageId = previous.LastProcessedMessageId;
+                chat.RequestedHistoryDays = previous.RequestedHistoryDays;
                 settings.Chats[index] = chat;
             }
         }, cancellationToken);
@@ -162,8 +163,27 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         {
             var chat = FindChat(settings, owner, peerId, peerType);
             if (chat.SynchronizationState == ChatSynchronizationState.COMPLETED)
-                throw new InvalidOperationException("Нельзя изменить период завершённой синхронизации.");
+                chat.RequestedHistoryDays = days == chat.HistoryDays ? null : days;
+            else
+                chat.HistoryDays = days;
+        }, cancellationToken);
+    }
+
+    public Task ConfirmChatHistoryReloadAsync(long owner, long peerId, string peerType, int days,
+        int messageCount, long? lastMessageId, CancellationToken cancellationToken = default)
+    {
+        if (days is < 1 or > 30) throw new ArgumentOutOfRangeException(nameof(days));
+        if (messageCount < 0) throw new ArgumentOutOfRangeException(nameof(messageCount));
+        return UpdateAsync(settings =>
+        {
+            var chat = FindChat(settings, owner, peerId, peerType);
+            if (chat.SynchronizationState != ChatSynchronizationState.COMPLETED)
+                throw new InvalidOperationException("Повторная загрузка доступна только завершённому чату.");
             chat.HistoryDays = days;
+            chat.RequestedHistoryDays = null;
+            chat.ImportedMessageCount = messageCount;
+            chat.LastProcessedMessageId = lastMessageId;
+            chat.SynchronizationError = null;
         }, cancellationToken);
     }
 

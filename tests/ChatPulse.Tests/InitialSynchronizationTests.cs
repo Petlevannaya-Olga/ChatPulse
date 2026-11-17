@@ -232,6 +232,90 @@ public sealed class InitialSynchronizationTests
         Assert.Single(state.Chats);
     }
 
+    [Fact]
+    public async Task CompletedChat_ChangingPeriod_DoesNotReplaceSuccessfulSnapshotUntilReload()
+    {
+        using var temp = new TemporarySettingsDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SaveChatAsync(CreateChat(101));
+        await settings.UpdateChatSyncAsync(123, 101, "Channel",
+            ChatSynchronizationState.COMPLETED, 4, 12, null);
+        await settings.UpdateChatPeriodAsync(123, 101, "Channel", 21);
+        var chat = Assert.Single((await settings.LoadAsync()).Chats);
+        Assert.Equal(7, chat.HistoryDays);
+        Assert.Equal(21, chat.RequestedHistoryDays);
+        Assert.Equal(4, chat.ImportedMessageCount);
+        Assert.Equal(ChatSynchronizationState.COMPLETED, chat.SynchronizationState);
+    }
+
+    [Fact]
+    public async Task ReloadHistory_FailedTelegramFetch_PreservesPreviouslyImportedMessages()
+    {
+        using var temp = new TemporarySettingsDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SaveChatAsync(CreateChat(101));
+        var client = CreateClient();
+        client.ChatMessagesImpl = (_, _, _) =>
+            Task.FromResult<IReadOnlyList<TelegramChatMessage>>([new(10, "Первое")]);
+        var database = Path.Combine(temp.Path, "history.db");
+        var sync = new ChatSynchronizationService(settings, client, database);
+        var chat = Assert.Single((await settings.LoadAsync()).Chats);
+        await sync.SynchronizeAsync(chat);
+        await settings.UpdateChatPeriodAsync(123, 101, "Channel", 25);
+        client.ChatMessagesImpl = (_, _, _) =>
+            throw new IOException("Telegram temporarily unavailable");
+        await Assert.ThrowsAsync<IOException>(() => sync.ReloadHistoryAsync(chat, 25));
+        var saved = Assert.Single((await settings.LoadAsync()).Chats);
+        Assert.Equal(7, saved.HistoryDays);
+        Assert.Equal(25, saved.RequestedHistoryDays);
+        Assert.Equal(ChatSynchronizationState.COMPLETED, saved.SynchronizationState);
+        await using var connection = new SqliteConnection($"Data Source={database}");
+        await connection.OpenAsync();
+        var query = connection.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM ImportedChatMessages";
+        Assert.Equal(1L, (long)(await query.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
+    public async Task ReloadHistory_ReplacesOnlySelectedChatAndCommitsNewPeriod()
+    {
+        using var temp = new TemporarySettingsDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SaveChatAsync(CreateChat(101));
+        await settings.SaveChatAsync(CreateChat(202));
+        var client = CreateClient();
+        client.ChatMessagesImpl = (_, _, _) =>
+            Task.FromResult<IReadOnlyList<TelegramChatMessage>>([new(10, "Первое")]);
+        var database = Path.Combine(temp.Path, "history.db");
+        var sync = new ChatSynchronizationService(settings, client, database);
+        var chats = (await settings.LoadAsync()).Chats;
+        await sync.SynchronizeAsync(chats[0]);
+        await sync.SynchronizeAsync(chats[1]);
+        await settings.UpdateChatPeriodAsync(123, 101, "Channel", 20);
+        client.ChatMessagesImpl = (chat, days, _) =>
+        {
+            Assert.Equal(101, chat.PeerId);
+            Assert.Equal(20, days);
+            return Task.FromResult<IReadOnlyList<TelegramChatMessage>>([new(20, "Второе"), new(21, "Третье")]);
+        };
+        await sync.ReloadHistoryAsync(chats[0], 20);
+        var updated = (await settings.LoadAsync()).Chats;
+        Assert.Equal(20, updated.Single(c => c.PeerId == 101).HistoryDays);
+        Assert.Null(updated.Single(c => c.PeerId == 101).RequestedHistoryDays);
+        Assert.Equal(7, updated.Single(c => c.PeerId == 202).HistoryDays);
+        await using var connection = new SqliteConnection($"Data Source={database}");
+        await connection.OpenAsync();
+        var query = connection.CreateCommand();
+        query.CommandText = "SELECT PeerId, COUNT(*) FROM ImportedChatMessages GROUP BY PeerId ORDER BY PeerId";
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(101L, reader.GetInt64(0));
+        Assert.Equal(2L, reader.GetInt64(1));
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(202L, reader.GetInt64(0));
+        Assert.Equal(1L, reader.GetInt64(1));
+    }
+
     private static PendingChatConnection CreatePending(long id) => new()
     {
         TelegramUserId = 123, PeerId = id, PeerType = "Channel",

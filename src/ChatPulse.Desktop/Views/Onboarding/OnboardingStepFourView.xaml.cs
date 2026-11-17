@@ -28,7 +28,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler? BackRequested;
     public ObservableCollection<SynchronizationChatRow> Chats { get; } = [];
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanStart)); RefreshPhase(); } }
+    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanStart)); Notify(nameof(CanModifyPeriods)); RefreshPhase(); } }
     public bool IsConfigurationPhase => CurrentPhase == SynchronizationScreenPhase.CONFIGURATION;
     public bool IsSynchronizationPhase => CurrentPhase == SynchronizationScreenPhase.SYNCHRONIZING;
     public bool IsHistoryResultPhase => CurrentPhase == SynchronizationScreenPhase.HISTORY_RESULT;
@@ -56,6 +56,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         Notify(nameof(CanStart));
     }
     public bool CanStart => !IsBusy && Chats.Any(row => !row.IsComplete);
+    public bool CanModifyPeriods => !IsBusy;
     public string CurrentActivity { get => _currentActivity; private set { _currentActivity = value; Notify(); } }
 
     public void Initialize(ISettingsService settings, ChatSynchronizationService synchronization,
@@ -150,6 +151,30 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         }
     }
 
+    private async void ReloadHistoryButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: SynchronizationChatRow row } || IsBusy ||
+            !row.CanReloadHistory || _settings is null || _synchronization is null) return;
+        IsBusy = true;
+        try
+        {
+            await PersistPeriodsAsync();
+            var chat = (await _settings.LoadAsync()).Chats.Single(item =>
+                item.TelegramUserId == row.Owner && item.PeerId == row.PeerId && item.PeerType == row.PeerType);
+            var count = await _synchronization.ReloadHistoryAsync(chat, row.Days, phase =>
+                CurrentActivity = $"{row.Title}: {phase}");
+            row.SetCompleted(count);
+            row.ConfirmPeriod();
+        }
+        catch (Exception exception)
+        {
+            // Keep the last successful status and imported history on a failed reimport.
+            CurrentActivity = $"{row.Title}: не удалось обновить историю — {exception.Message}";
+            MessageBox.Show(CurrentActivity, "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally { IsBusy = false; RefreshPhase(); }
+    }
+
     private async void RetryButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { Tag: SynchronizationChatRow row } || IsBusy || !row.CanRetry) return;
@@ -225,6 +250,7 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
     private ChatSynchronizationState _state;
     private int _days;
     private int _importedMessageCount;
+    private int _loadedDays;
     private bool _pendingConnection;
 
     public SynchronizationChatRow(ConfiguredChat chat)
@@ -233,7 +259,9 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         PeerId = chat.PeerId;
         PeerType = chat.PeerType;
         Title = chat.TelegramTitle;
-        _days = chat.HistoryDays is >= 1 and <= 30 ? chat.HistoryDays : 7;
+        _loadedDays = chat.HistoryDays is >= 1 and <= 30 ? chat.HistoryDays : 7;
+        _days = chat.RequestedHistoryDays is >= 1 and <= 30
+            ? chat.RequestedHistoryDays.Value : _loadedDays;
         _state = chat.SynchronizationState;
         _importedMessageCount = chat.ImportedMessageCount;
         _status = _state switch
@@ -255,6 +283,7 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         Title = pending.TelegramTitle;
         Network = pending.SocialNetwork;
         _days = pending.HistoryDays;
+        _loadedDays = _days;
         _pendingConnection = true;
         _state = ChatSynchronizationState.PENDING;
         _status = "Ожидает подключения";
@@ -274,13 +303,32 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
     public string PeerType { get; }
     public string Title { get; }
     public int[] AvailableDays { get; } = Enumerable.Range(1, 30).ToArray();
-    public int Days { get => _days; set { if (CanEditPeriod && value is >= 1 and <= 30) { _days = value; Notify(); } } }
+    public int Days
+    {
+        get => _days;
+        set
+        {
+            if (!CanEditPeriod || value is < 1 or > 30 || _days == value) return;
+            _days = value;
+            Notify();
+            Notify(nameof(HasPeriodChange));
+            Notify(nameof(CanReloadHistory));
+        }
+    }
+    public bool HasPeriodChange => IsComplete && _days != _loadedDays;
+    public bool CanReloadHistory => HasPeriodChange; 
+    public void ConfirmPeriod()
+    {
+        _loadedDays = _days;
+        Notify(nameof(HasPeriodChange));
+        Notify(nameof(CanReloadHistory));
+    }
     public string Status { get => _status; private set { _status = value; Notify(); } }
     public string Details { get => _details; private set { _details = value; Notify(); } }
     public int ImportedMessageCount => _importedMessageCount;
     public bool IsComplete => _state == ChatSynchronizationState.COMPLETED;
     public bool CanRetry => _state is ChatSynchronizationState.FAILED or ChatSynchronizationState.RUNNING;
-    public bool CanEditPeriod => _state == ChatSynchronizationState.PENDING;
+    public bool CanEditPeriod => _state is ChatSynchronizationState.PENDING or ChatSynchronizationState.COMPLETED;
 
     public void SetWorking(string message)
     {
@@ -310,6 +358,8 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         Notify(nameof(IsComplete));
         Notify(nameof(CanRetry));
         Notify(nameof(CanEditPeriod));
+        Notify(nameof(HasPeriodChange));
+        Notify(nameof(CanReloadHistory));
     }
     private void Notify([CallerMemberName] string? property = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));

@@ -219,7 +219,7 @@
                     <ProgressBar Height="5" Foreground="#9042ED" Background="#EEE5FA" IsIndeterminate="True"/>
                 </StackPanel>
                 <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding Chats}">
+                    <ItemsControl ItemsSource="{Binding Chats}" IsEnabled="{Binding CanModifyPeriods}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border CornerRadius="12" BorderBrush="#E3D8F5" BorderThickness="1"
@@ -293,6 +293,12 @@
                                                 <TextBlock Text="30 дней" FontSize="11" Foreground="#9B90B2"
                                                            HorizontalAlignment="Right" />
                                             </Grid>
+                                            <Button Content="Перезагрузить историю" Tag="{Binding}"
+                                                    Click="ReloadHistoryButton_OnClick"
+                                                    IsEnabled="{Binding CanReloadHistory}"
+                                                    Visibility="{Binding HasPeriodChange, Converter={StaticResource BoolVisibility}}"
+                                                    Style="{StaticResource RetryButtonStyle}"
+                                                    HorizontalAlignment="Left" Margin="0,8,0,0" />
                                         </StackPanel>
                                     </Grid>
                                 </Border>

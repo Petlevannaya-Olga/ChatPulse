@@ -53,6 +53,8 @@ public sealed class ConfiguredChat
     public string SocialNetwork { get; set; } = string.Empty;
     public DateOnly StartDate { get; set; } // Legacy configuration; not used for initial synchronization.
     public int HistoryDays { get; set; } = 7;
+    // Desired period for an explicit history reload; does not change the successful snapshot.
+    public int? RequestedHistoryDays { get; set; } = null;
     public ChatSynchronizationState SynchronizationState { get; set; } = ChatSynchronizationState.PENDING;
     public int ImportedMessageCount { get; set; }
     public string? SynchronizationError { get; set; }
