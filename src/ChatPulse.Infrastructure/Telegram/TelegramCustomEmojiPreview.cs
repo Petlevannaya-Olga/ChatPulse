@@ -52,7 +52,7 @@ internal static class TelegramCustomEmojiPreview
             }
 
             var json = Encoding.UTF8.GetString(jsonBuffer.ToArray());
-            using var animation = Animation.Create(json);
+            using var animation = Animation.Parse(json);
             if (animation is null) return false;
 
             using var surface = SKSurface.Create(new SKImageInfo(PREVIEW_SIZE, PREVIEW_SIZE,
