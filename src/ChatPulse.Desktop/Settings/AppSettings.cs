@@ -10,6 +10,7 @@ public enum OnboardingStep
     Telegram,
     FirstChat,
     Synchronization,
+    Workspace,
 }
 
 /// <summary>

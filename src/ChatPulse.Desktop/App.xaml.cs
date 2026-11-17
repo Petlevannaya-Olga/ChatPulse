@@ -55,6 +55,7 @@ public partial class App : System.Windows.Application
                     provider.GetRequiredService<ISettingsService>(),
                     provider.GetRequiredService<ITelegramAuthenticationClient>(),
                     Path.Combine(dataDirectory, "chatpulse.db")));
+            builder.Services.AddSingleton(new WorkspaceTaskReader(Path.Combine(dataDirectory, "chatpulse.db")));
             builder.Services.AddSingleton<MainWindow>();
 
             _host = builder.Build();

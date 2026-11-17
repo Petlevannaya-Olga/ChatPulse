@@ -27,6 +27,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler? BackRequested;
+    public event EventHandler? ContinueRequested;
     public ObservableCollection<SynchronizationChatRow> Chats { get; } = [];
     public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanStart)); Notify(nameof(CanModifyPeriods)); RefreshPhase(); } }
     public bool IsConfigurationPhase => CurrentPhase == SynchronizationScreenPhase.CONFIGURATION;
@@ -54,9 +55,12 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         Notify(nameof(CompletedChatCount));
         Notify(nameof(TotalChatCount));
         Notify(nameof(CanStart));
+        Notify(nameof(CanContinue));
     }
     public bool CanStart => !IsBusy && Chats.Any(row => !row.IsComplete);
     public bool CanModifyPeriods => !IsBusy;
+    public bool CanContinue => !IsBusy && Chats.Count > 0 &&
+        Chats.All(row => row.IsComplete && !row.HasPeriodChange);
     public string CurrentActivity { get => _currentActivity; private set { _currentActivity = value; Notify(); } }
 
     public void Initialize(ISettingsService settings, ChatSynchronizationService synchronization,
@@ -80,12 +84,14 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         {
             var settings = await _settings.LoadAsync();
             var owner = await _synchronization!.GetAccountIdAsync();
+            foreach (var previous in Chats)
+                previous.PropertyChanged -= OnChatRowChanged;
             Chats.Clear();
             foreach (var chat in settings.Chats.Where(chat => chat.TelegramUserId == owner))
-                Chats.Add(new SynchronizationChatRow(chat));
+                AddChatRow(new SynchronizationChatRow(chat));
             foreach (var pending in (settings.PendingChats ?? []).Where(chat => chat.TelegramUserId == owner &&
                          !Chats.Any(saved => saved.PeerId == chat.PeerId && saved.PeerType == chat.PeerType)))
-                Chats.Add(new SynchronizationChatRow(pending));
+                AddChatRow(new SynchronizationChatRow(pending));
             CurrentActivity = Chats.Count == 0
                 ? "Нет выбранных чатов. Вернитесь к выбору."
                 : Chats.All(chat => chat.IsComplete)
@@ -97,6 +103,19 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         {
             CurrentActivity = "Не удалось восстановить настройки синхронизации.";
         }
+    }
+
+    private void AddChatRow(SynchronizationChatRow row)
+    {
+        row.PropertyChanged += OnChatRowChanged;
+        Chats.Add(row);
+    }
+
+    private void OnChatRowChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is nameof(SynchronizationChatRow.HasPeriodChange) or
+            nameof(SynchronizationChatRow.IsComplete))
+            Notify(nameof(CanContinue));
     }
 
     // Saving a period never starts a Telegram import or connects a pending chat.
@@ -223,6 +242,12 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         RefreshPhase();
         if (Chats.All(chat => chat.IsComplete))
             CurrentActivity = "История сообщений загружена.";
+    }
+
+    private void ContinueButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (CanContinue)
+            ContinueRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private async void BackButton_OnClick(object sender, RoutedEventArgs args)

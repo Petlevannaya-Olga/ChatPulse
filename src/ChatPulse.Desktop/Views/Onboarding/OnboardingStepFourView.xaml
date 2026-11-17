@@ -417,6 +417,10 @@
                                 Style="{StaticResource ContinueButtonStyle}" Click="StartButton_OnClick"
                                 IsEnabled="{Binding CanStart}"
                                 Visibility="{Binding IsConfigurationPhase, Converter={StaticResource BoolVisibility}}" />
+                        <Button Content="Продолжить  →" HorizontalAlignment="Right"
+                                Style="{StaticResource ContinueButtonStyle}" Click="ContinueButton_OnClick"
+                                IsEnabled="{Binding CanContinue}"
+                                Visibility="{Binding IsHistoryResultPhase, Converter={StaticResource BoolVisibility}}" />
                     </Grid>
                 </Border>
             </Grid>

@@ -74,9 +74,11 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         => UpdateAsync(settings =>
         {
             if (settings.PendingChats?.Count > 0 || settings.Chats.Count == 0 ||
-                settings.Chats.Any(chat => chat.SynchronizationState != ChatSynchronizationState.COMPLETED))
+                settings.Chats.Any(chat => chat.SynchronizationState != ChatSynchronizationState.COMPLETED ||
+                    chat.RequestedHistoryDays.HasValue && chat.RequestedHistoryDays != chat.HistoryDays))
                 throw new InvalidOperationException(
                     "Онбординг нельзя завершить до синхронизации всех чатов.");
+            settings.CurrentOnboardingStep = OnboardingStep.Workspace;
             settings.IsOnboardingCompleted = true;
         }, cancellationToken);
 

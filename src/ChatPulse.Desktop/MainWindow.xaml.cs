@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private bool _isExitDialogOpen;
     private bool _isOnboardingCompleted;
     private bool _hasInitialized;
+    private bool _isFinishingOnboarding;
 
     public MainWindow(
         TelegramSetupViewModel telegramSetup,
@@ -33,13 +34,16 @@ public partial class MainWindow : Window
         ChatSynchronizationService synchronization,
         ILogger<MainWindow> logger,
         ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents,
-        TelegramConnectionMonitor connectionMonitor)
+        TelegramConnectionMonitor connectionMonitor,
+        WorkspaceTaskReader workspaceTaskReader)
     {
         InitializeComponent();
         _settings = settings;
         _synchronization = synchronization;
         FourthStepScreen.Initialize(_settings, _synchronization, firstChatSetup);
         FourthStepScreen.BackRequested += async (_, _) => await NavigateAsync(OnboardingStep.FirstChat);
+        FourthStepScreen.ContinueRequested += FourthStepScreen_OnContinueRequested;
+        WorkspaceScreen.Initialize(_settings, workspaceTaskReader);
         _telegramSetup = telegramSetup;
         _firstChatSetup = firstChatSetup;
         _logger = logger;
@@ -148,7 +152,10 @@ public partial class MainWindow : Window
         _isOnboardingCompleted = settings.IsOnboardingCompleted;
         FirstStepScreen.RestoreName(settings.UserName);
 
-        var step = settings.CurrentOnboardingStep;
+        var step = settings.IsOnboardingCompleted
+            ? OnboardingStep.Workspace : settings.CurrentOnboardingStep;
+        if (!settings.IsOnboardingCompleted && step == OnboardingStep.Workspace)
+            step = OnboardingStep.Synchronization;
         if (!Enum.IsDefined(step))
         {
             step = OnboardingStep.Welcome;
@@ -182,7 +189,6 @@ public partial class MainWindow : Window
             await _settings.SaveOnboardingStepAsync(step, cancellationToken);
         }
 
-        // Главный экран будет реализован после настройки чатов.
         ShowStep(step);
         _hasInitialized = true;
         if (_telegramSetup.IsAuthorized)
@@ -209,6 +215,8 @@ public partial class MainWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         FourthStepScreen.Visibility = step == OnboardingStep.Synchronization
             ? Visibility.Visible : Visibility.Collapsed;
+        WorkspaceScreen.Visibility = step == OnboardingStep.Workspace
+            ? Visibility.Visible : Visibility.Collapsed;
 
         if (step == OnboardingStep.Telegram)
             SecondStepScreen.ShowTelegramPage(_telegramPage);
@@ -219,6 +227,7 @@ public partial class MainWindow : Window
             OnboardingStep.Telegram => "ChatPulse — Онбординг: шаг 2",
             OnboardingStep.FirstChat => "ChatPulse — Онбординг: шаг 3",
             OnboardingStep.Synchronization => "ChatPulse — Онбординг: шаг 4",
+            OnboardingStep.Workspace => "ChatPulse — Рабочая область",
             _ => "ChatPulse — Пульс ваших чатов",
         };
     }
@@ -289,14 +298,36 @@ public partial class MainWindow : Window
     private async void ThirdStepScreen_OnBackRequested(object sender, EventArgs e)
         => await NavigateAsync(OnboardingStep.Telegram);
 
-    /// <summary>
-    /// Завершение онбординга будет подключено при появлении главного экрана.
-    /// Сохранение первого чата само по себе ещё не начинает импорт сообщений.
-    /// </summary>
+    private async void FourthStepScreen_OnContinueRequested(object? sender, EventArgs args)
+    {
+        if (_isFinishingOnboarding) return;
+        _isFinishingOnboarding = true;
+        try
+        {
+            // Final eligibility is checked against persisted state, never only UI flags.
+            await _settings.CompleteOnboardingAsync();
+            _isOnboardingCompleted = true;
+            ShowStep(OnboardingStep.Workspace);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Не удалось перейти в рабочую область");
+            MessageBox.Show(this,
+                "Не удалось завершить настройку. Убедитесь, что все чаты загружены и периоды совпадают. " +
+                "При необходимости повторите синхронизацию.",
+                "ChatPulse — Завершение настройки", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _isFinishingOnboarding = false;
+        }
+    }
+
     public async Task MarkOnboardingCompletedAsync(CancellationToken cancellationToken = default)
     {
         await _settings.CompleteOnboardingAsync(cancellationToken);
         _isOnboardingCompleted = true;
+        ShowStep(OnboardingStep.Workspace);
     }
 
     private static bool IsSettingsError(Exception exception) =>
