@@ -19,6 +19,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private ISettingsService? _settings;
     private WorkspaceTaskReader? _reader;
     private ChatSynchronizationService? _synchronization;
+    private WorkspaceTaskSkipStore? _skipStore;
     private WorkspaceChatRow? _selectedChat;
     private readonly Dictionary<WorkspaceChatRow, IReadOnlyList<WorkspaceDetectedTask>> _taskCache = [];
     private WorkspacePage _page = WorkspacePage.Home;
@@ -28,7 +29,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _reactionRefreshMessage = string.Empty;
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
-    private bool _showCompleted;
+    private enum TaskFilter { Pending, Completed, Skipped }
+    private TaskFilter _taskFilter;
     private bool _isRebuildingChatList;
     private int _loadVersion;
     private int _totalDetected;
@@ -76,9 +78,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         get => _reactionRefreshMessage;
         private set { _reactionRefreshMessage = value; Notify(); }
     }
-    public string EmptyTasksMessage => _showCompleted
-        ? "В этом чате нет заданий с подтверждённой твоей реакцией."
-        : "Нет невыполненных заданий в загруженной истории.";
+    public string EmptyTasksMessage => _taskFilter switch
+    {
+        TaskFilter.Completed => "В этом чате нет заданий с подтверждённой твоей реакцией.",
+        TaskFilter.Skipped => "В этом чате пока нет пропущенных сообщений.",
+        _ => "Нет невыполненных заданий в загруженной истории."
+    };
     public bool IsHomeVisible => _page == WorkspacePage.Home;
     public bool IsChatVisible => _page == WorkspacePage.Chat;
     public bool IsSettingsVisible => _page == WorkspacePage.Settings;
@@ -93,6 +98,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _settings = settings;
         _reader = reader;
         _synchronization = synchronization;
+        _skipStore = new WorkspaceTaskSkipStore(reader.DatabasePath);
     }
 
     private async void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -141,8 +147,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 var detected = await _reader!.GetTasksAsync(chat.Chat);
                 if (version != _loadVersion) return;
                 _taskCache[chat] = detected;
-                chat.DetectedCount = detected.Count;
-                _totalDetected += detected.Count;
+                chat.DetectedCount = detected.Count(task => !task.IsSkipped);
+                _totalDetected += chat.DetectedCount;
                 Notify(nameof(TotalDetected));
                 Notify(nameof(SelectedChatTaskCount));
             }
@@ -169,12 +175,22 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         Tasks.Clear();
         if (SelectedChat is not null && _taskCache.TryGetValue(SelectedChat, out var detected))
         {
-            foreach (var task in detected.Where(task => task.IsCompleted == _showCompleted))
+            foreach (var task in detected.Where(task => _taskFilter switch
+                     {
+                         TaskFilter.Skipped => task.IsSkipped,
+                         TaskFilter.Completed => !task.IsSkipped && task.IsCompleted,
+                         _ => !task.IsSkipped && !task.IsCompleted
+                     }))
                 Tasks.Add(new WorkspaceTaskCard(task));
         }
         TaskSummary = SelectedChat is null
             ? "Подключённых чатов пока нет."
-            : $"{(_showCompleted ? "Выполненных" : "Невыполненных")}: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram.";
+            : _taskFilter switch
+            {
+                TaskFilter.Skipped => $"Пропущенных: {Tasks.Count}. Реакции в Telegram не изменяются.",
+                TaskFilter.Completed => $"Выполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram.",
+                _ => $"Невыполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram."
+            };
         Notify(nameof(HasTasks));
         Notify(nameof(HasNoTasks));
         Notify(nameof(EmptyTasksMessage));
@@ -203,7 +219,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         if (SelectedChat is null) return;
         _chatPage = ChatPage.Tasks;
-        _showCompleted = false;
+        _taskFilter = TaskFilter.Pending;
         UpdateSelectedTasks();
         _page = WorkspacePage.Chat;
         NotifyPageState();
@@ -243,16 +259,61 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private void DetectedFilterButton_OnClick(object sender, RoutedEventArgs args)
     {
-        _showCompleted = false;
+        _taskFilter = TaskFilter.Pending;
         UpdateSelectedTasks();
         NotifyTaskFilter();
     }
 
     private void CompletedFilterButton_OnClick(object sender, RoutedEventArgs args)
     {
-        _showCompleted = true;
+        _taskFilter = TaskFilter.Completed;
         UpdateSelectedTasks();
         NotifyTaskFilter();
+    }
+
+    private void SkippedFilterButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        _taskFilter = TaskFilter.Skipped;
+        UpdateSelectedTasks();
+        NotifyTaskFilter();
+    }
+
+    private async void SkipTaskButton_OnClick(object sender, RoutedEventArgs args)
+        => await SetTaskSkippedAsync(sender, true);
+
+    private async void RestoreTaskButton_OnClick(object sender, RoutedEventArgs args)
+        => await SetTaskSkippedAsync(sender, false);
+
+    private async Task SetTaskSkippedAsync(object sender, bool skipped)
+    {
+        if (IsBusy || _skipStore is null || SelectedChat is null ||
+            sender is not Button { Tag: long messageId }) return;
+        var row = SelectedChat;
+        IsBusy = true;
+        try
+        {
+            await _skipStore.SetSkippedAsync(row.Chat, messageId, skipped);
+            if (_taskCache.TryGetValue(row, out var items))
+            {
+                _taskCache[row] = items.Select(task => task.MessageId == messageId
+                    ? task with { IsSkipped = skipped } : task).ToArray();
+                row.DetectedCount = _taskCache[row].Count(task => !task.IsSkipped);
+                _totalDetected = _taskCache.Sum(pair => pair.Value.Count(task => !task.IsSkipped));
+                Notify(nameof(TotalDetected));
+                Notify(nameof(SelectedChatTaskCount));
+            }
+            UpdateSelectedTasks();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Не удалось изменить статус сообщения: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifyTaskFilter();
+        }
     }
 
     private async void CheckReactionsButton_OnClick(object sender, RoutedEventArgs args)
@@ -317,8 +378,10 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         Notify(nameof(EmptyTasksMessage));
         if (DetectedFilterButton is not null && CompletedFilterButton is not null)
         {
-            DetectedFilterButton.Opacity = _showCompleted ? 0.6 : 1;
-            CompletedFilterButton.Opacity = _showCompleted ? 1 : 0.6;
+            DetectedFilterButton.Opacity = _taskFilter == TaskFilter.Pending ? 1 : 0.6;
+            CompletedFilterButton.Opacity = _taskFilter == TaskFilter.Completed ? 1 : 0.6;
+            if (SkippedFilterButton is not null)
+                SkippedFilterButton.Opacity = _taskFilter == TaskFilter.Skipped ? 1 : 0.6;
         }
     }
 
@@ -391,6 +454,9 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
         }
     }
     public string TimeLabel => LocalDate?.ToString("HH:mm", RUSSIAN_CULTURE) ?? string.Empty;
+    public long MessageId => task.MessageId;
+    public bool IsSkipped => task.IsSkipped;
+    public bool CanSkip => !task.IsSkipped;
     public string CustomEmojiJson => task.CustomEmojiJson;
     public string PostUrl => task.PostUrl;
     public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);

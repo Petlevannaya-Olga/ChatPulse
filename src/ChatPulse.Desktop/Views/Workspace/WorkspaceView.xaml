@@ -537,6 +537,8 @@
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,0"
                                         Background="{StaticResource AccentBrush}" Foreground="White" BorderThickness="0" />
                                 <Button x:Name="CompletedFilterButton" Content="Выполненные" Click="CompletedFilterButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Opacity="0.6" Margin="0,0,8,0" />
+                                <Button x:Name="SkippedFilterButton" Content="Пропущенные" Click="SkippedFilterButton_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Opacity="0.6" />
                             </StackPanel>
                             <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"
@@ -617,6 +619,14 @@
                                                             <Button Content="↗  Пост" Tag="{Binding PostUrl}"
                                                                     Visibility="{Binding HasPostUrl, Converter={StaticResource BoolVisible}}"
                                                                     Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                    Margin="0,0,9,0" />
+                                                            <Button Content="Пропустить" Tag="{Binding MessageId}"
+                                                                    Visibility="{Binding CanSkip, Converter={StaticResource BoolVisible}}"
+                                                                    Click="SkipTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                    Margin="0,0,9,0" />
+                                                            <Button Content="Вернуть в задания" Tag="{Binding MessageId}"
+                                                                    Visibility="{Binding IsSkipped, Converter={StaticResource BoolVisible}}"
+                                                                    Click="RestoreTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                     Margin="0,0,9,0" />
                                                             <Button Content="✓  Готово" IsEnabled="False"
                                                                     ToolTip="Отметка выполнения будет реализована позже"

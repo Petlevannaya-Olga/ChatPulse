@@ -11,6 +11,7 @@ namespace ChatPulse.Desktop.Services;
 /// </summary>
 public sealed class WorkspaceTaskReader(string databasePath)
 {
+    public string DatabasePath => databasePath;
     public async Task<IReadOnlyList<WorkspaceDetectedTask>> GetTasksAsync(
         ConfiguredChat chat, CancellationToken cancellationToken = default)
     {
@@ -40,6 +41,9 @@ public sealed class WorkspaceTaskReader(string databasePath)
         var datesTable = connection.CreateCommand();
         datesTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageDates'";
         var hasDates = (long)(await datesTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        var skipTable = connection.CreateCommand();
+        skipTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageSkips'";
+        var hasSkips = (long)(await skipTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
         var command = connection.CreateCommand();
         var ownReactionColumn = hasReactionStates ? "reaction.HasOwnReaction" : "NULL";
         var ownReactionJoin = hasReactionStates ? """
@@ -69,13 +73,21 @@ public sealed class WorkspaceTaskReader(string databasePath)
              AND dates.PeerType = message.PeerType
              AND dates.PeerId = message.PeerId AND dates.MessageId = message.MessageId
             """ : string.Empty;
+        var skipColumn = hasSkips ? "CASE WHEN skipped.MessageId IS NULL THEN 0 ELSE 1 END" : "0";
+        var skipJoin = hasSkips ? """
+            LEFT JOIN ImportedMessageSkips AS skipped
+              ON skipped.TelegramUserId = message.TelegramUserId
+             AND skipped.PeerType = message.PeerType
+             AND skipped.PeerId = message.PeerId AND skipped.MessageId = message.MessageId
+            """ : string.Empty;
         command.CommandText = $"""
-            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}, {emojiColumn}, {timestampColumn}
+            SELECT message.MessageId, message.Text, {ownReactionColumn}, {authorColumn}, {emojiColumn}, {timestampColumn}, {skipColumn}
             FROM ImportedChatMessages AS message
             {ownReactionJoin}
             {authorJoin}
             {emojiJoin}
             {timestampJoin}
+            {skipJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             ORDER BY message.MessageId DESC
             """;
@@ -103,11 +115,11 @@ public sealed class WorkspaceTaskReader(string databasePath)
                 ? null : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5));
             tasks.Add(new WorkspaceDetectedTask(messageId, messageText, postUrl,
                 !reader.IsDBNull(2) && reader.GetInt64(2) == 1, authorName, sourceUrl,
-                reader.IsDBNull(4) ? string.Empty : reader.GetString(4), sentAt));
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4), sentAt, reader.GetInt64(6) == 1));
         }
         return tasks;
     }
 }
 
 public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl,
-    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "", string CustomEmojiJson = "", DateTimeOffset? SentAtUtc = null);
+    bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "", string CustomEmojiJson = "", DateTimeOffset? SentAtUtc = null, bool IsSkipped = false);
