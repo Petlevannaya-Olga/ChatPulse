@@ -598,9 +598,22 @@
                                                                         <ColumnDefinition Width="*" />
                                                                         <ColumnDefinition Width="Auto" />
                                                                     </Grid.ColumnDefinitions>
-                                                                    <TextBlock Grid.Column="0" Text="{Binding Title}" Foreground="#24154C"
-                                                                               FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
-                                                                               FontSize="13" FontWeight="SemiBold" />
+                                                                    <WrapPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                                                         <TextBlock Text="{Binding Title}" Foreground="#24154C"
+                                                                                    FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
+                                                                                    FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                                                    Margin="0,0,12,0" />
+                                                                         <Button Content="↗  Reel" Tag="{Binding ReelUrl}"
+                                                                                 Visibility="{Binding HasReelUrl, Converter={StaticResource BoolVisible}}"
+                                                                                 Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                                 Margin="0,0,8,0" />
+                                                                         <TextBlock Text="или" Foreground="#9280A7" VerticalAlignment="Center"
+                                                                                    Visibility="{Binding HasBothInstagramLinks, Converter={StaticResource BoolVisible}}"
+                                                                                    Margin="0,0,8,0" />
+                                                                         <Button Content="↗  Пост" Tag="{Binding FeedPostUrl}"
+                                                                                 Visibility="{Binding HasFeedPostUrl, Converter={StaticResource BoolVisible}}"
+                                                                                 Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}" />
+                                                                     </WrapPanel>
                                                                     <TextBlock Grid.Column="1" Text="{Binding TimeLabel}" Foreground="#93849F"
                                                                                FontSize="12" Margin="12,0,0,0" />
                                                                 </Grid>
@@ -617,7 +630,7 @@
                                                                     Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                     Margin="0,0,9,0" />
                                                             <Button Content="↗  Пост" Tag="{Binding PostUrl}"
-                                                                    Visibility="{Binding HasPostUrl, Converter={StaticResource BoolVisible}}"
+                                                                    Visibility="{Binding HasStandalonePostUrl, Converter={StaticResource BoolVisible}}"
                                                                     Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                     Margin="0,0,9,0" />
                                                             <Button Content="Пропустить" Tag="{Binding MessageId}"

@@ -537,12 +537,20 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     public bool CanSkip => !task.IsSkipped && !task.IsCompleted;
     public bool CanHideCompleted => task.IsCompleted && !task.IsSkipped;
     public bool CanComplete => !task.IsSkipped && !task.IsCompleted;
-    public string CustomEmojiJson => task.CustomEmojiJson;
+    // Presentation-only transformation: the original Telegram text and emoji offsets remain in SQLite.
+    private readonly WorkspaceTaskPresentation _presentation = WorkspaceTaskPresentation.Create(task.Text, task.CustomEmojiJson);
+    public string CustomEmojiJson => _presentation.CustomEmojiJson;
+    public string ReelUrl => _presentation.ReelUrl;
+    public string FeedPostUrl => _presentation.FeedPostUrl;
+    public bool HasReelUrl => !string.IsNullOrWhiteSpace(ReelUrl);
+    public bool HasFeedPostUrl => !string.IsNullOrWhiteSpace(FeedPostUrl);
+    public bool HasBothInstagramLinks => HasReelUrl && HasFeedPostUrl;
     public string PostUrl => task.PostUrl;
     public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);
+    public bool HasStandalonePostUrl => HasPostUrl && !HasReelUrl && !HasFeedPostUrl;
     public string SourceUrl => task.SourceUrl;
     public bool HasSourceUrl => !string.IsNullOrWhiteSpace(task.SourceUrl);
     public string Title => string.IsNullOrWhiteSpace(task.AuthorName) ? "Автор неизвестен" : task.AuthorName;
-    public string Description => string.IsNullOrWhiteSpace(task.Text)
-        ? "Сообщение без текста (возможно, содержит медиа)" : task.Text;
+    public string Description => string.IsNullOrWhiteSpace(_presentation.Text)
+        ? "Сообщение без текста (возможно, содержит медиа)" : _presentation.Text;
 }

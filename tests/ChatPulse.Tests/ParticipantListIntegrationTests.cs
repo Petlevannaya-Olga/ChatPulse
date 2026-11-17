@@ -97,7 +97,7 @@ public sealed class ParticipantListIntegrationTests
         }
 
         var tasks = await new WorkspaceTaskReader(database).GetTasksAsync(Chat(101));
-        Assert.Equal(new long[] { 3, 2 }, tasks.Select(item => item.MessageId));
+        Assert.Equal(new long[] { 2, 3 }, tasks.Select(item => item.MessageId));
 
         await using var check = new SqliteConnection($"Data Source={database}");
         await check.OpenAsync();
