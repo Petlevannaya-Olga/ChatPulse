@@ -16,6 +16,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     private ChatSynchronizationService? _synchronization;
     private FirstChatSetupViewModel? _chatSetup;
     private bool _isBusy;
+    private readonly SemaphoreSlim _periodSaveGate = new(1, 1);
     private string _currentActivity = "Выберите период загрузки истории.";
 
     public OnboardingStepFourView()
@@ -27,7 +28,33 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler? BackRequested;
     public ObservableCollection<SynchronizationChatRow> Chats { get; } = [];
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanStart)); } }
+    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanStart)); RefreshPhase(); } }
+    public bool IsConfigurationPhase => CurrentPhase == SynchronizationScreenPhase.CONFIGURATION;
+    public bool IsSynchronizationPhase => CurrentPhase == SynchronizationScreenPhase.SYNCHRONIZING;
+    public bool IsHistoryResultPhase => CurrentPhase == SynchronizationScreenPhase.HISTORY_RESULT;
+    public SynchronizationScreenPhase CurrentPhase => SynchronizationScreenPhaseResolver.Resolve(
+        Chats.Count, Chats.Count(row => row.IsComplete), IsBusy);
+    public string PhaseSubtitle => CurrentPhase switch
+    {
+        SynchronizationScreenPhase.SYNCHRONIZING => "Получаем и сохраняем сообщения из Telegram.",
+        SynchronizationScreenPhase.HISTORY_RESULT => "Настройте период загрузки истории для каждого чата.",
+        _ => "Выберите период загрузки для каждого чата — от 1 до 30 дней."
+    };
+    public int CompletedChatCount => Chats.Count(row => row.IsComplete);
+    public int TotalChatCount => Chats.Count;
+    public string PrimaryButtonText => "Начать синхронизацию";
+
+    private void RefreshPhase()
+    {
+        Notify(nameof(IsConfigurationPhase));
+        Notify(nameof(IsSynchronizationPhase));
+        Notify(nameof(IsHistoryResultPhase));
+        Notify(nameof(CurrentPhase));
+        Notify(nameof(PhaseSubtitle));
+        Notify(nameof(CompletedChatCount));
+        Notify(nameof(TotalChatCount));
+        Notify(nameof(CanStart));
+    }
     public bool CanStart => !IsBusy && Chats.Any(row => !row.IsComplete);
     public string CurrentActivity { get => _currentActivity; private set { _currentActivity = value; Notify(); } }
 
@@ -61,13 +88,42 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
             CurrentActivity = Chats.Count == 0
                 ? "Нет выбранных чатов. Вернитесь к выбору."
                 : Chats.All(chat => chat.IsComplete)
-                    ? "История всех чатов загружена. Формирование заданий будет следующим этапом."
+                    ? "История сообщений загружена."
                     : "Настройте периоды и начните загрузку.";
-            Notify(nameof(CanStart));
+            RefreshPhase();
         }
         catch (Exception)
         {
             CurrentActivity = "Не удалось восстановить настройки синхронизации.";
+        }
+    }
+
+    // Saving a period never starts a Telegram import or connects a pending chat.
+    // Periods are persisted independently, so returning to this step restores the selection.
+    private async Task PersistPeriodsAsync()
+    {
+        if (_settings is null) return;
+        await _periodSaveGate.WaitAsync();
+        try
+        {
+            foreach (var row in Chats.Where(row => row.CanEditPeriod))
+            {
+                if (row.IsPendingConnection)
+                    await _settings.UpdatePendingChatPeriodAsync(row.Owner, row.PeerId, row.PeerType, row.Days);
+                else
+                    await _settings.UpdateChatPeriodAsync(row.Owner, row.PeerId, row.PeerType, row.Days);
+            }
+        }
+        finally { _periodSaveGate.Release(); }
+    }
+
+    private async void PeriodSlider_OnInteractionCompleted(object sender, RoutedEventArgs args)
+    {
+        if (!IsVisible || IsBusy || _settings is null) return;
+        try { await PersistPeriodsAsync(); }
+        catch (Exception exception)
+        {
+            CurrentActivity = $"Не удалось сохранить выбранный период: {exception.Message}";
         }
     }
 
@@ -77,16 +133,9 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         IsBusy = true;
         try
         {
-            foreach (var row in Chats.Where(row => !row.IsComplete).ToArray())
-            {
-                if (row.CanEditPeriod)
-                {
-                    if (row.IsPendingConnection)
-                        await _settings.UpdatePendingChatPeriodAsync(row.Owner, row.PeerId, row.PeerType, row.Days);
-                    else
-                        await _settings.UpdateChatPeriodAsync(row.Owner, row.PeerId, row.PeerType, row.Days);
-                }
-            }
+            // Explicit button click is the only entry point for the first history import.
+            // Persist *all* selected periods before any Telegram request or chat connection.
+            await PersistPeriodsAsync();
             foreach (var row in Chats.Where(row => !row.IsComplete).ToArray())
                 await SynchronizeRowAsync(row);
         }
@@ -146,14 +195,23 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
             row.SetFailed(exception.Message);
             CurrentActivity = $"{row.Title}: ошибка — {exception.Message}";
         }
-        Notify(nameof(CanStart));
+        RefreshPhase();
         if (Chats.All(chat => chat.IsComplete))
-            CurrentActivity = "История всех чатов загружена. Формирование заданий будет следующим этапом.";
+            CurrentActivity = "История сообщений загружена.";
     }
 
-    private void BackButton_OnClick(object sender, RoutedEventArgs args)
+    private async void BackButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (!IsBusy) BackRequested?.Invoke(this, EventArgs.Empty);
+        if (IsBusy) return;
+        try
+        {
+            await PersistPeriodsAsync();
+            BackRequested?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception exception)
+        {
+            CurrentActivity = $"Не удалось сохранить выбранный период: {exception.Message}";
+        }
     }
 
     private void Notify([CallerMemberName] string? property = null)
@@ -180,7 +238,7 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
         _importedMessageCount = chat.ImportedMessageCount;
         _status = _state switch
         {
-            ChatSynchronizationState.COMPLETED => "История загружена",
+            ChatSynchronizationState.COMPLETED => "История сообщений загружена",
             ChatSynchronizationState.FAILED => "Ошибка загрузки — можно повторить",
             ChatSynchronizationState.RUNNING => "Предыдущая загрузка прервана — можно повторить",
             _ => "Ожидает загрузки"
@@ -219,6 +277,7 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
     public int Days { get => _days; set { if (CanEditPeriod && value is >= 1 and <= 30) { _days = value; Notify(); } } }
     public string Status { get => _status; private set { _status = value; Notify(); } }
     public string Details { get => _details; private set { _details = value; Notify(); } }
+    public int ImportedMessageCount => _importedMessageCount;
     public bool IsComplete => _state == ChatSynchronizationState.COMPLETED;
     public bool CanRetry => _state is ChatSynchronizationState.FAILED or ChatSynchronizationState.RUNNING;
     public bool CanEditPeriod => _state == ChatSynchronizationState.PENDING;
@@ -233,7 +292,9 @@ public sealed class SynchronizationChatRow : INotifyPropertyChanged
     public void SetCompleted(int count)
     {
         _state = ChatSynchronizationState.COMPLETED;
-        Status = "История загружена";
+        _importedMessageCount = count;
+        Notify(nameof(ImportedMessageCount));
+        Status = "История сообщений загружена";
         Details = $"Сообщений: {count}";
         UpdateState();
     }

@@ -186,6 +186,28 @@ public sealed class InitialSynchronizationTests
     }
 
     [Fact]
+    public async Task ConfiguringPendingPeriods_DoesNotConnectOrImportChats()
+    {
+        using var temp = new TemporarySettingsDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SavePendingChatsAsync(123, [CreatePending(101), CreatePending(202)]);
+        await settings.SaveOnboardingStepAsync(OnboardingStep.Synchronization);
+
+        // Selecting a period is configuration only: no SaveChat and no Telegram import.
+        await settings.UpdatePendingChatPeriodAsync(123, 101, "Channel", 14);
+        await settings.UpdatePendingChatPeriodAsync(123, 202, "Channel", 3);
+
+        using var reopened = new JsonSettingsService(temp.Path);
+        var restored = await reopened.LoadAsync();
+        Assert.Empty(restored.Chats);
+        Assert.Equal(2, restored.PendingChats.Count);
+        Assert.Equal(14, restored.PendingChats.Single(chat => chat.PeerId == 101).HistoryDays);
+        Assert.Equal(3, restored.PendingChats.Single(chat => chat.PeerId == 202).HistoryDays);
+        Assert.Equal(OnboardingStep.Synchronization, restored.CurrentOnboardingStep);
+        Assert.False(restored.IsOnboardingCompleted);
+    }
+
+    [Fact]
     public async Task ExistingConfiguredChat_IsNotStagedAgain()
     {
         using var temp = new TemporarySettingsDirectory();

@@ -199,36 +199,117 @@
                     </Grid>
                     <TextBlock Text="Синхронизация чатов" FontWeight="Bold" FontSize="28" Foreground="#24154C"
                                TextAlignment="Center" Margin="0,9,0,0" />
-                    <TextBlock Text="Выберите период загрузки для каждого чата (от 1 до 30 дней)."
+                    <TextBlock Text="{Binding PhaseSubtitle}" TextWrapping="Wrap" MaxWidth="660"
                                Foreground="#796C98" Margin="0,5,0,0" FontSize="14" TextAlignment="Center" />
                 </StackPanel>
-                <StackPanel Grid.Row="1" Margin="0,0,0,12">
-                    <TextBlock Text="Текущий этап" Foreground="#796C98" FontSize="12" />
-                    <TextBlock Text="{Binding CurrentActivity}" FontWeight="SemiBold" Foreground="#633AA3" Margin="0,5,0,6"/>
-                    <ProgressBar Height="4" Foreground="#9042ED" Background="#EEE5FA" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolVisibility}}"/>
+                <!-- Phase information is visible only during the actual operation. -->
+                <StackPanel Grid.Row="1" Margin="0,0,0,12"
+                            Visibility="{Binding IsSynchronizationPhase, Converter={StaticResource BoolVisibility}}">
+                    <Grid Margin="0,0,0,7">
+                        <TextBlock Text="Синхронизация выполняется" FontWeight="SemiBold" Foreground="#24154C"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <TextBlock Text="Готово: " Foreground="#796C98"/>
+                            <TextBlock Text="{Binding CompletedChatCount}" Foreground="#633AA3" FontWeight="SemiBold"/>
+                            <TextBlock Text=" из " Foreground="#796C98"/>
+                            <TextBlock Text="{Binding TotalChatCount}" Foreground="#633AA3" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Text="{Binding CurrentActivity}" Foreground="#633AA3" Margin="0,0,0,9"
+                               FontSize="13" TextWrapping="Wrap"/>
+                    <ProgressBar Height="5" Foreground="#9042ED" Background="#EEE5FA" IsIndeterminate="True"/>
                 </StackPanel>
                 <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                     <ItemsControl ItemsSource="{Binding Chats}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border CornerRadius="12" BorderBrush="#E3D8F5" BorderThickness="1"
-                                        Background="#FBF9FF" Padding="17" Margin="0,0,12,14">
+                                        Background="#FBF9FF" Padding="16,12" Margin="0,0,12,12">
+                                    <!-- Two balanced columns: chat information and history-period settings. -->
                                     <Grid>
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" Foreground="#24154C" />
-                                            <TextBlock Text="{Binding Status}" FontSize="13" Foreground="#796C98" Margin="0,7,0,0" TextWrapping="Wrap"/>
-                                            <TextBlock Text="{Binding Details}" FontSize="12" Foreground="#796C98" Margin="0,5,0,0" TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="Период, дней" FontSize="12" Foreground="#796C98" HorizontalAlignment="Center"/>
-                                            <ComboBox ItemsSource="{Binding AvailableDays}" SelectedItem="{Binding Days, Mode=TwoWay}"
-                                                      IsEnabled="{Binding CanEditPeriod}" Margin="5,5,5,0"/>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" MinWidth="230" />
+                                            <ColumnDefinition Width="1" />
+                                            <ColumnDefinition Width="*" MinWidth="250" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Left: chat identity, import result and optional known social network. -->
+                                        <StackPanel Grid.Column="0" Margin="0,0,20,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
+                                                       Foreground="#24154C" TextWrapping="Wrap" />
+                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                        Visibility="{Binding IsComplete, Converter={StaticResource BoolVisibility}}">
+                                                <Border Background="#E7F7EC" Width="18" Height="18" CornerRadius="9"
+                                                        VerticalAlignment="Center" Margin="0,0,8,0">
+                                                    <TextBlock Text="✓" Foreground="#17864B" FontSize="12"
+                                                               FontWeight="Bold" TextAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="{Binding ImportedMessageCount}" FontSize="12"
+                                                           Foreground="#796C98" VerticalAlignment="Center" />
+                                                <TextBlock Text=" сообщений загружено" FontSize="12"
+                                                           Foreground="#796C98" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                            <StackPanel x:Name="PendingStatus" Visibility="Collapsed" Margin="0,7,0,0">
+                                                <TextBlock Text="{Binding Status}" FontSize="13" Foreground="#796C98"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Details}" FontSize="12" Foreground="#796C98"
+                                                           Margin="0,3,0,0" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Network}"
+                                                       x:Name="SocialNetworkLabel" FontSize="12" Foreground="#796C98"
+                                                       Margin="0,6,0,0" Visibility="Collapsed" />
                                             <Button Content="Повторить" Click="RetryButton_OnClick" Tag="{Binding}"
-                                                    IsEnabled="{Binding CanRetry}" Visibility="{Binding CanRetry, Converter={StaticResource BoolVisibility}}" Style="{StaticResource RetryButtonStyle}" Margin="0,8,0,0"/>
+                                                    x:Name="RetryButton" HorizontalAlignment="Left"
+                                                    Margin="0,10,0,0" IsEnabled="{Binding CanRetry}"
+                                                    Visibility="{Binding CanRetry, Converter={StaticResource BoolVisibility}}"
+                                                    Style="{StaticResource RetryButtonStyle}" />
+                                        </StackPanel>
+
+                                        <Border Grid.Column="1" Background="#E8DFF3" Margin="0,3,0,3" />
+
+                                        <!-- Right: current selected period and its existing (possibly disabled) slider. -->
+                                        <StackPanel Grid.Column="2" Margin="20,0,0,0" VerticalAlignment="Center">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Период загрузки" FontSize="12" Foreground="#796C98"
+                                                           VerticalAlignment="Center" />
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Days}" FontSize="14" FontWeight="SemiBold"
+                                                               Foreground="#633AA3" />
+                                                    <TextBlock Text=" дн." FontSize="13" Foreground="#796C98" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <Slider Minimum="1" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    AutoToolTipPlacement="TopLeft" AutoToolTipPrecision="0"
+                                                    Value="{Binding Days, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                    LostMouseCapture="PeriodSlider_OnInteractionCompleted"
+                                                    LostKeyboardFocus="PeriodSlider_OnInteractionCompleted"
+                                                    IsEnabled="{Binding CanEditPeriod}" Foreground="#9042ED"
+                                                    Margin="0,9,0,0" />
+                                            <Grid Margin="0,2,0,0">
+                                                <TextBlock Text="1 день" FontSize="11" Foreground="#9B90B2" />
+                                                <TextBlock Text="30 дней" FontSize="11" Foreground="#9B90B2"
+                                                           HorizontalAlignment="Right" />
+                                            </Grid>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsComplete}" Value="False">
+                                        <Setter TargetName="PendingStatus" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Network}" Value="Instagram">
+                                        <Setter TargetName="SocialNetworkLabel" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Network}" Value="Telegram">
+                                        <Setter TargetName="SocialNetworkLabel" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Network}" Value="TikTok">
+                                        <Setter TargetName="SocialNetworkLabel" Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -237,9 +318,10 @@
                     <Grid>
                         <Button Content="←  Назад" HorizontalAlignment="Left" Click="BackButton_OnClick"
                                 Style="{StaticResource OutlineBackButton}" />
-                        <Button Content="Подключить и синхронизировать" HorizontalAlignment="Right"
+                        <Button Content="Начать синхронизацию" HorizontalAlignment="Right"
                                 Style="{StaticResource ContinueButtonStyle}" Click="StartButton_OnClick"
-                                IsEnabled="{Binding CanStart}" />
+                                IsEnabled="{Binding CanStart}"
+                                Visibility="{Binding IsConfigurationPhase, Converter={StaticResource BoolVisibility}}" />
                     </Grid>
                 </Border>
             </Grid>
