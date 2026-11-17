@@ -18,6 +18,7 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
     private bool _isBusy;
     private readonly SemaphoreSlim _periodSaveGate = new(1, 1);
     private readonly OnboardingRequestGeneration _reloadGeneration = new();
+    private readonly OnboardingSynchronizationBatchCoordinator _batchCoordinator = new();
     private string _currentActivity = "Выберите период загрузки истории.";
 
     public OnboardingStepFourView()
@@ -168,15 +169,9 @@ public partial class OnboardingStepFourView : UserControl, INotifyPropertyChange
         try
         {
             // One explicit action for first imports, retries and period changes.
-            // Capture the plan before rows start changing state during synchronization.
-            await PersistPeriodsAsync();
-            foreach (var row in SynchronizationBatchPlan.SelectPending(Chats))
-            {
-                if (row.IsComplete && row.HasPeriodChange)
-                    await ReloadCompletedRowAsync(row);
-                else
-                    await SynchronizeRowAsync(row);
-            }
+            // The coordinator freezes the batch and guards against double execution.
+            await _batchCoordinator.RunAsync(Chats, PersistPeriodsAsync,
+                SynchronizeRowAsync, ReloadCompletedRowAsync);
             if (Chats.All(row => !row.NeedsSynchronization))
                 CurrentActivity = "История сообщений загружена.";
         }

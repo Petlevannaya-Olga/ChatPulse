@@ -19,6 +19,7 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
     private bool updating;
     private readonly ChatReviewRunGeneration analysisGeneration = new();
     private readonly OnboardingRequestGeneration listGeneration = new();
+    private readonly ChatReviewAnalysisCoordinator analysisCoordinator = new();
     private long? rowsOwner;
     private string analysisStatus = "";
     private string currentAnalyzedChatName = string.Empty;
@@ -320,40 +321,24 @@ public partial class OnboardingStepThreeView : UserControl, INotifyPropertyChang
                 ConnectionStatus = "Список чатов изменился. Выберите чаты повторно.";
                 return;
             }
-            for (var i = 0; i < chosen.Length; i++)
-            {
-                // Stop after any in-flight request finishes if this view/run was left.
-                // Never cancel the Telegram request just to stop UI processing.
-                if (!analysisGeneration.IsCurrent(epoch) || !IsVisible || !isReview) return;
-                token.ThrowIfCancellationRequested();
-                if (retryFailedOnly &&
-                    !ChatReviewRetryPolicy.ShouldRetry(AnalysisRows[i], includeOtherErrors)) continue;
-                CurrentAnalyzedChatName = chosen[i].Title;
-                AnalysisStatus = $"Проверка {i + 1} из {chosen.Length}: {chosen[i].Title}";
-                try
+            var completed = await analysisCoordinator.RunAsync(
+                chosen.Select(row => row.Chat).ToArray(), AnalysisRows.ToArray(),
+                (chat, cancellationToken) => vm.AnalyzeChatAsync(chat, cancellationToken),
+                () => analysisGeneration.IsCurrent(epoch) && IsVisible && isReview &&
+                      ReferenceEquals(ViewModel, vm) && rowsOwner == vm.CurrentTelegramUserId,
+                retryFailedOnly, includeOtherErrors,
+                i =>
                 {
-                    var (result, days, count) = await vm.AnalyzeChatAsync(chosen[i].Chat, token);
-                    if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
-                    AnalysisRows[i].SetResult(result, days, count);
-                    UpdateAnalysisCounts();
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
-                catch (TelegramAuthenticationException exception)
+                    CurrentAnalyzedChatName = chosen[i].Title;
+                    AnalysisStatus = $"Проверка {i + 1} из {chosen.Length}: {chosen[i].Title}";
+                },
+                () =>
                 {
-                    if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
-                    AnalysisRows[i].SetError(exception.Message, needsConnectionRetry: true);
                     UpdateAnalysisCounts();
                     RefreshCanRetryReview();
-                }
-                catch (Exception)
-                {
-                    if (!analysisGeneration.IsCurrent(epoch) || token.IsCancellationRequested) return;
-                    AnalysisRows[i].SetError("Не удалось проверить этот чат. Повторите анализ.");
-                    UpdateAnalysisCounts();
-                    RefreshCanRetryReview();
-                }
-            }
-            if (analysisGeneration.IsCurrent(epoch) && !token.IsCancellationRequested)
+                },
+                token);
+            if (completed && analysisGeneration.IsCurrent(epoch) && !token.IsCancellationRequested)
             {
                 analysisCompleted = true;
                 AnalysisStatus = "Проверка завершена. Результаты предварительные; чаты ещё не подключены.";
