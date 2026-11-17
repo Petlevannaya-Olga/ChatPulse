@@ -105,6 +105,6 @@ public sealed class WorkspaceTransitionTests
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
             $"ChatPulse-Workspace-{Guid.NewGuid():N}");
         public TestDirectory() => Directory.CreateDirectory(Path);
-        public void Dispose() { if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true); }
+        public void Dispose() => SqliteTestDatabaseCleanup.DeleteDirectory(Path);
     }
 }

@@ -166,9 +166,6 @@ public sealed class SynchronizationBatchTests
 
         public TemporaryDirectory() => Directory.CreateDirectory(Path);
 
-        public void Dispose()
-        {
-            if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true);
-        }
+        public void Dispose() => SqliteTestDatabaseCleanup.DeleteDirectory(Path);
     }
 }

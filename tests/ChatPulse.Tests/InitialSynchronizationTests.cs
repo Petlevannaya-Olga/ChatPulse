@@ -327,7 +327,7 @@ public sealed class InitialSynchronizationTests
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(), $"ChatPulse-Sync-Tests-{Guid.NewGuid():N}");
         public TemporarySettingsDirectory() => Directory.CreateDirectory(Path);
-        public void Dispose() { if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true); }
+        public void Dispose() => SqliteTestDatabaseCleanup.DeleteDirectory(Path);
     }
 
     private static ConfiguredChat CreateChat(long peerId) => new()

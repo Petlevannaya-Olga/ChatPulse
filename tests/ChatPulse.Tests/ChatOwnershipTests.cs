@@ -107,7 +107,14 @@ public sealed class ChatOwnershipTests
     [Fact]
     public async Task SaveHandler_ValidOwnerIsPersisted()
     {
-        var client = new FakeTelegramClient { CurrentTelegramUserId = AccountA };
+        var client = new FakeTelegramClient
+        {
+            CurrentTelegramUserId = AccountA,
+            ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(AccountA,
+                [new TelegramChatOption(500, "Channel", "Пост чат", "Канал")])),
+            ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+                [new TelegramChatMessage(100, "Лайк https://www.instagram.com/p/example/")])
+        };
         var store = new RecordingChatStore();
         using var gate = new TelegramOperationGate();
         var handler = new SaveChatHandler(store, client, gate);
@@ -176,7 +183,7 @@ public sealed class ChatOwnershipTests
         await settings.SaveChatAsync(CreateChat(AccountA, "Instagram"));
         var client = new FakeTelegramClient { CurrentTelegramUserId = AccountA };
         client.ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(client.CurrentTelegramUserId,
-            [new TelegramChatOption(500, "Channel", "Same group", "Канал")]));
+            [new TelegramChatOption(500, "Channel", "Пост Same group", "Канал")]));
         using var provider = BuildProvider(client, settings);
         var vm = provider.GetRequiredService<FirstChatSetupViewModel>();
         await vm.EnsureLoadedAsync();
@@ -203,7 +210,7 @@ public sealed class ChatOwnershipTests
         await settings.SaveChatAsync(CreateChat(AccountB, "TikTok"));
         var client = new FakeTelegramClient { CurrentTelegramUserId = AccountA };
         client.ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(client.CurrentTelegramUserId,
-            [new TelegramChatOption(500, "Channel", "Shared", "Канал")]));
+            [new TelegramChatOption(500, "Channel", "Пост Shared", "Канал")]));
         using var provider = BuildProvider(client, settings);
         var vm = provider.GetRequiredService<FirstChatSetupViewModel>();
         await vm.EnsureLoadedAsync();
@@ -237,13 +244,31 @@ public sealed class ChatOwnershipTests
     }
 
     [Fact]
+    public async Task FirstChatVM_FiltersChatsWithoutStandalonePostWord()
+    {
+        using var directory = new TemporarySettingsDirectory();
+        using var settings = new JsonSettingsService(directory.Path);
+        var client = new FakeTelegramClient { CurrentTelegramUserId = AccountA };
+        client.ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(AccountA,
+            [new TelegramChatOption(500, "Channel", "Group", "Канал"),
+             new TelegramChatOption(501, "Channel", "Репосты", "Канал"),
+             new TelegramChatOption(502, "Channel", "Пост чат", "Канал")]));
+        using var provider = BuildProvider(client, settings);
+        var vm = provider.GetRequiredService<FirstChatSetupViewModel>();
+
+        await vm.EnsureLoadedAsync();
+
+        Assert.Equal(502, Assert.Single(vm.Chats).PeerId);
+    }
+
+    [Fact]
     public async Task FirstChatVM_OwnerChangedAfterLoading_RefusesStaleSelectionOnSave()
     {
         using var directory = new TemporarySettingsDirectory();
         using var settings = new JsonSettingsService(directory.Path);
         var client = new FakeTelegramClient { CurrentTelegramUserId = AccountA };
         client.ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(client.CurrentTelegramUserId,
-            [new TelegramChatOption(500, "Channel", "Group", "Канал")]));
+            [new TelegramChatOption(500, "Channel", "Пост Group", "Канал")]));
         using var provider = BuildProvider(client, settings);
         var vm = provider.GetRequiredService<FirstChatSetupViewModel>();
         await vm.EnsureLoadedAsync();
@@ -266,11 +291,11 @@ public sealed class ChatOwnershipTests
         var path = System.IO.Path.Combine(directory.Path, "settings.json");
         await File.WriteAllTextAsync(path,
             """
-            {"chats":[{"peerId":500,"peerType":"Channel","telegramTitle":"Legacy","displayName":"Legacy","socialNetwork":"Instagram","startDate":"2026-11-01"}]}
+            {"chats":[{"peerId":500,"peerType":"Channel","telegramTitle":"Пост Legacy","displayName":"Пост Legacy","socialNetwork":"Instagram","startDate":"2026-11-01"}]}
             """);
         var client = new FakeTelegramClient { CurrentTelegramUserId = AccountB };
         client.ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(AccountB,
-            [new TelegramChatOption(500, "Channel", "Legacy", "Канал")]));
+            [new TelegramChatOption(500, "Channel", "Пост Legacy", "Канал")]));
         using var provider = BuildProvider(client, settings);
         var vm = provider.GetRequiredService<FirstChatSetupViewModel>();
         await vm.EnsureLoadedAsync();
@@ -284,14 +309,14 @@ public sealed class ChatOwnershipTests
         TelegramUserId = owner,
         PeerId = 500,
         PeerType = "Channel",
-        TelegramTitle = "Group",
-        DisplayName = "Group",
+        TelegramTitle = "Пост чат",
+        DisplayName = "Пост чат",
         SocialNetwork = network,
         StartDate = new DateOnly(2026, 11, 1)
     };
 
     private static SaveChatCommand CreateCommand(long owner)
-        => new(500, "Channel", "Group", "Group", "Instagram", new DateOnly(2026, 11, 1), owner);
+        => new(500, "Channel", "Пост чат", "Пост чат", "Instagram", new DateOnly(2026, 11, 1), owner);
 
     private static ServiceProvider BuildProvider(FakeTelegramClient client, ISettingsService settings)
     {
