@@ -684,9 +684,9 @@
                             <TextBlock Text="Ежедневная проверка" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
                             <TextBlock Text="Автоматическая проверка и ограниченный ручной повтор будут настроены после реализации основной логики."
                                        Foreground="#81718F" Margin="0,9,0,0" FontSize="13" TextWrapping="Wrap" />
-                            <TextBlock Text="Отдельно можно проверить свои реакции на уже загруженных сообщениях. Ежедневный аудит будет реализован позднее."
+                            <TextBlock Text="Загружает новые сообщения от последней подтверждённой реакции и обновляет ранее найденные задания. Ежедневный аудит будет реализован позднее."
                                        Foreground="#81718F" Margin="0,9,0,12" FontSize="13" TextWrapping="Wrap" />
-                            <Button Content="Проверить мои реакции" Click="CheckReactionsButton_OnClick"
+                            <Button Content="Синхронизировать" Click="CheckReactionsButton_OnClick"
                                     Style="{StaticResource WorkspaceActionButton}" HorizontalAlignment="Left"
                                     IsEnabled="{Binding IsNotBusy}" />
                             <TextBlock Text="{Binding ReactionRefreshMessage}" Foreground="#75499F"

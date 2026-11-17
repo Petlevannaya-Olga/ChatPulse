@@ -16,7 +16,7 @@ public sealed class WTelegramAuthenticationClient(
     string dataDirectory, ITelegramApiCredentialsStore credentialsStore,
     ITelegramCredentialChangeJournal? changeJournal = null,
     TelegramAuthorizationEvents? authorizationEvents = null)
-    : ITelegramAuthenticationClient, ITelegramTaskReactionSender, IDisposable
+    : ITelegramAuthenticationClient, ITelegramTaskReactionSender, ITelegramIncrementalMessageReader, IDisposable
 {
     private static readonly TimeSpan RemoteRequestTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(5);
@@ -630,12 +630,25 @@ public sealed class WTelegramAuthenticationClient(
         }
     }
 
-    public async Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
+    public Task<IReadOnlyList<TelegramChatMessage>> GetRecentChatMessagesAsync(
         TelegramChatOption chat, int days, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(chat);
         if (days is < 1 or > 30) throw new ArgumentOutOfRangeException(nameof(days));
+        return ReadChatHistoryAsync(chat, days, 0, cancellationToken);
+    }
 
+    public Task<IReadOnlyList<TelegramChatMessage>> GetChatMessagesAfterAsync(
+        TelegramChatOption chat, int messageId, CancellationToken cancellationToken)
+    {
+        if (messageId < 0) throw new ArgumentOutOfRangeException(nameof(messageId));
+        // Unlike time-bounded refresh, incremental loading may span more than 30 days.
+        return ReadChatHistoryAsync(chat, null, messageId, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<TelegramChatMessage>> ReadChatHistoryAsync(
+        TelegramChatOption chat, int? days, int minMessageId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(chat);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -653,7 +666,7 @@ public sealed class WTelegramAuthenticationClient(
                     "Выбранный чат недоступен в текущем Telegram-аккаунте.");
 
             TL.InputPeer peer = target;
-            var cutoff = DateTime.UtcNow.AddDays(-days);
+            var cutoff = days.HasValue ? DateTime.UtcNow.AddDays(-days.Value) : DateTime.MinValue;
             var collected = new List<TelegramChatMessage>();
             var offsetId = 0;
             const int MAX_PAGES = 500;
@@ -663,13 +676,13 @@ public sealed class WTelegramAuthenticationClient(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var history = await AwaitRemoteAsync(
-                    _client.Messages_GetHistory(peer, offsetId, limit: PAGE_LIMIT), cancellationToken);
+                    _client.Messages_GetHistory(peer, offsetId, limit: PAGE_LIMIT, min_id: minMessageId), cancellationToken);
                 if (history.Messages.Length == 0) { historyComplete = true; break; }
                 var reachedCutoff = false;
                 foreach (var item in history.Messages)
                 {
                     if (item is not TL.Message message) continue;
-                    if (message.date.ToUniversalTime() < cutoff)
+                    if (message.ID <= minMessageId || message.date.ToUniversalTime() < cutoff)
                     {
                         reachedCutoff = true;
                         break;

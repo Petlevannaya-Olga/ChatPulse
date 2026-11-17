@@ -132,6 +132,118 @@ public sealed class ChatSynchronizationService(
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Imports messages after the latest saved positive own reaction (or the import cursor
+    /// when there is no such reaction). Previously imported messages stay unchanged.
+    /// A separate recent-history pass refreshes reactions and metadata without removing
+    /// older rows, including manually skipped tasks.
+    /// </summary>
+    public async Task<int> SynchronizeLatestAsync(ConfiguredChat configured,
+        Action<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(configured);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var current = FindConfigured(await settings.LoadAsync(cancellationToken), configured);
+            if (current.SynchronizationState != ChatSynchronizationState.COMPLETED)
+                throw new InvalidOperationException("Сначала нужно завершить первоначальный импорт.");
+            var owner = await telegram.GetAuthorizedUserIdAsync(cancellationToken);
+            if (owner != current.TelegramUserId)
+                throw new InvalidOperationException("Telegram-аккаунт изменился.");
+            var snapshot = await telegram.GetChatsAsync(cancellationToken);
+            var chat = snapshot.Chats.SingleOrDefault(item =>
+                item.PeerId == current.PeerId && item.PeerType == current.PeerType);
+            if (snapshot.TelegramUserId != owner || chat is null ||
+                !ChatTitlePolicy.IsEligible(chat.Title))
+                throw new InvalidOperationException("Чат недоступен для синхронизации.");
+            if (telegram is not ITelegramIncrementalMessageReader incremental)
+                throw new InvalidOperationException("Telegram-клиент не поддерживает загрузку новых сообщений.");
+
+            var reactedId = await GetLatestOwnReactionIdAsync(current, cancellationToken);
+            // A positive reaction is an overlap anchor, never a reason to discard older
+            // pending tasks. Without one, the import cursor is the safe incremental anchor.
+            var anchor = reactedId ?? current.LastProcessedMessageId ?? 0;
+            if (anchor > int.MaxValue)
+                throw new InvalidOperationException("Недопустимый номер сообщения Telegram.");
+            progress?.Invoke("Получаем новые сообщения и обновляем историю…");
+            var fetched = await incremental.GetChatMessagesAfterAsync(chat, (int)anchor, cancellationToken);
+            await SaveHistoryAsync(current, fetched, cancellationToken);
+            await SaveAuthorsAsync(current, fetched, cancellationToken);
+            await SaveMessageDatesAsync(current, fetched, cancellationToken);
+            await SaveCustomEmojiAsync(current, fetched, cancellationToken);
+            await SaveReactionStatesAsync(current, fetched, cancellationToken);
+            await SaveParticipantsAsync(current, fetched, cancellationToken);
+
+            // Recheck recent older tasks too: their reaction may have changed after import.
+            // The recent window is metadata-only; it must never replace original texts.
+            progress?.Invoke("Повторно проверяем реакции и участников…");
+            var recent = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
+            await SaveAuthorsAsync(current, recent, cancellationToken);
+            await SaveMessageDatesAsync(current, recent, cancellationToken);
+            await SaveCustomEmojiAsync(current, recent, cancellationToken);
+            await SaveReactionStatesAsync(current, recent, cancellationToken);
+            await SaveParticipantsAsync(current, recent, cancellationToken);
+
+            var total = await CountImportedMessagesAsync(current, cancellationToken);
+            var lastId = fetched.Count == 0 ? current.LastProcessedMessageId :
+                Math.Max(current.LastProcessedMessageId ?? 0, fetched.Max(message => (long)message.MessageId));
+            await settings.UpdateChatSyncAsync(current.TelegramUserId, current.PeerId, current.PeerType,
+                ChatSynchronizationState.COMPLETED, total, lastId, null, cancellationToken);
+            progress?.Invoke($"Синхронизация завершена. Новых сообщений: {Math.Max(0, total - current.ImportedMessageCount)}.");
+            return Math.Max(0, total - current.ImportedMessageCount);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<long?> GetLatestOwnReactionIdAsync(ConfiguredChat chat,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(databasePath)) return null;
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var table = connection.CreateCommand();
+        table.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageReactionStates'";
+        if (Convert.ToInt64(await table.ExecuteScalarAsync(cancellationToken)) == 0) return null;
+        var query = connection.CreateCommand();
+        query.CommandText = """
+            SELECT MAX(r.MessageId)
+            FROM ImportedMessageReactionStates r
+            INNER JOIN ImportedChatMessages m
+              ON m.TelegramUserId = r.TelegramUserId AND m.PeerType = r.PeerType
+             AND m.PeerId = r.PeerId AND m.MessageId = r.MessageId
+            WHERE r.TelegramUserId = $owner AND r.PeerType = $type
+              AND r.PeerId = $peer AND r.HasOwnReaction = 1
+            """;
+        query.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+        query.Parameters.AddWithValue("$type", chat.PeerType);
+        query.Parameters.AddWithValue("$peer", chat.PeerId);
+        var result = await query.ExecuteScalarAsync(cancellationToken);
+        return result is null or DBNull ? null : Convert.ToInt64(result);
+    }
+
+    private async Task<int> CountImportedMessagesAsync(ConfiguredChat chat,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var query = connection.CreateCommand();
+        query.CommandText = """
+            SELECT COUNT(*) FROM ImportedChatMessages
+            WHERE TelegramUserId = $owner AND PeerType = $type AND PeerId = $peer
+            """;
+        query.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+        query.Parameters.AddWithValue("$type", chat.PeerType);
+        query.Parameters.AddWithValue("$peer", chat.PeerId);
+        return Convert.ToInt32(await query.ExecuteScalarAsync(cancellationToken));
+    }
+
     /// <summary>Explicitly replaces one completed chat's imported snapshot after a successful fetch.</summary>
     public async Task<int> ReloadHistoryAsync(ConfiguredChat configured, int days,
         Action<string>? progress = null, CancellationToken cancellationToken = default)

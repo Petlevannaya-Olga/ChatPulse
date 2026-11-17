@@ -346,7 +346,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         if (IsBusy || _settings is null || _synchronization is null) return;
         IsBusy = true;
-        ReactionRefreshMessage = "Проверяем реакции в Telegram…";
+        ReactionRefreshMessage = "Синхронизируем новые сообщения и реакции…";
         try
         {
             var state = await _settings.LoadAsync();
@@ -358,7 +358,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             {
                 try
                 {
-                    updated += await _synchronization.RefreshReactionsAsync(chat);
+                    updated += await _synchronization.SynchronizeLatestAsync(chat);
                 }
                 catch (Exception exception)
                 {
@@ -367,12 +367,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             }
             await ReloadAsync();
             ReactionRefreshMessage = errors.Count == 0
-                ? $"Проверка завершена. Обновлено состояний реакций: {updated}."
-                : $"Не удалось проверить часть чатов: {string.Join("; ", errors)}";
+                ? $"Синхронизация завершена. Новых сообщений: {updated}."
+                : $"Не удалось синхронизировать часть чатов: {string.Join("; ", errors)}";
         }
         catch (Exception exception)
         {
-            ReactionRefreshMessage = $"Не удалось проверить реакции: {exception.Message}";
+            ReactionRefreshMessage = $"Не удалось синхронизировать: {exception.Message}";
         }
         finally { IsBusy = false; }
     }
