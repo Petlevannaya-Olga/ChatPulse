@@ -168,6 +168,27 @@ public sealed class ReactionSynchronizationTests
     }
 
     [Fact]
+    public async Task UnknownAuthorOnRefresh_DoesNotOverwritePreviouslyKnownName()
+    {
+        using var temp = new TemporaryDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        await settings.SaveChatAsync(CreateChat(101));
+        var client = CreateClient();
+        client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+            [new(10, TASK, false, "Мария Иванова")]);
+        var database = Path.Combine(temp.Path, "history.db");
+        var sync = new ChatSynchronizationService(settings, client, database);
+        var chat = Assert.Single((await settings.LoadAsync()).Chats);
+        await sync.SynchronizeAsync(chat);
+
+        client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+            [new(10, TASK, null, "Автор неизвестен")]);
+        await sync.RefreshReactionsAsync(chat);
+        var task = Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat));
+        Assert.Equal("Мария Иванова", task.AuthorName);
+    }
+
+    [Fact]
     public void ReactionEvidence_RecognizesOnlyCurrentAccountChosenFlag()
     {
         var msg = new TestMessage { reactions = new TestReactions

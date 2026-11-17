@@ -201,7 +201,9 @@ public sealed class ChatSynchronizationService(
         foreach (var message in messages)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(message.AuthorName)) continue;
+            if (string.IsNullOrWhiteSpace(message.AuthorName) ||
+                string.Equals(message.AuthorName, "Автор неизвестен", StringComparison.OrdinalIgnoreCase))
+                continue;
             id.Value = message.MessageId;
             author.Value = message.AuthorName;
             await save.ExecuteNonQueryAsync(cancellationToken);

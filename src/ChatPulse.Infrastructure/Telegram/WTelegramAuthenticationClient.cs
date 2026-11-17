@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
@@ -547,7 +547,7 @@ public sealed class WTelegramAuthenticationClient(
                         reachedCutoff = true;
                         break;
                     }
-                    var author = ResolveMessageAuthor(message, history, chat.Title);
+                    var author = ResolveMessageAuthor(message, history, dialogs, chat.Title);
                     collected.Add(new TelegramChatMessage(message.ID, message.message,
                         TelegramOwnReactionEvidence.Read(message), author));
                 }
@@ -615,12 +615,19 @@ public sealed class WTelegramAuthenticationClient(
         return user.id;
     }
 
-    private static string ResolveMessageAuthor(TL.Message message, TL.Messages_MessagesBase history, string chatTitle)
+    private static string ResolveMessageAuthor(TL.Message message, TL.Messages_MessagesBase history,
+        TL.IPeerResolver dialogs, string chatTitle)
     {
+        // Channel signatures are visible even when Telegram does not expose a user ID.
+        if (!string.IsNullOrWhiteSpace(message.post_author))
+            return message.post_author.Trim();
+
         if (message.from_id is TL.PeerUser sender)
         {
-            // Resolve from the peer dictionary attached to this history page.
-            var user = history.UserOrChat(sender) as TL.User;
+            // The history page is the primary source; the dialog snapshot is a fallback.
+            // A message can reference a sender absent from the page's user list.
+            var user = history.UserOrChat(sender) as TL.User
+                ?? dialogs.UserOrChat(sender) as TL.User;
             if (user is not null)
             {
                 var displayName = string.Join(" ", new[] { user.first_name, user.last_name }
@@ -628,15 +635,25 @@ public sealed class WTelegramAuthenticationClient(
                 if (!string.IsNullOrWhiteSpace(displayName)) return displayName;
                 if (!string.IsNullOrWhiteSpace(user.username)) return "@" + user.username;
             }
+            // Do not invent a person's name if Telegram only supplied an ID.
+            return $"Пользователь Telegram (ID: {sender.user_id})";
         }
-        if (message.from_id is TL.PeerChannel channelPeer)
+
+        if (message.from_id is TL.PeerChannel senderChannel)
         {
-            var channel = history.UserOrChat(channelPeer) as TL.Channel;
-            if (channel is not null && !string.IsNullOrWhiteSpace(channel.title)) return channel.title;
+            var channel = history.UserOrChat(senderChannel) as TL.Channel
+                ?? dialogs.UserOrChat(senderChannel) as TL.Channel;
+            if (channel is not null && !string.IsNullOrWhiteSpace(channel.title))
+                return channel.title;
+            if (!string.IsNullOrWhiteSpace(chatTitle) &&
+                message.peer_id is TL.PeerChannel peer && peer.channel_id == senderChannel.channel_id)
+                return chatTitle;
+            return $"Канал Telegram (ID: {senderChannel.channel_id})";
         }
-        // Channel and supergroup messages may omit from_id when sent anonymously.
-        if (message.from_id is null && message.peer_id is TL.PeerChannel
-            && !string.IsNullOrWhiteSpace(chatTitle)) return chatTitle;
+
+        // Anonymous channel posts do not expose an individual sender.
+        if (message.from_id is null && message.peer_id is TL.PeerChannel &&
+            !string.IsNullOrWhiteSpace(chatTitle)) return chatTitle;
         return "Автор неизвестен";
     }
 
