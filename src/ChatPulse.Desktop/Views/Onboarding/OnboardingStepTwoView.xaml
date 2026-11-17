@@ -127,6 +127,43 @@
             </Setter>
         </Style>
 
+        <!-- Второстепенное действие рядом с подтверждением кода: фирменная обводка. -->
+        <Style x:Key="ChangeNumberButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="48" />
+            <Setter Property="Foreground" Value="#7545C8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="#8A58DB" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="12,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F4EFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EDE0FF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.55" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="ContinueButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="48" />
             <Setter Property="MinWidth" Value="176" />
@@ -781,15 +818,23 @@
                                        Foreground="#C83A60" Margin="2,4,0,0" Visibility="Collapsed" />
                             <TextBlock Text="{Binding PromptHint}" TextWrapping="Wrap" FontSize="14"
                                        Foreground="{StaticResource TextSecondary}" Margin="0,5,0,0" />
-                            <Button Content="Подтвердить" Click="ConfirmButton_OnClick"
-                                    Style="{StaticResource ContinueButtonStyle}"
-                                    HorizontalAlignment="Stretch" Margin="0,8,0,0"
-                                    IsEnabled="{Binding CanConfirm}" />
-                            <Button Content="Отменить вход и изменить номер"
-                                    Click="CancelLoginButton_OnClick"
-                                    IsEnabled="{Binding CanCancelLogin}"
-                                    Style="{StaticResource OutlineBackButton}"
-                                    HorizontalAlignment="Center" Margin="0,10,0,0" />
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="Изменить номер"
+                                        Click="CancelLoginButton_OnClick"
+                                        IsEnabled="{Binding CanCancelLogin}"
+                                        Style="{StaticResource ChangeNumberButtonStyle}"
+                                        HorizontalAlignment="Stretch" />
+                                <Button Grid.Column="2" Content="Подтвердить"
+                                        Click="ConfirmButton_OnClick"
+                                        IsEnabled="{Binding CanConfirm}"
+                                        Style="{StaticResource ContinueButtonStyle}"
+                                        HorizontalAlignment="Stretch" />
+                            </Grid>
                             <Button x:Name="ResendCodeButton" Click="ResendCodeButton_OnClick"
                                     Content="{Binding ResendButtonText}"
                                     IsEnabled="{Binding CanResendCode}"
@@ -844,7 +889,7 @@
 
                         <!-- Старая инструкция остаётся для этапа телефона. -->
                         <Button x:Name="TelegramHelpButton" Click="HelpButton_OnClick" Background="Transparent"
-                                BorderThickness="0" Margin="0,6,0,18"
+                                BorderThickness="0" Margin="0,14,0,18"
                                 HorizontalAlignment="Center" Cursor="Hand"
                                 FocusVisualStyle="{x:Null}"
                                 Content="Как подключить Telegram?">
