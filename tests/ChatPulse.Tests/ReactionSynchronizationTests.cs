@@ -152,17 +152,18 @@ public sealed class ReactionSynchronizationTests
         using var settings = new JsonSettingsService(temp.Path);
         await settings.SaveChatAsync(CreateChat(101));
         var client = CreateClient();
+        const string originalText = "Текст из первого импорта https://www.instagram.com/p/abc123/";
         client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
-            [new(10, "Текст из первого импорта", true)]);
+            [new(10, originalText, true)]);
         var database = Path.Combine(temp.Path, "history.db");
         var sync = new ChatSynchronizationService(settings, client, database);
         var chat = Assert.Single((await settings.LoadAsync()).Chats);
         await sync.SynchronizeAsync(chat);
         client.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
-            [new(10, "Изменённый в Telegram текст", null, "Анна")]);
+            [new(10, "Изменённый в Telegram текст https://www.instagram.com/p/changed/", null, "Анна")]);
         await sync.RefreshReactionsAsync(chat);
         var task = Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat));
-        Assert.Equal("Текст из первого импорта", task.Text);
+        Assert.Equal(originalText, task.Text);
         Assert.Equal("Анна", task.AuthorName);
         Assert.True(task.IsCompleted);
     }
