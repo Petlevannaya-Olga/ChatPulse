@@ -507,11 +507,38 @@
                             </StackPanel>
                         </Button>
                         <Button Grid.Column="1" Click="SubscriptionsTabButton_OnClick" Margin="5,0"
-                                Tag="{Binding IsSubscriptionsVisible}" Style="{StaticResource FeatureTile}" Background="#FFF4F9" MinHeight="116">
+                                Tag="{Binding IsSubscriptionsVisible}" Style="{StaticResource FeatureTile}"
+                                Background="#FFF4F9" MinHeight="128">
                             <StackPanel>
                                 <TextBlock Text="♡  Подписки" FontSize="15" FontWeight="SemiBold" Foreground="#AF328E" />
-                                <TextBlock Text="—" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
-                                <TextBlock Text="Участницы и подписки" Foreground="#827092" FontSize="11" />
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,3">
+                                    <TextBlock Text="{Binding SubscriptionCountLabel}" FontSize="25" FontWeight="Bold"
+                                               Foreground="#24154C" />
+                                    <TextBlock Text="Всего участниц" Foreground="#827092" FontSize="10"
+                                               Margin="7,0,0,4" VerticalAlignment="Bottom" />
+                                </StackPanel>
+                                <Grid Margin="0,2,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding SubscriptionAdministrationCountLabel}" FontSize="16"
+                                                   FontWeight="SemiBold" Foreground="#24154C" />
+                                        <TextBlock Text="Администрация" FontSize="10" Foreground="#827092" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                        <TextBlock Text="{Binding SubscriptionVipCountLabel}" FontSize="16"
+                                                   FontWeight="SemiBold" Foreground="#24154C" />
+                                        <TextBlock Text="VIP" FontSize="10" Foreground="#827092" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" HorizontalAlignment="Right">
+                                        <TextBlock Text="{Binding SubscriptionRegularCountLabel}" FontSize="16"
+                                                   FontWeight="SemiBold" Foreground="#24154C" />
+                                        <TextBlock Text="Обычные" FontSize="10" Foreground="#827092" />
+                                    </StackPanel>
+                                </Grid>
                             </StackPanel>
                         </Button>
                         <Button Grid.Column="2" Click="MyActivityTabButton_OnClick" Margin="10,0,0,0"

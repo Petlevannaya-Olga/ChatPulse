@@ -49,7 +49,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private bool _isRebuildingChatList;
     private readonly ICollectionView _subscriptionRowsView;
     private SubscriptionFilter _subscriptionFilter = SubscriptionFilter.All;
-    private bool _subscriptionsLoaded;
+    private InstagramParticipantCategoryCounts? _subscriptionTileCounts;
+    private int _subscriptionTileLoadVersion;
     private string _subscriptionQuery = string.Empty;
     private string _subscriptionsSummary = "Выберите чат для просмотра участниц.";
     private string _subscriptionsSyncMessage = string.Empty;
@@ -165,10 +166,49 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public ObservableCollection<InstagramParticipantOption> InstagramParticipants { get; } = [];
     public ObservableCollection<InstagramSubscriptionRow> SubscriptionRows { get; } = [];
     public ICollectionView SubscriptionRowsView => _subscriptionRowsView;
+    public string SubscriptionCountLabel => FormatSubscriptionCount(_subscriptionTileCounts?.Total);
 
-    public string SubscriptionCountLabel => _subscriptionsLoaded
-        ? SubscriptionRows.Count.ToString(CultureInfo.InvariantCulture)
-        : "—";
+    public string SubscriptionAdministrationCountLabel =>
+        FormatSubscriptionCount(_subscriptionTileCounts?.Administration);
+
+    public string SubscriptionVipCountLabel => FormatSubscriptionCount(_subscriptionTileCounts?.Vip);
+    public string SubscriptionRegularCountLabel => FormatSubscriptionCount(_subscriptionTileCounts?.Regular);
+
+    private static string FormatSubscriptionCount(int? count) =>
+        count?.ToString(CultureInfo.InvariantCulture) ?? "—";
+
+    private void SetSubscriptionTileCounts(InstagramParticipantCategoryCounts? counts)
+    {
+        _subscriptionTileCounts = counts;
+        Notify(nameof(SubscriptionCountLabel));
+        Notify(nameof(SubscriptionAdministrationCountLabel));
+        Notify(nameof(SubscriptionVipCountLabel));
+        Notify(nameof(SubscriptionRegularCountLabel));
+    }
+
+    // The tile updates when a chat opens, without requiring the Subscriptions tab to be visited.
+    private async Task RefreshSubscriptionTileCountsAsync(WorkspaceChatRow? chat)
+    {
+        if (chat is null || _settings is null || _reader is null) return;
+        var request = ++_subscriptionTileLoadVersion;
+        try
+        {
+            var settings = await _settings.LoadAsync();
+            var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
+            var participants = await lookup.ReadAllCurrentAsync([chat.Chat]);
+            var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
+            var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
+            if (request == _subscriptionTileLoadVersion && ReferenceEquals(chat, SelectedChat))
+                SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromParticipants(participants, ownNames));
+        }
+        catch (Exception)
+        {
+            // A failed background count must not interrupt tasks or replace the chat register.
+            if (request == _subscriptionTileLoadVersion && ReferenceEquals(chat, SelectedChat))
+                SetSubscriptionTileCounts(null);
+        }
+    }
 
     public string SubscriptionsSummary
     {
@@ -285,14 +325,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private async Task LoadSubscriptionRowsAsync()
     {
         var currentChat = SelectedChat;
-        _subscriptionsLoaded = false;
+        _subscriptionTileLoadVersion++;
         LatestSubscriptionBatch = null;
         SubscriptionRows.Clear();
-        Notify(nameof(SubscriptionCountLabel));
         if (_settings is null || _reader is null || currentChat is null)
         {
             SubscriptionsSummary = "Выберите Instagram-чат для просмотра участниц.";
             LatestSubscriptionBatch = null;
+            SetSubscriptionTileCounts(null);
             return;
         }
 
@@ -333,8 +373,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                      ownNames, privilegedNames))
             SubscriptionRows.Add(row);
         _subscriptionRowsView.Refresh();
-        _subscriptionsLoaded = true;
-        Notify(nameof(SubscriptionCountLabel));
+        SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromRows(SubscriptionRows));
         var discrepancies = SubscriptionRows.Count(row => row.HasDiscrepancy);
         SubscriptionsSummary = $"Участниц: {SubscriptionRows.Count}. Расхождений по результатам поиска: " +
                                $"{discrepancies}. Для VIP и администрации проверяем только мои подписки.";
@@ -1064,6 +1103,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             UpdateSelectedTasks();
             if (_page == WorkspacePage.Chat && _chatPage == ChatPage.Subscriptions)
                 await LoadSubscriptionRowsAsync();
+            else if (_page == WorkspacePage.Chat)
+                await RefreshSubscriptionTileCountsAsync(SelectedChat);
             LoadMessage = string.Empty;
         }
         catch (Exception)
@@ -1132,15 +1173,15 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         if (SelectedChat is null) return;
         _chatPage = ChatPage.Tasks;
-        _subscriptionsLoaded = false;
         SubscriptionRows.Clear();
         LatestSubscriptionBatch = null;
         SubscriptionsSyncMessage = string.Empty;
-        Notify(nameof(SubscriptionCountLabel));
+        SetSubscriptionTileCounts(null);
         _taskFilter = TaskFilter.Pending;
         UpdateSelectedTasks();
         _page = WorkspacePage.Chat;
         NotifyPageState();
+        _ = RefreshSubscriptionTileCountsAsync(SelectedChat);
     }
 
     private void HomeButton_OnClick(object sender, RoutedEventArgs args)

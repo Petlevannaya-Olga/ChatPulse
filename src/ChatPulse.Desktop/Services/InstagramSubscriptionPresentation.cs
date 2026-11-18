@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 namespace ChatPulse.Desktop.Services;
 
@@ -93,4 +93,44 @@ public static class InstagramSubscriptionPresentation
         }
         return results;
     }
+}
+
+
+/// <summary>Mutually exclusive counts for the current chat, excluding own accounts.</summary>
+public sealed record InstagramParticipantCategoryCounts(int Administration, int Vip, int Regular)
+{
+    public int Total => Administration + Vip + Regular;
+
+    public static InstagramParticipantCategoryCounts FromParticipants(
+        IEnumerable<InstagramParticipantOption> participants, IReadOnlySet<string> ownUserNames) =>
+        FromCategories(participants
+            .Where(participant => !InstagramOwnAccountFilter.IsOwnParticipant(participant, ownUserNames))
+            .Select(participant => participant.Category));
+
+    public static InstagramParticipantCategoryCounts FromRows(IEnumerable<InstagramSubscriptionRow> rows) =>
+        FromCategories(rows.Select(row => row.Category));
+
+    private static InstagramParticipantCategoryCounts FromCategories(IEnumerable<string?> categories)
+    {
+        var administration = 0;
+        var vip = 0;
+        var regular = 0;
+        foreach (var category in categories)
+        {
+            if (IsAdministration(category)) administration++;
+            else if (IsVip(category)) vip++;
+            else regular++;
+        }
+        return new InstagramParticipantCategoryCounts(administration, vip, regular);
+    }
+
+    private static bool IsAdministration(string? category) =>
+        Contains(category, "АДМИН") || Contains(category, "МОДЕРАТОР") ||
+        Contains(category, "ОСНОВАТЕЛ") || Contains(category, "ДИРЕКТОР");
+
+    private static bool IsVip(string? category) =>
+        Contains(category, "VIP") || Contains(category, "ВИП");
+
+    private static bool Contains(string? value, string fragment) =>
+        value?.Contains(fragment, StringComparison.OrdinalIgnoreCase) == true;
 }
