@@ -324,7 +324,9 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (_isCloseConfirmed || _isOnboardingCompleted)
+        // During startup failure or application shutdown the main window may never
+        // have been shown. Such a window cannot own a modal confirmation dialog.
+        if (_isCloseConfirmed || _isOnboardingCompleted || !_hasInitialized || !IsLoaded || !IsVisible)
         {
             base.OnClosing(e);
             return;

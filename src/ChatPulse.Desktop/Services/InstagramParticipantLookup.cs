@@ -6,7 +6,8 @@ namespace ChatPulse.Desktop.Services;
 
 /// <summary>Only the activity account identifies a participant for mutual-follow checks.</summary>
 public sealed record InstagramParticipantOption(long ParticipantId, string Label,
-    string ActivityProfileUrl, string UserName, string Category = "Обычный");
+    string ActivityProfileUrl, string UserName, string Category = "Обычный",
+    string SubscriptionProfileUrl = "", string DisplayName = "");
 
 public static class InstagramActivityProfile
 {
@@ -25,7 +26,7 @@ public static class InstagramActivityProfile
     }
 }
 
-/// <summary>VIPs and the administrative team are not subject to the bulk follow audit.</summary>
+/// <summary>VIPs and the administrative team are exempt only from the followers direction.</summary>
 public static class InstagramBatchEligibility
 {
     public static bool IsExcluded(string? category)
@@ -39,27 +40,37 @@ public static class InstagramBatchEligibility
                category.Contains("ДИРЕКТОР", StringComparison.OrdinalIgnoreCase);
     }
 
-    public static InstagramBatchSelection Prepare(IEnumerable<InstagramParticipantOption> current)
+    public static InstagramBatchSelection Prepare(IEnumerable<InstagramParticipantOption> current,
+        IReadOnlySet<string>? ownUserNames = null)
     {
-        var participants = current.ToArray();
+        var all = current.ToArray();
+        var participants = ownUserNames is null ? all : all.Where(item =>
+            !InstagramOwnAccountFilter.IsOwnParticipant(item, ownUserNames)).ToArray();
+        var ownExcluded = all.Length - participants.Length;
         var excluded = participants.Count(item => IsExcluded(item.Category));
-        var missing = participants.Count(item => !IsExcluded(item.Category) &&
-            string.IsNullOrWhiteSpace(item.UserName));
-        // A participant who belongs to administration/VIP in any connected chat is
-        // excluded everywhere. One Instagram account is checked only once per run.
-        var blocked = participants.Where(item => IsExcluded(item.Category) &&
-            !string.IsNullOrWhiteSpace(item.UserName))
+        var missing = participants.Count(item => string.IsNullOrWhiteSpace(item.UserName));
+        // Any occurrence in a VIP/administrative role exempts the account from
+        // the "participant follows me" direction across all connected chats.
+        var privileged = participants.Where(item => IsExcluded(item.Category) &&
+                !string.IsNullOrWhiteSpace(item.UserName))
             .Select(item => item.UserName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var eligible = participants.Where(item => !IsExcluded(item.Category) &&
-            !string.IsNullOrWhiteSpace(item.UserName) && !blocked.Contains(item.UserName))
+        var usable = participants.Where(item => !string.IsNullOrWhiteSpace(item.UserName))
             .Select(item => item.UserName).ToArray();
-        var unique = eligible.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        return new InstagramBatchSelection(unique, excluded, missing, eligible.Length - unique.Length);
+        var following = usable.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var followers = following.Where(userName => !privileged.Contains(userName)).ToArray();
+        return new InstagramBatchSelection(followers, following, excluded, missing,
+            usable.Length - following.Length, ownExcluded);
     }
 }
 
-public sealed record InstagramBatchSelection(IReadOnlyList<string> UserNames,
-    int ExcludedCount, int MissingActivityProfileCount, int DuplicateCount);
+public sealed record InstagramBatchSelection(IReadOnlyList<string> FollowsMeUserNames,
+    IReadOnlyList<string> IFollowUserNames, int ExcludedCount,
+    int MissingActivityProfileCount, int DuplicateCount, int OwnAccountsExcludedCount = 0)
+{
+    // Compatibility with callers that use the regular participants list.
+    public IReadOnlyList<string> UserNames => FollowsMeUserNames;
+    public int SearchCount => FollowsMeUserNames.Count + IFollowUserNames.Count;
+}
 
 /// <summary>Reads the current chat-local registers, not historical participants.</summary>
 public sealed class InstagramParticipantLookup(string databasePath)
@@ -95,7 +106,7 @@ public sealed class InstagramParticipantLookup(string databasePath)
             cancellationToken.ThrowIfCancellationRequested();
             var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT ParticipantId, Position, DisplayName, ActivityProfileUrl, Category
+                SELECT ParticipantId, Position, DisplayName, ActivityProfileUrl, Category, SubscriptionProfileUrl
                 FROM ChatParticipants
                 WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
                     AND IsCurrent=1
@@ -114,7 +125,8 @@ public sealed class InstagramParticipantLookup(string databasePath)
                 var label = $"{chat.TelegramTitle}: {position}" +
                     (string.IsNullOrWhiteSpace(display) ? $"@{name}" : $"{display} (@{name})");
                 members.Add(new InstagramParticipantOption(reader.GetInt64(0), label, url, name,
-                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4)));
+                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                    reader.IsDBNull(5) ? string.Empty : reader.GetString(5), display));
             }
         }
         return members;

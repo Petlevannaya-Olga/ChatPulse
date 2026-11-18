@@ -1,3 +1,4 @@
+using System.IO;
 using ChatPulse.Desktop.Settings;
 using Xunit;
 

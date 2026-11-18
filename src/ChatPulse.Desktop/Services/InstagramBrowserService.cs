@@ -246,15 +246,31 @@ public sealed class InstagramBrowserService : IDisposable
     /// Checks current participants once per direction. Each Instagram list is opened once,
     /// and every observed result is reported immediately so the caller can persist it.
     /// </summary>
-    public async Task<InstagramBatchRunResult> CheckParticipantsAsync(string targetUserName,
+    public Task<InstagramBatchRunResult> CheckParticipantsAsync(string targetUserName,
         IReadOnlyList<string> participantUserNames, Action<InstagramBatchProgress> onResult,
         CancellationToken cancellationToken = default)
+        => CheckParticipantsAsync(targetUserName, participantUserNames, participantUserNames,
+            onResult, cancellationToken);
+
+    /// <summary>
+    /// Checks the two directions independently. VIP/admin accounts are omitted from
+    /// followers but included in following by the calling eligibility plan.
+    /// Each nonempty Instagram list opens only once.
+    /// </summary>
+    public async Task<InstagramBatchRunResult> CheckParticipantsAsync(string targetUserName,
+        IReadOnlyList<string> followsMeUserNames, IReadOnlyList<string> iFollowUserNames,
+        Action<InstagramBatchProgress> onResult, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(participantUserNames);
+        ArgumentNullException.ThrowIfNull(followsMeUserNames);
+        ArgumentNullException.ThrowIfNull(iFollowUserNames);
         ArgumentNullException.ThrowIfNull(onResult);
         var target = InstagramUserName.Normalize(targetUserName);
-        var members = participantUserNames.Select(InstagramUserName.Normalize)
+        var followersMembers = followsMeUserNames.Select(InstagramUserName.Normalize)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var followingMembers = iFollowUserNames.Select(InstagramUserName.Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var total = followersMembers.Length + followingMembers.Length;
+        if (total == 0) return new InstagramBatchRunResult(0, 0, null);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -267,10 +283,11 @@ public sealed class InstagramBrowserService : IDisposable
                     throw new InvalidOperationException("Сессия Instagram отсутствует. Выполните вход в Chrome.");
 
                 var done = 0;
-                var total = members.Length * 2;
-                foreach (var kind in new[] { "followers", "following" })
+                foreach (var (kind, members) in new[]
+                         { ("followers", followersMembers), ("following", followingMembers) })
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (members.Length == 0) continue;
                     if (!OpenParticipantListForBatch(driver, target, kind, cancellationToken,
                             out var openError))
                         return new InstagramBatchRunResult(done, total,
@@ -295,7 +312,6 @@ public sealed class InstagramBrowserService : IDisposable
 
                         if (done < total)
                         {
-                            // Modest pacing, not a guarantee against platform restrictions.
                             WaitWithCancellation(1_800, cancellationToken);
                             if (done % 10 == 0) WaitWithCancellation(5_000, cancellationToken);
                         }

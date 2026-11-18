@@ -183,6 +183,10 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="FeatureSurface" Property="BorderBrush" Value="#AE83EC" />
                             </Trigger>
+                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Value="True">
+                                <Setter TargetName="FeatureSurface" Property="BorderBrush" Value="#7545F9" />
+                                <Setter TargetName="FeatureSurface" Property="BorderThickness" Value="2" />
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -495,7 +499,7 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Button Grid.Column="0" Click="TasksTabButton_OnClick" Margin="0,0,10,0"
-                                Style="{StaticResource FeatureTile}" Background="#F1E8FF" MinHeight="116">
+                                Tag="{Binding IsTasksVisible}" Style="{StaticResource FeatureTile}" Background="#F1E8FF" MinHeight="116">
                             <StackPanel>
                                 <TextBlock Text="▤  Задания" FontSize="15" FontWeight="SemiBold" Foreground="#693BBA" />
                                 <TextBlock Text="{Binding SelectedChatTaskCount}" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
@@ -503,19 +507,19 @@
                             </StackPanel>
                         </Button>
                         <Button Grid.Column="1" Click="SubscriptionsTabButton_OnClick" Margin="5,0"
-                                Style="{StaticResource FeatureTile}" Background="#FFF4F9" MinHeight="116">
+                                Tag="{Binding IsSubscriptionsVisible}" Style="{StaticResource FeatureTile}" Background="#FFF4F9" MinHeight="116">
                             <StackPanel>
-                                <TextBlock Text="♡  Мои подписки" FontSize="15" FontWeight="SemiBold" Foreground="#AF328E" />
+                                <TextBlock Text="♡  Подписки" FontSize="15" FontWeight="SemiBold" Foreground="#AF328E" />
                                 <TextBlock Text="—" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
-                                <TextBlock Text="Проверка появится позже" Foreground="#827092" FontSize="11" />
+                                <TextBlock Text="Участницы и подписки" Foreground="#827092" FontSize="11" />
                             </StackPanel>
                         </Button>
-                        <Button Grid.Column="2" Click="MembersTabButton_OnClick" Margin="10,0,0,0"
-                                Style="{StaticResource FeatureTile}" Background="#F6F0FF" MinHeight="116">
+                        <Button Grid.Column="2" Click="MyActivityTabButton_OnClick" Margin="10,0,0,0"
+                                Tag="{Binding IsMyActivityVisible}" Style="{StaticResource FeatureTile}" Background="#F6F0FF" MinHeight="116">
                             <StackPanel>
-                                <TextBlock Text="◌  Активные участницы" FontSize="15" FontWeight="SemiBold" Foreground="#7545B9" />
+                                <TextBlock Text="◌  Мой актив" FontSize="15" FontWeight="SemiBold" Foreground="#7545B9" />
                                 <TextBlock Text="—" FontSize="29" FontWeight="Bold" Foreground="#24154C" Margin="0,9,0,1" />
-                                <TextBlock Text="Список появится позже" Foreground="#827092" FontSize="11" />
+                                <TextBlock Text="Мои публикации и задания" Foreground="#827092" FontSize="11" />
                             </StackPanel>
                         </Button>
                     </Grid>
@@ -663,22 +667,173 @@
                         </Grid>
                     </Border>
 
+                    <!-- Show the current chat's register including VIP/admin; only owner profiles are excluded.
+                         Subscription checks can be started and stopped directly from this tab. -->
                     <Border Grid.Row="1" Style="{StaticResource PanelCard}"
                             Visibility="{Binding IsSubscriptionsVisible, Converter={StaticResource BoolVisible}}">
-                        <StackPanel>
-                            <TextBlock Text="Мои подписки" Foreground="#24154C" FontSize="22" FontWeight="SemiBold" />
-                            <TextBlock Text="Здесь можно будет проверять подписки на активных участниц выбранного чата."
-                                       Margin="0,11,0,8" Foreground="#766787" FontSize="14" TextWrapping="Wrap" />
-                            <TextBlock Text="Функциональность пока не реализована" Foreground="#B039A6" FontSize="12" />
-                        </StackPanel>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="0,0,0,15">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                    <TextBlock Text="Подписки" Foreground="#24154C" FontSize="22" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding SubscriptionsSummary}" Foreground="#766787" FontSize="12"
+                                               Margin="0,6,0,0" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding SubscriptionsSyncMessage}" Foreground="#8243A0" FontSize="12"
+                                               Margin="0,6,0,0" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding SubscriptionsCheckMessage}" Foreground="#8243A0" FontSize="12"
+                                               Margin="0,6,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                                    <Button Content="Синхронизировать список"
+                                            Click="RefreshSubscriptionsButton_OnClick"
+                                            IsEnabled="{Binding IsNotBusy}"
+                                            Style="{StaticResource WorkspaceActionButton}" Margin="6,0,0,0" />
+                                    <Button Content="Проверить" Click="CheckAllInstagramParticipantsButton_OnClick"
+                                            IsEnabled="{Binding CanUseInstagram}"
+                                            Style="{StaticResource WorkspaceActionButton}" Margin="6,0,0,0" />
+                                    <Button Content="Остановить" Click="CancelInstagramBatchButton_OnClick"
+                                            IsEnabled="{Binding CanCancelInstagramBatch}"
+                                            Style="{StaticResource WorkspaceActionButton}" Margin="6,0,0,0" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid Grid.Row="1" Margin="0,0,0,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="SubscriptionSearchBox" Padding="10,7" MinHeight="36"
+                                         Text="{Binding SubscriptionQuery, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="Поиск по имени, категории или Instagram username" />
+                                <TextBlock Grid.Column="1" Text="Поиск участниц" VerticalAlignment="Center"
+                                           Foreground="#827393" FontSize="12" Margin="12,0,0,0" />
+                            </Grid>
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,12">
+                                <Button x:Name="AllSubscriptionFilterButton" Content="Все" Click="AllSubscriptionFilterButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,7,0" />
+                                <Button x:Name="DiscrepancySubscriptionFilterButton" Content="Расхождения" Click="DiscrepancySubscriptionFilterButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,7,0" />
+                                <Button x:Name="UnverifiedSubscriptionFilterButton" Content="Не проверены" Click="UnverifiedSubscriptionFilterButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" />
+                            </StackPanel>
+                            <DataGrid Grid.Row="3" ItemsSource="{Binding SubscriptionRowsView}"
+                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                      CanUserAddRows="False" CanUserDeleteRows="False"
+                                      CanUserResizeRows="False" HeadersVisibility="Column"
+                                      EnableRowVirtualization="True"
+                                      GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E8DEF1"
+                                      BorderBrush="#E6DAF1" BorderThickness="1"
+                                      Background="White" AlternatingRowBackground="#FCFAFF"
+                                      RowBackground="White" SelectionMode="Single"
+                                      SelectionUnit="FullRow" MinHeight="190">
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="Участница" Width="13*" MinWidth="145">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="8,9">
+                                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                               Foreground="#24154C" TextWrapping="Wrap" />
+                                                    <TextBlock Text="{Binding Category}" Foreground="#78638A"
+                                                               FontSize="11" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="Instagram-профили" Width="22*" MinWidth="190">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="8,9">
+                                                    <TextBlock Text="{Binding MainProfileLabel}" TextWrapping="Wrap"
+                                                               Foreground="#24154C" />
+                                                    <TextBlock Text="{Binding ActivityProfileLabel}" Margin="0,4,0,0"
+                                                               Foreground="#8A409F" FontSize="11" TextWrapping="Wrap"
+                                                               Visibility="{Binding HasDifferentActivityProfile, Converter={StaticResource BoolVisible}}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="Я подписана" Width="1*" MinWidth="115">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding IFollowLabel}" TextWrapping="Wrap" Margin="8,9"
+                                                           VerticalAlignment="Center" FontWeight="SemiBold">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="#78658A" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IFollowStatus}" Value="FOUND">
+                                                                    <Setter Property="Foreground" Value="#248357" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding IFollowStatus}" Value="NOT_FOUND">
+                                                                    <Setter Property="Foreground" Value="#B42A54" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="Подписана на меня" Width="11*" MinWidth="125">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding FollowsMeLabel}" TextWrapping="Wrap" Margin="8,9"
+                                                           VerticalAlignment="Center" FontWeight="SemiBold">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="#78658A" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding FollowsMeStatus}" Value="FOUND">
+                                                                    <Setter Property="Foreground" Value="#248357" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding FollowsMeStatus}" Value="NOT_FOUND">
+                                                                    <Setter Property="Foreground" Value="#B42A54" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="Действия" Width="Auto" MinWidth="125">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="7,7">
+                                                    <Button Content="{Binding ProfileActionLabel}"
+                                                            Tag="{Binding ActivityProfileUrl}"
+                                                            Click="OpenParticipantActivityProfileButton_OnClick"
+                                                            IsEnabled="{Binding CanOpenProfile}"
+                                                            Style="{StaticResource WorkspaceActionButton}" />
+                                                    <TextBlock Text="{Binding LastCheck}" HorizontalAlignment="Center"
+                                                               Foreground="#827393" FontSize="10" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Grid.Row="4" Margin="0,12,0,0" Foreground="#827393"
+                                       FontSize="11" TextWrapping="Wrap"
+                                       Text="Проверяем профиль активности. У VIP и администрации проверяем только мои подписки; в столбце «Подписана на меня» стоит прочерк. «Нет в поиске» — повод проверить вручную, а не доказанная отписка." />
+                        </Grid>
                     </Border>
                     <Border Grid.Row="1" Style="{StaticResource PanelCard}"
-                            Visibility="{Binding IsMembersVisible, Converter={StaticResource BoolVisible}}">
+                            Visibility="{Binding IsMyActivityVisible, Converter={StaticResource BoolVisible}}">
                         <StackPanel>
-                            <TextBlock Text="Активные участницы" Foreground="#24154C" FontSize="22" FontWeight="SemiBold" />
-                            <TextBlock Text="Здесь появится список активных участниц, а позже — проверка подписок на вас."
+                            <TextBlock Text="Мой актив" Foreground="#24154C" FontSize="22" FontWeight="SemiBold" />
+                            <TextBlock Text="Здесь появятся мои публикации и задания, на которые участницы дают актив."
                                        Margin="0,11,0,8" Foreground="#766787" FontSize="14" TextWrapping="Wrap" />
-                            <TextBlock Text="Функциональность пока не реализована" Foreground="#B039A6" FontSize="12" />
+                            <TextBlock Text="Учёт собственного актива добавим отдельно" Foreground="#B039A6" FontSize="12" />
                         </StackPanel>
                     </Border>
             </Grid>
@@ -690,16 +845,20 @@
                     <TextBlock Text="Управление ChatPulse" Foreground="#837397" FontSize="14" Margin="0,5,0,24" />
                     <Border Style="{StaticResource PanelCard}" Margin="0,0,0,16">
                         <StackPanel>
-                            <TextBlock Text="Instagram-аккаунт" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
-                            <TextBlock Text="Основной профиль для проверки подписок" Foreground="#655478"
+                            <TextBlock Text="Instagram-аккаунты" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
+                            <TextBlock Text="Мой основной профиль — получаю актив и проверяю подписки" Foreground="#655478"
                                        Margin="0,14,0,5" />
                             <TextBox x:Name="InstagramTargetBox" FontSize="14" Padding="10,8"
                                      ToolTip="Имя профиля без @" />
-                            <TextBlock Text="Аккаунт для работы Selenium (основной или запасной)"
-                                       Foreground="#655478" Margin="0,14,0,5" />
+                            <TextBlock Text="Резервный профиль — могу давать актив с другой страницы (необязательно)"
+                                       Foreground="#655478" Margin="0,14,0,5" TextWrapping="Wrap" />
+                            <TextBox x:Name="InstagramGiveFromBox" FontSize="14" Padding="10,8"
+                                     ToolTip="Можно оставить пустым. Имя профиля без @" />
+                            <TextBlock Text="Аккаунт Selenium — только для автоматической проверки (основной или запасной)"
+                                       Foreground="#655478" Margin="0,14,0,5" TextWrapping="Wrap" />
                             <TextBox x:Name="InstagramBrowserBox" FontSize="14" Padding="10,8"
                                      ToolTip="Имя профиля без @" />
-                            <TextBlock Text="Вход выполняется вручную в отдельном Chrome. Пароль не сохраняется в настройках ChatPulse."
+                            <TextBlock Text="Собственные профили сохраняются в SQLite. Аккаунт Selenium не переключается при смене резервного профиля. Вход выполняется вручную в отдельном Chrome, пароль не сохраняется."
                                        Foreground="#81718F" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,12" />
                             <WrapPanel>
                                 <Button Content="Сохранить" Click="SaveInstagramButton_OnClick"
@@ -716,8 +875,15 @@
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
                                         IsEnabled="{Binding CanUseInstagram}" />
                             </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource PanelCard}" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="Проверка подписок" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
+                            <TextBlock Text="Массовая проверка запускается на вкладке «Подписки»; здесь можно проверить одну участницу."
+                                       Foreground="#81718F" Margin="0,9,0,12" FontSize="12" TextWrapping="Wrap" />
                             <TextBlock Text="Проверка одной участницы (аккаунт, с которого она даёт актив)"
-                                       Foreground="#655478" Margin="0,12,0,5" />
+                                       Foreground="#655478" Margin="0,0,0,5" />
                             <ComboBox ItemsSource="{Binding InstagramParticipants}"
                                       SelectedItem="{Binding SelectedInstagramParticipant, Mode=TwoWay}"
                                       DisplayMemberPath="Label" MinHeight="36"
@@ -726,32 +892,6 @@
                                     Click="CheckInstagramParticipantButton_OnClick"
                                     Style="{StaticResource WorkspaceActionButton}" Margin="0,10,0,8"
                                     HorizontalAlignment="Left" IsEnabled="{Binding CanUseInstagram}" />
-                            <WrapPanel Margin="0,4,0,4">
-                                <Button Content="Проверить всех, кроме VIP и администрации"
-                                        Click="CheckAllInstagramParticipantsButton_OnClick"
-                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,4,8,4"
-                                        IsEnabled="{Binding CanUseInstagram}" />
-                                <Button Content="Остановить проверку"
-                                        Click="CancelInstagramBatchButton_OnClick"
-                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,4,8,4"
-                                        IsEnabled="{Binding CanCancelInstagramBatch}" />
-                            </WrapPanel>
-                            <TextBlock Text="Результаты проверки аккаунтов активности"
-                                       Foreground="#655478" Margin="0,12,0,5" />
-                            <DataGrid ItemsSource="{Binding InstagramCheckResults}"
-                                      AutoGenerateColumns="False" IsReadOnly="True"
-                                      CanUserAddRows="False" CanUserDeleteRows="False"
-                                      HeadersVisibility="Column" Height="245"
-                                      EnableRowVirtualization="True">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Instagram" Binding="{Binding UserName}" Width="*" />
-                                    <DataGridTextColumn Header="Участница → я" Binding="{Binding FollowsMe}" Width="*" />
-                                    <DataGridTextColumn Header="Я → участница" Binding="{Binding IFollow}" Width="*" />
-                                    <DataGridTextColumn Header="Проверено" Binding="{Binding LastCheck}" Width="Auto" />
-                                </DataGrid.Columns>
-                            </DataGrid>
-                            <TextBlock Text="«Не найдена в поиске» не означает подтверждённую отписку."
-                                       Foreground="#81718F" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0" />
                             <TextBlock Text="{Binding InstagramStatus}" TextWrapping="Wrap"
                                        Foreground="#75499F" FontSize="12" Margin="0,8,0,0" />
                         </StackPanel>

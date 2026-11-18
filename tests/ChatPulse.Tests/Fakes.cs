@@ -46,7 +46,7 @@ internal sealed class FakeCredentialsStore : ITelegramApiCredentialsStore
     }
 }
 
-internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITelegramTaskReactionSender, ITelegramIncrementalMessageReader
+internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITelegramTaskReactionSender, ITelegramIncrementalMessageReader, ITelegramLatestMatchingMessageReader
 {
     public int ResetCalls { get; private set; }
     public int CancelCalls { get; private set; }
@@ -154,6 +154,17 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITeleg
         cancellationToken.ThrowIfCancellationRequested();
         return NewMessagesImpl?.Invoke(chat, messageId, cancellationToken)
             ?? Task.FromResult<IReadOnlyList<TelegramChatMessage>>([]);
+    }
+
+    public Func<TelegramChatOption, Func<string?, bool>, CancellationToken,
+        Task<TelegramChatMessage?>>? LatestMatchingMessageImpl { get; set; }
+
+    public Task<TelegramChatMessage?> FindLatestMatchingMessageAsync(
+        TelegramChatOption chat, Func<string?, bool> matches, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return LatestMatchingMessageImpl?.Invoke(chat, matches, cancellationToken)
+            ?? Task.FromResult<TelegramChatMessage?>(null);
     }
 
     public Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken)

@@ -6,6 +6,8 @@ using Microsoft.Data.Sqlite;
 
 namespace ChatPulse.Desktop.Services;
 
+public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Applied);
+
 /// <summary>
 /// Primary message history import with separate safe own-reaction reconciliation.
 /// Only completed imports advance the chat cursor; repeated imports use SQLite uniqueness.
@@ -192,6 +194,43 @@ public sealed class ChatSynchronizationService(
                 ChatSynchronizationState.COMPLETED, total, lastId, null, cancellationToken);
             progress?.Invoke($"Синхронизация завершена. Новых сообщений: {Math.Max(0, total - current.ImportedMessageCount)}.");
             return Math.Max(0, total - current.ImportedMessageCount);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Independently refreshes only the selected chat's participant register.
+    /// Search starts with newest Telegram messages, without a 1–30-day cutoff.
+    /// The task import cursor, message history and Instagram checks are not modified.
+    /// </summary>
+    public async Task<ParticipantListRefreshResult> RefreshLatestParticipantListAsync(
+        ConfiguredChat configured, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(configured);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var current = FindConfigured(await settings.LoadAsync(cancellationToken), configured);
+            if (current.SynchronizationState != ChatSynchronizationState.COMPLETED)
+                throw new InvalidOperationException("Сначала завершите первоначальную синхронизацию чата.");
+            var owner = await telegram.GetAuthorizedUserIdAsync(cancellationToken);
+            if (owner != current.TelegramUserId)
+                throw new InvalidOperationException("Telegram-аккаунт изменился.");
+            var chats = await telegram.GetChatsAsync(cancellationToken);
+            var chat = chats.Chats.SingleOrDefault(item => item.PeerId == current.PeerId &&
+                item.PeerType == current.PeerType);
+            if (chats.TelegramUserId != owner || chat is null ||
+                !ChatTitlePolicy.IsEligible(chat.Title))
+                throw new InvalidOperationException("Чат недоступен для синхронизации списка.");
+            if (telegram is not ITelegramLatestMatchingMessageReader reader)
+                throw new InvalidOperationException("Поиск последнего списка не поддерживается Telegram-клиентом.");
+
+            var latest = await reader.FindLatestMatchingMessageAsync(chat,
+                text => ParticipantListParser.TryParse(text, out _), cancellationToken);
+            if (latest is null) return new ParticipantListRefreshResult(null, false);
+
+            var applied = await SaveParticipantsAsync(current, [latest], cancellationToken);
+            return new ParticipantListRefreshResult(latest.MessageId, applied > 0);
         }
         finally { _gate.Release(); }
     }

@@ -1,3 +1,4 @@
+using System.IO;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
@@ -142,9 +143,41 @@ public sealed class InstagramParticipantSearchTests
             new InstagramParticipantOption(8, "Выходной", "", "weekend.user", "Обычный"),
         };
         var result = InstagramBatchEligibility.Prepare(current);
-        Assert.Equal(new[] { "one.active", "weekend.user" }, result.UserNames);
+        Assert.Equal(new[] { "one.active", "weekend.user" }, result.FollowsMeUserNames);
+        Assert.Equal(new[] { "one.active", "TWO.ACTIVE", "vip.user", "admin.user", "weekend.user" },
+            result.IFollowUserNames);
+        Assert.Equal(7, result.SearchCount);
         Assert.Equal(3, result.ExcludedCount);
         Assert.Equal(1, result.MissingActivityProfileCount);
+    }
+
+    [Fact]
+    public void BulkPlanChecksOnlyMyFollowingForVipAndAdministration()
+    {
+        var members = new[]
+        {
+            new InstagramParticipantOption(1, "VIP", "", "vip", "SUPER VIP"),
+            new InstagramParticipantOption(2, "Администратор", "", "admin", "Администратор"),
+            new InstagramParticipantOption(3, "Обычная", "", "normal", "Обычный"),
+            new InstagramParticipantOption(4, "Обычная из другого чата", "", "normal", "Обычный")
+        };
+        var selection = InstagramBatchEligibility.Prepare(members);
+
+        Assert.Equal(new[] { "normal" }, selection.FollowsMeUserNames);
+        Assert.Equal(new[] { "vip", "admin", "normal" }, selection.IFollowUserNames);
+        Assert.Equal(4, selection.SearchCount);
+        Assert.Equal(1, selection.DuplicateCount);
+    }
+
+    [Fact]
+    public void BulkPlanChecksFollowingEvenWhenAllParticipantsArePrivileged()
+    {
+        var selection = InstagramBatchEligibility.Prepare(
+            [new InstagramParticipantOption(1, "VIP", "", "vip", "VIP")]);
+
+        Assert.Empty(selection.FollowsMeUserNames);
+        Assert.Equal(new[] { "vip" }, selection.IFollowUserNames);
+        Assert.Equal(1, selection.SearchCount);
     }
 
     [Fact]
