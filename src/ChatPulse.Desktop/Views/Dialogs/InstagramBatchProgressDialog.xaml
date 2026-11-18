@@ -1,0 +1,278 @@
+﻿<Window x:Class="ChatPulse.Desktop.Views.Dialogs.InstagramBatchProgressDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ChatPulse — Проверка подписок Instagram"
+        Width="570" SizeToContent="Height" MaxHeight="710"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner" FontFamily="Segoe UI"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+        <LinearGradientBrush x:Key="ProgressButtonBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#7545F9" Offset="0" />
+            <GradientStop Color="#BA35E8" Offset="0.53" />
+            <GradientStop Color="#FB239D" Offset="1" />
+        </LinearGradientBrush>
+        <Style x:Key="DialogActionButton" TargetType="Button">
+            <Setter Property="MinWidth" Value="145" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="Padding" Value="18,0" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="{StaticResource ProgressButtonBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="9">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.75" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DialogSecondaryButton" TargetType="Button">
+            <Setter Property="MinWidth" Value="110" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="Padding" Value="16,0" />
+            <Setter Property="Background" Value="#F7F2FF" />
+            <Setter Property="Foreground" Value="#563481" />
+            <Setter Property="BorderBrush" Value="#DCCDF2" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="9"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EFE5FF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#E7D8FC" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#7545F9" />
+                                <Setter TargetName="Surface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid Margin="14">
+        <Border Background="White" CornerRadius="20" Padding="24,20">
+            <Border.Effect>
+                <DropShadowEffect Color="#18083A" BlurRadius="26" ShadowDepth="7" Opacity="0.30" />
+            </Border.Effect>
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Focusable="False">
+                <StackPanel>
+                <TextBlock Text="Проверка подписок Instagram" Foreground="#24154C"
+                           FontSize="21" FontWeight="SemiBold" />
+                <TextBlock Text="Результаты обновляются после успешного завершения"
+                           Foreground="#796C98" Margin="0,4,0,9" FontSize="12" TextWrapping="Wrap" />
+                <StackPanel x:Name="DirectionSelectionPanel" Margin="0,0,0,0">
+                    <TextBlock Text="Что будем проверять?" FontSize="14" FontWeight="SemiBold"
+                               Foreground="#39295F" Margin="0,0,0,7" />
+                    <CheckBox x:Name="CheckMyFollowingBox" Content="Мои подписки на участниц"
+                              IsChecked="True" Margin="0,0,0,8" FontSize="13"
+                              Checked="DirectionCheckBox_OnChanged" Unchecked="DirectionCheckBox_OnChanged" />
+                    <CheckBox x:Name="CheckFollowersBox" Content="Подписки участниц на меня"
+                              IsChecked="True" FontSize="13"
+                              Checked="DirectionCheckBox_OnChanged" Unchecked="DirectionCheckBox_OnChanged" />
+                    <TextBlock Text="У VIP и администрации проверяются только мои подписки."
+                               FontSize="11" Foreground="#796C98" TextWrapping="Wrap" Margin="0,9,0,6" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
+                        <Button Content="Отмена" Click="CancelSelectionButton_OnClick"
+                                Margin="0,0,8,0" Style="{StaticResource DialogSecondaryButton}" />
+                        <Button x:Name="StartCheckButton" Content="Начать проверку"
+                                Click="StartCheckButton_OnClick" Style="{StaticResource DialogActionButton}" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel x:Name="ProgressContent" Visibility="Collapsed">
+                <Border Background="#FFF2E8" CornerRadius="8" Padding="10,7" Margin="0,0,0,9"
+                        Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock Text="Не закрывайте Chrome во время проверки. После завершения или остановки он закроется автоматически."
+                               Foreground="#815122" FontSize="12" TextWrapping="Wrap" />
+                </Border>
+                <ItemsControl ItemsSource="{Binding Steps}">
+                    <ItemsControl.Style>
+                        <Style TargetType="ItemsControl">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ResultSummary.IsStopped}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ItemsControl.Style>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="22" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="92" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding Marker}" Foreground="{Binding StateColor}"
+                                           FontSize="17" FontWeight="Bold" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Text="{Binding Title}" Foreground="#352353"
+                                           FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="2" Text="{Binding StateLabel}" Foreground="{Binding StateColor}"
+                                           FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Border Margin="0,12,0,0" Padding="12" CornerRadius="10" Background="#F8F4FF"
+                        Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisibility}}">
+                    <StackPanel>
+                        <TextBlock Text="{Binding CurrentDetail}" FontSize="13" Foreground="#4E3577"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding CurrentUser}" FontSize="12" Foreground="#68538A"
+                                   Margin="0,4,0,0" TextWrapping="Wrap" />
+                        <Grid Margin="0,9,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding ProgressLabel}"
+                                       Foreground="#4E3577" FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Grid.Column="1" Text="{Binding PercentageLabel}"
+                                       Foreground="#4E3577" FontWeight="SemiBold" FontSize="12"
+                                       HorizontalAlignment="Right" TextAlignment="Right" />
+                        </Grid>
+                        <ProgressBar Height="8" Minimum="0" Maximum="100"
+                                     Value="{Binding Percentage, Mode=OneWay}" IsIndeterminate="{Binding IsIndeterminate, Mode=OneWay}"
+                                     Foreground="#9047DB" Background="#E6DDF5" />
+                        <TextBlock Text="{Binding ResultsLabel}" FontSize="11" Foreground="#78648E"
+                                   Margin="0,7,0,0" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <!-- The final card replaces the long one-line summary. -->
+                <Border Margin="0,12,0,0" CornerRadius="12" Background="#FAF7FF" Padding="14"
+                        BorderBrush="#E8DDF5" BorderThickness="1"
+                        Visibility="{Binding HasResultSummary, Converter={StaticResource BoolToVisibility}}">
+                    <StackPanel DataContext="{Binding ResultSummary}">
+                        <!-- Stopped runs show only completion count and the unchanged previous result. -->
+                        <StackPanel Visibility="{Binding IsStopped, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="{Binding OutcomeLabel}" Foreground="{Binding OutcomeColor}"
+                                       FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding ProgressLabel}" Foreground="#746587" FontSize="12"
+                                       Margin="0,5,0,0" />
+                            <TextBlock Text="{Binding StoppedNotice}" Foreground="#68538A" FontSize="12"
+                                       Margin="0,12,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <!-- Completed runs keep the full statistics; failed runs retain diagnostics. -->
+                        <StackPanel Visibility="{Binding ShowDetailedResult, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="{Binding OutcomeLabel}" Foreground="{Binding OutcomeColor}"
+                                   FontSize="16" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding ProgressLabel}" Foreground="#746587" FontSize="12"
+                                   Margin="0,4,0,3" />
+                        <TextBlock Text="{Binding CheckedDirectionsLabel}" Foreground="#746587" FontSize="11"
+                                   Margin="0,0,0,10" TextWrapping="Wrap" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Background="White" CornerRadius="9" Padding="9,10" Margin="0,0,5,0">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding Found}" FontSize="24" FontWeight="SemiBold"
+                                               Foreground="#248357" HorizontalAlignment="Center" />
+                                    <TextBlock Text="Найдено" FontSize="11" Foreground="#736686" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Background="White" CornerRadius="9" Padding="9,10" Margin="3,0,3,0">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding NotFound}" FontSize="24" FontWeight="SemiBold"
+                                               Foreground="#39295F" HorizontalAlignment="Center" />
+                                    <TextBlock Text="Не найдено" FontSize="11" Foreground="#736686" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2" Background="White" CornerRadius="9" Padding="9,10" Margin="5,0,0,0">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding Errors}" FontSize="24" FontWeight="SemiBold"
+                                               Foreground="#39295F" HorizontalAlignment="Center" />
+                                    <TextBlock Text="С ошибкой" FontSize="11" Foreground="#736686" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                        <StackPanel Margin="0,11,0,0">
+                            <TextBlock Text="Из них не найдено:" Foreground="#39295F"
+                                       FontSize="12" FontWeight="SemiBold"
+                                       Visibility="{Binding HasNotFoundBreakdown, Converter={StaticResource BoolToVisibility}}" />
+                            <Grid Margin="0,7,0,0"
+                                  Visibility="{Binding HasNotFoundBreakdown, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Нет в моих подписках" Foreground="#67547D" FontSize="12" />
+                                <TextBlock Grid.Column="1" Text="{Binding NotFoundFollowingLabel}" Foreground="#39295F"
+                                           FontSize="12" FontWeight="SemiBold" />
+                            </Grid>
+                            <Grid Margin="0,5,0,0"
+                                  Visibility="{Binding HasNotFoundBreakdown, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Нет среди моих подписчиков" Foreground="#67547D" FontSize="12" />
+                                <TextBlock Grid.Column="1" Text="{Binding NotFoundFollowersLabel}" Foreground="#39295F"
+                                           FontSize="12" FontWeight="SemiBold" />
+                            </Grid>
+                            <TextBlock Text="Разбивка по направлениям для этой проверки недоступна."
+                                       Foreground="#827393" FontSize="11" Margin="0,4,0,0"
+                                       Visibility="{Binding HasLegacyBreakdown, Converter={StaticResource BoolToVisibility}}" />
+                            <TextBlock Text="{Binding InterruptedNotice}" Foreground="#8243C7"
+                                       FontSize="11" Margin="0,7,0,0" TextWrapping="Wrap"
+                                       Visibility="{Binding IsInterrupted, Converter={StaticResource BoolToVisibility}}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding Caution}" Foreground="#796C98" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,11,0,0" />
+                        <TextBlock Text="{Binding Details}" Foreground="#AA4965" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,7,0,0"
+                                   Visibility="{Binding HasDetails, Converter={StaticResource BoolToVisibility}}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="{Binding Summary}" Foreground="#39295F" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,9,0,0"
+                           Visibility="{Binding HasSummary, Converter={StaticResource BoolToVisibility}}" />
+                <Button Content="{Binding ActionLabel}" IsEnabled="{Binding CanAct}"
+                        x:Name="ActionButton" Style="{StaticResource DialogActionButton}"
+                        HorizontalAlignment="Right" Margin="0,12,0,0"
+                        Click="ActionButton_OnClick" />
+                </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

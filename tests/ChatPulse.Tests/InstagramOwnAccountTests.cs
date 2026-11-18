@@ -76,15 +76,16 @@ public sealed class InstagramOwnAccountTests
             new InstagramParticipantOption(4, "Моя ссылка подписки", "", "other.activity", "Обычный",
                 "https://www.instagram.com/main.profile/"),
             new InstagramParticipantOption(5, "Участница", "https://www.instagram.com/member.active/",
-                "member.active", "Обычный"),
-            new InstagramParticipantOption(6, "VIP", "", "vip.user", "VIP"),
+                "member.active", "Обычный", "https://www.instagram.com/member.subscribe/"),
+            new InstagramParticipantOption(6, "VIP", "", "vip.user", "VIP",
+                "https://www.instagram.com/vip.subscribe/"),
         };
 
         Assert.True(InstagramOwnAccountFilter.IsOwnParticipant(participants[3], owned));
         Assert.False(InstagramOwnAccountFilter.IsOwnParticipant(participants[4], owned));
         var selection = InstagramBatchEligibility.Prepare(participants, owned);
         Assert.Equal(new[] { "member.active" }, selection.FollowsMeUserNames);
-        Assert.Equal(new[] { "member.active", "vip.user" }, selection.IFollowUserNames);
+        Assert.Equal(new[] { "member.subscribe", "vip.subscribe" }, selection.IFollowUserNames);
         Assert.Equal(4, selection.OwnAccountsExcludedCount);
         Assert.Equal(1, selection.ExcludedCount);
     }

@@ -159,10 +159,14 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITeleg
     public Func<TelegramChatOption, Func<string?, bool>, CancellationToken,
         Task<TelegramChatMessage?>>? LatestMatchingMessageImpl { get; set; }
 
+    public Action<Action<int, int>>? ReportLatestMatchingPage { get; set; }
+
     public Task<TelegramChatMessage?> FindLatestMatchingMessageAsync(
-        TelegramChatOption chat, Func<string?, bool> matches, CancellationToken cancellationToken)
+        TelegramChatOption chat, Func<string?, bool> matches, CancellationToken cancellationToken,
+        Action<int, int>? onPageScanned = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (onPageScanned is not null) ReportLatestMatchingPage?.Invoke(onPageScanned);
         return LatestMatchingMessageImpl?.Invoke(chat, matches, cancellationToken)
             ?? Task.FromResult<TelegramChatMessage?>(null);
     }

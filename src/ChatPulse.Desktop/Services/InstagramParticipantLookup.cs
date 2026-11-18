@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 
 namespace ChatPulse.Desktop.Services;
 
-/// <summary>Only the activity account identifies a participant for mutual-follow checks.</summary>
+/// <summary>Activity account receives attention; subscription account is the one to follow.</summary>
 public sealed record InstagramParticipantOption(long ParticipantId, string Label,
     string ActivityProfileUrl, string UserName, string Category = "Обычный",
     string SubscriptionProfileUrl = "", string DisplayName = "");
@@ -48,24 +48,33 @@ public static class InstagramBatchEligibility
             !InstagramOwnAccountFilter.IsOwnParticipant(item, ownUserNames)).ToArray();
         var ownExcluded = all.Length - participants.Length;
         var excluded = participants.Count(item => IsExcluded(item.Category));
-        var missing = participants.Count(item => string.IsNullOrWhiteSpace(item.UserName));
-        // Any occurrence in a VIP/administrative role exempts the account from
-        // the "participant follows me" direction across all connected chats.
+        var missingActivity = participants.Count(item => string.IsNullOrWhiteSpace(item.UserName));
+        var missingSubscription = participants.Count(item => string.IsNullOrWhiteSpace(
+            InstagramActivityProfile.TryGetUserName(item.SubscriptionProfileUrl)));
+        // A VIP/admin's activity account is excluded from checking whether she follows me.
+        // The account I must follow is taken independently from SubscriptionProfileUrl.
         var privileged = participants.Where(item => IsExcluded(item.Category) &&
                 !string.IsNullOrWhiteSpace(item.UserName))
             .Select(item => item.UserName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var usable = participants.Where(item => !string.IsNullOrWhiteSpace(item.UserName))
+        var activityNames = participants.Where(item => !string.IsNullOrWhiteSpace(item.UserName))
             .Select(item => item.UserName).ToArray();
-        var following = usable.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var followers = following.Where(userName => !privileged.Contains(userName)).ToArray();
-        return new InstagramBatchSelection(followers, following, excluded, missing,
-            usable.Length - following.Length, ownExcluded);
+        var subscriptionNames = participants
+            .Select(item => InstagramActivityProfile.TryGetUserName(item.SubscriptionProfileUrl))
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item!).ToArray();
+        var following = subscriptionNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var followers = activityNames.Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(userName => !privileged.Contains(userName)).ToArray();
+        return new InstagramBatchSelection(followers, following, excluded, missingActivity,
+            activityNames.Length - activityNames.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            ownExcluded, missingSubscription);
     }
 }
 
 public sealed record InstagramBatchSelection(IReadOnlyList<string> FollowsMeUserNames,
     IReadOnlyList<string> IFollowUserNames, int ExcludedCount,
-    int MissingActivityProfileCount, int DuplicateCount, int OwnAccountsExcludedCount = 0)
+    int MissingActivityProfileCount, int DuplicateCount, int OwnAccountsExcludedCount = 0,
+    int MissingSubscriptionProfileCount = 0)
 {
     // Compatibility with callers that use the regular participants list.
     public IReadOnlyList<string> UserNames => FollowsMeUserNames;

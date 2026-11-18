@@ -129,26 +129,34 @@ public sealed class InstagramParticipantSearchTests
         => Assert.Equal(expected, InstagramBatchEligibility.IsExcluded(category));
 
     [Fact]
-    public void BulkPlanUsesOnlyUniqueActivityUserNamesAndExcludesAdminsGlobally()
+    public void BulkPlanSeparatesSubscriptionAndActivityAndExcludesAdminsGlobally()
     {
         var current = new[]
         {
-            new InstagramParticipantOption(1, "Ольга", "", "one.active", "Обычный"),
-            new InstagramParticipantOption(2, "Анна", "", "TWO.ACTIVE", "Обычный"),
-            new InstagramParticipantOption(3, "Анна второй чат", "", "two.active", "Обычный"),
-            new InstagramParticipantOption(4, "VIP", "", "vip.user", "SUPER VIP"),
-            new InstagramParticipantOption(5, "Администратор", "", "admin.user", "Администратор"),
-            new InstagramParticipantOption(6, "Администратор другого чата", "", "two.active", "Модератор"),
+            new InstagramParticipantOption(1, "Ольга", "", "one.active", "Обычный",
+                "https://instagram.com/one.subscribe/"),
+            new InstagramParticipantOption(2, "Анна", "", "TWO.ACTIVE", "Обычный",
+                "https://instagram.com/two.subscribe/"),
+            new InstagramParticipantOption(3, "Анна второй чат", "", "two.active", "Обычный",
+                "https://instagram.com/two.subscribe/"),
+            new InstagramParticipantOption(4, "VIP", "", "vip.active", "SUPER VIP",
+                "https://instagram.com/vip.subscribe/"),
+            new InstagramParticipantOption(5, "Администратор", "", "admin.active", "Администратор",
+                "https://instagram.com/admin.subscribe/"),
+            new InstagramParticipantOption(6, "Администратор другого чата", "", "two.active", "Модератор",
+                "https://instagram.com/two.subscribe/"),
             new InstagramParticipantOption(7, "Без ссылки", "", "", "Обычный"),
-            new InstagramParticipantOption(8, "Выходной", "", "weekend.user", "Обычный"),
+            new InstagramParticipantOption(8, "Выходной", "", "weekend.active", "Обычный",
+                "https://instagram.com/weekend.subscribe/")
         };
         var result = InstagramBatchEligibility.Prepare(current);
-        Assert.Equal(new[] { "one.active", "weekend.user" }, result.FollowsMeUserNames);
-        Assert.Equal(new[] { "one.active", "TWO.ACTIVE", "vip.user", "admin.user", "weekend.user" },
+        Assert.Equal(new[] { "one.active", "weekend.active" }, result.FollowsMeUserNames);
+        Assert.Equal(new[] { "one.subscribe", "two.subscribe", "vip.subscribe", "admin.subscribe", "weekend.subscribe" },
             result.IFollowUserNames);
         Assert.Equal(7, result.SearchCount);
         Assert.Equal(3, result.ExcludedCount);
         Assert.Equal(1, result.MissingActivityProfileCount);
+        Assert.Equal(1, result.MissingSubscriptionProfileCount);
     }
 
     [Fact]
@@ -156,15 +164,19 @@ public sealed class InstagramParticipantSearchTests
     {
         var members = new[]
         {
-            new InstagramParticipantOption(1, "VIP", "", "vip", "SUPER VIP"),
-            new InstagramParticipantOption(2, "Администратор", "", "admin", "Администратор"),
-            new InstagramParticipantOption(3, "Обычная", "", "normal", "Обычный"),
-            new InstagramParticipantOption(4, "Обычная из другого чата", "", "normal", "Обычный")
+            new InstagramParticipantOption(1, "VIP", "", "vip.active", "SUPER VIP",
+                "https://instagram.com/vip.subscribe/"),
+            new InstagramParticipantOption(2, "Администратор", "", "admin.active", "Администратор",
+                "https://instagram.com/admin.subscribe/"),
+            new InstagramParticipantOption(3, "Обычная", "", "normal.active", "Обычный",
+                "https://instagram.com/normal.subscribe/"),
+            new InstagramParticipantOption(4, "Обычная из другого чата", "", "normal.active", "Обычный",
+                "https://instagram.com/normal.subscribe/")
         };
         var selection = InstagramBatchEligibility.Prepare(members);
 
-        Assert.Equal(new[] { "normal" }, selection.FollowsMeUserNames);
-        Assert.Equal(new[] { "vip", "admin", "normal" }, selection.IFollowUserNames);
+        Assert.Equal(new[] { "normal.active" }, selection.FollowsMeUserNames);
+        Assert.Equal(new[] { "vip.subscribe", "admin.subscribe", "normal.subscribe" }, selection.IFollowUserNames);
         Assert.Equal(4, selection.SearchCount);
         Assert.Equal(1, selection.DuplicateCount);
     }
@@ -173,10 +185,11 @@ public sealed class InstagramParticipantSearchTests
     public void BulkPlanChecksFollowingEvenWhenAllParticipantsArePrivileged()
     {
         var selection = InstagramBatchEligibility.Prepare(
-            [new InstagramParticipantOption(1, "VIP", "", "vip", "VIP")]);
+            [new InstagramParticipantOption(1, "VIP", "", "vip.active", "VIP",
+                "https://instagram.com/vip.subscribe/")]);
 
         Assert.Empty(selection.FollowsMeUserNames);
-        Assert.Equal(new[] { "vip" }, selection.IFollowUserNames);
+        Assert.Equal(new[] { "vip.subscribe" }, selection.IFollowUserNames);
         Assert.Equal(1, selection.SearchCount);
     }
 

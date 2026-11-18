@@ -28,7 +28,13 @@ public sealed record InstagramSubscriptionRow(
     public bool IsUnverified => (FollowsMeStatus != "NOT_APPLICABLE" &&
                                 FollowsMeStatus is not ("FOUND" or "NOT_FOUND")) ||
                                 IFollowStatus is not ("FOUND" or "NOT_FOUND");
-    public bool CanOpenProfile => HasActivityProfile;
+    public bool CanOpenProfile => !string.IsNullOrWhiteSpace(ProfileActionUrl);
+    public bool CanCheckFollowing => !string.IsNullOrWhiteSpace(SubscriptionUserName);
+    public bool CanCheckFollowers => HasActivityProfile && FollowsMeStatus != "NOT_APPLICABLE";
+    // A missing "I follow her" result must lead to the account to follow, not the activity account.
+    public string ProfileActionUrl => !string.IsNullOrWhiteSpace(SubscriptionUserName)
+        ? $"https://www.instagram.com/{SubscriptionUserName}/"
+        : HasActivityProfile ? ActivityProfileUrl : string.Empty;
     public string ProfileActionLabel => IFollowStatus == "NOT_FOUND" ? "Открыть профиль" : "Instagram";
 
     private static string Describe(string status) => status switch
@@ -64,7 +70,9 @@ public static class InstagramSubscriptionPresentation
             InstagramSavedCheck? followers = null;
             if (!exemptFromFollowers)
                 indexed.TryGetValue((userName.ToLowerInvariant(), "followers"), out followers);
-            indexed.TryGetValue((userName.ToLowerInvariant(), "following"), out var following);
+            InstagramSavedCheck? following = null;
+            if (!string.IsNullOrWhiteSpace(subscriptionUserName))
+                indexed.TryGetValue((subscriptionUserName.ToLowerInvariant(), "following"), out following);
             var checkedAt = new[] { followers?.CheckedAtUtc, following?.CheckedAtUtc }
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .OrderByDescending(value => value, StringComparer.Ordinal)

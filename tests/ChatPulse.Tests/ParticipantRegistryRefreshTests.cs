@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
@@ -67,6 +67,62 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
         Assert.Equal(beforeCursor, (await settings.LoadAsync()).Chats.Single().LastProcessedMessageId);
         Assert.Null(telegram.NewMessagesImpl);
+    }
+
+    [Fact]
+    public async Task RefreshLatestParticipantList_ReportsActualSearchProgressAndSaveStage()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var telegram = Client();
+        telegram.ReportLatestMatchingPage = report => report(2, 130);
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(23, UPDATED_REGISTER));
+        var progress = new List<ParticipantListSyncProgress>();
+
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat, progress.Add);
+
+        Assert.True(result.Applied);
+        Assert.Equal(23L, result.SourceMessageId);
+        Assert.Equal(ParticipantListSyncStage.SETTINGS, progress[0].Stage);
+        Assert.Equal(ParticipantListSyncStage.TELEGRAM, progress[1].Stage);
+        Assert.Contains(progress, item => item.Stage == ParticipantListSyncStage.SEARCH &&
+            item.PagesScanned == 2 && item.MessagesScanned == 130);
+        Assert.Equal(ParticipantListSyncStage.SAVE, progress[^1].Stage);
+        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
+    }
+
+    [Fact]
+    public async Task RefreshLatestParticipantList_CancelledSearchDoesNotReplaceCurrentRegister()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        Assert.Equal(1, await new ChatParticipantRegistry(database)
+            .UpdateAsync(chat, [(10, ORIGINAL_REGISTER)]));
+        var telegram = Client();
+        using var cancellation = new CancellationTokenSource();
+        telegram.LatestMatchingMessageImpl = (_, _, token) =>
+        {
+            cancellation.Cancel();
+            token.ThrowIfCancellationRequested();
+            return Task.FromResult<TelegramChatMessage?>(new(23, UPDATED_REGISTER));
+        };
+        var progress = new List<ParticipantListSyncProgress>();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new ChatSynchronizationService(settings, telegram, database)
+                .RefreshLatestParticipantListAsync(chat, progress.Add, cancellation.Token));
+
+        Assert.DoesNotContain(progress, item => item.Stage == ParticipantListSyncStage.SAVE);
+        Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
+        Assert.Equal(0L, await CountCurrentAsync(database, "fourth_check"));
     }
 
     [Fact]

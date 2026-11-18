@@ -16,7 +16,9 @@ namespace ChatPulse.Desktop.Views.Workspace;
 public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 {
     private enum WorkspacePage { Home, Chat, Settings }
+
     private enum ChatPage { Tasks, Subscriptions, MyActivity }
+
     private enum SubscriptionFilter { All, Discrepancies, Unverified }
 
     private ISettingsService? _settings;
@@ -40,7 +42,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _reactionRefreshMessage = string.Empty;
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
+
     private enum TaskFilter { Pending, Completed, Skipped }
+
     private TaskFilter _taskFilter;
     private bool _isRebuildingChatList;
     private readonly ICollectionView _subscriptionRowsView;
@@ -50,6 +54,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _subscriptionsSummary = "Выберите чат для просмотра участниц.";
     private string _subscriptionsSyncMessage = string.Empty;
     private string _subscriptionsCheckMessage = string.Empty;
+    private InstagramBatchResultSummary? _latestSubscriptionBatch;
     private int _loadVersion;
     private int _totalDetected;
 
@@ -92,44 +97,99 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public string SelectedChatTaskCount => SelectedChat is null ? "—" : SelectedChat.DetectedCount.ToString();
     public string TotalDetected => _totalDetected.ToString();
     public string ConnectedChatCount => Chats.Count.ToString();
-    public string TaskSummary { get => _taskSummary; private set { _taskSummary = value; Notify(); } }
-    public string LoadMessage { get => _loadMessage; private set { _loadMessage = value; Notify(); } }
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(HasTasks)); Notify(nameof(HasNoTasks)); Notify(nameof(IsNotBusy)); } }
+
+    public string TaskSummary
+    {
+        get => _taskSummary;
+        private set
+        {
+            _taskSummary = value;
+            Notify();
+        }
+    }
+
+    public string LoadMessage
+    {
+        get => _loadMessage;
+        private set
+        {
+            _loadMessage = value;
+            Notify();
+        }
+    }
+
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set
+        {
+            _isBusy = value;
+            Notify();
+            Notify(nameof(HasTasks));
+            Notify(nameof(HasNoTasks));
+            Notify(nameof(IsNotBusy));
+        }
+    }
+
     public bool HasTasks => !IsBusy && Tasks.Count > 0;
     public bool HasNoTasks => !IsBusy && Tasks.Count == 0;
     public bool IsNotBusy => !IsBusy;
+
     public string ReactionRefreshMessage
     {
         get => _reactionRefreshMessage;
-        private set { _reactionRefreshMessage = value; Notify(); }
+        private set
+        {
+            _reactionRefreshMessage = value;
+            Notify();
+        }
     }
+
     public string EmptyTasksMessage => _taskFilter switch
     {
         TaskFilter.Completed => "В этом чате нет заданий с подтверждённой твоей реакцией.",
         TaskFilter.Skipped => "В этом чате пока нет пропущенных сообщений.",
         _ => "Нет невыполненных заданий в загруженной истории."
     };
+
     public string InstagramStatus
     {
         get => _instagramStatus;
-        private set { _instagramStatus = value; Notify(); }
+        private set
+        {
+            _instagramStatus = value;
+            Notify();
+        }
     }
 
     public ObservableCollection<InstagramParticipantOption> InstagramParticipants { get; } = [];
     public ObservableCollection<InstagramSubscriptionRow> SubscriptionRows { get; } = [];
     public ICollectionView SubscriptionRowsView => _subscriptionRowsView;
+
     public string SubscriptionCountLabel => _subscriptionsLoaded
-        ? SubscriptionRows.Count.ToString(CultureInfo.InvariantCulture) : "—";
+        ? SubscriptionRows.Count.ToString(CultureInfo.InvariantCulture)
+        : "—";
+
     public string SubscriptionsSummary
     {
         get => _subscriptionsSummary;
-        private set { _subscriptionsSummary = value; Notify(); }
+        private set
+        {
+            _subscriptionsSummary = value;
+            Notify();
+        }
     }
+
     public string SubscriptionsSyncMessage
     {
         get => _subscriptionsSyncMessage;
-        private set { _subscriptionsSyncMessage = value; Notify(); }
+        private set
+        {
+            _subscriptionsSyncMessage = value;
+            Notify();
+        }
     }
+
     public string SubscriptionsCheckMessage
     {
         get => _subscriptionsCheckMessage;
@@ -140,6 +200,19 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             InstagramStatus = value;
         }
     }
+
+    public InstagramBatchResultSummary? LatestSubscriptionBatch
+    {
+        get => _latestSubscriptionBatch;
+        private set
+        {
+            _latestSubscriptionBatch = value;
+            Notify();
+            Notify(nameof(HasLatestSubscriptionBatch));
+        }
+    }
+
+    public bool HasLatestSubscriptionBatch => LatestSubscriptionBatch is not null;
 
     public string SubscriptionQuery
     {
@@ -152,12 +225,17 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             _subscriptionRowsView.Refresh();
         }
     }
+
     public bool CanCancelInstagramBatch => _instagramBatchCancellation is not null;
 
     public InstagramParticipantOption? SelectedInstagramParticipant
     {
         get => _selectedInstagramParticipant;
-        set { _selectedInstagramParticipant = value; Notify(); }
+        set
+        {
+            _selectedInstagramParticipant = value;
+            Notify();
+        }
     }
 
     public bool CanUseInstagram => !_instagramBusy;
@@ -172,8 +250,10 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         if (_settings is null) return;
         var saved = await _settings.LoadAsync();
-        var owned = _reader is null ? null : await new InstagramOwnAccountStore(_reader.DatabasePath)
-            .EnsureFromLegacyAsync(saved.InstagramTargetUserName);
+        var owned = _reader is null
+            ? null
+            : await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(saved.InstagramTargetUserName);
         InstagramTargetBox.Text = owned?.ReceivingUserName ?? saved.InstagramTargetUserName ?? string.Empty;
         InstagramGiveFromBox.Text = owned?.GivingUserName ?? string.Empty;
         InstagramBrowserBox.Text = saved.InstagramBrowserUserName ?? string.Empty;
@@ -206,15 +286,24 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         var currentChat = SelectedChat;
         _subscriptionsLoaded = false;
+        LatestSubscriptionBatch = null;
         SubscriptionRows.Clear();
         Notify(nameof(SubscriptionCountLabel));
         if (_settings is null || _reader is null || currentChat is null)
         {
             SubscriptionsSummary = "Выберите Instagram-чат для просмотра участниц.";
+            LatestSubscriptionBatch = null;
             return;
         }
 
         var settings = await _settings.LoadAsync();
+        // Old following results were gathered from activity profiles and must not be reused.
+        new InstagramCheckProfileSemanticsMigration(_reader.DatabasePath).EnsureApplied();
+        if (!_instagramBusy && !string.IsNullOrWhiteSpace(settings.InstagramTargetUserName))
+            new InstagramBatchRunStore(_reader.DatabasePath)
+                .DiscardAbandonedDrafts(settings.InstagramTargetUserName);
+        var latestBatch = new InstagramBatchSummaryStore(_reader.DatabasePath)
+            .Read(settings.InstagramTargetUserName ?? string.Empty);
         var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
         var participants = await lookup.ReadAllCurrentAsync([currentChat.Chat]);
         var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
@@ -227,25 +316,28 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                                   !string.IsNullOrWhiteSpace(participant.UserName))
             .Select(participant => participant.UserName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var userNames = participants.Select(participant => participant.UserName)
+        var userNames = participants.SelectMany(participant => new[]
+            {
+                participant.UserName, InstagramActivityProfile.TryGetUserName(participant.SubscriptionProfileUrl)
+            })
             .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         IReadOnlyList<InstagramSavedCheck> saved = string.IsNullOrWhiteSpace(settings.InstagramTargetUserName)
             ? []
             : new InstagramSubscriptionCheckStore(_reader.DatabasePath)
                 .Read(settings.InstagramTargetUserName, userNames);
         if (!ReferenceEquals(currentChat, SelectedChat)) return;
+        LatestSubscriptionBatch = latestBatch;
         foreach (var row in InstagramSubscriptionPresentation.Build(participants, saved,
                      ownNames, privilegedNames))
             SubscriptionRows.Add(row);
         _subscriptionRowsView.Refresh();
         _subscriptionsLoaded = true;
         Notify(nameof(SubscriptionCountLabel));
-        var missing = SubscriptionRows.Count(row => !row.HasActivityProfile);
         var discrepancies = SubscriptionRows.Count(row => row.HasDiscrepancy);
         SubscriptionsSummary = $"Участниц: {SubscriptionRows.Count}. Расхождений по результатам поиска: " +
-                               $"{discrepancies}. Без ссылки активности: {missing}. " +
-                               "Для VIP и администрации проверяем только мои подписки.";
+                               $"{discrepancies}. Для VIP и администрации проверяем только мои подписки.";
         UpdateSubscriptionFilterVisuals();
     }
 
@@ -275,7 +367,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         if (AllSubscriptionFilterButton is null || DiscrepancySubscriptionFilterButton is null ||
             UnverifiedSubscriptionFilterButton is null) return;
         AllSubscriptionFilterButton.Opacity = _subscriptionFilter == SubscriptionFilter.All ? 1 : 0.55;
-        DiscrepancySubscriptionFilterButton.Opacity = _subscriptionFilter == SubscriptionFilter.Discrepancies ? 1 : 0.55;
+        DiscrepancySubscriptionFilterButton.Opacity =
+            _subscriptionFilter == SubscriptionFilter.Discrepancies ? 1 : 0.55;
         UnverifiedSubscriptionFilterButton.Opacity = _subscriptionFilter == SubscriptionFilter.Unverified ? 1 : 0.55;
     }
 
@@ -301,171 +394,471 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
-    private void CancelInstagramBatchButton_OnClick(object sender, RoutedEventArgs args)
-        => _instagramBatchCancellation?.Cancel();
+    private void CheckAllInstagramParticipantsButton_OnClick(object sender, RoutedEventArgs args)
+        => ShowSubscriptionCheckDialog(null, InstagramCheckDirections.BOTH);
 
-    private async void CheckAllInstagramParticipantsButton_OnClick(object sender, RoutedEventArgs args)
+    private void CheckRowIFollowButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (sender is Button { Tag: InstagramSubscriptionRow participant } && participant.CanCheckFollowing)
+            ShowSubscriptionCheckDialog(participant, InstagramCheckDirections.FOLLOWING);
+    }
+
+    private void CheckRowFollowsMeButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (sender is not Button { Tag: InstagramSubscriptionRow participant } ||
+            !participant.CanCheckFollowers) return;
+        ShowSubscriptionCheckDialog(participant, InstagramCheckDirections.FOLLOWERS);
+    }
+
+    private void ShowSubscriptionCheckDialog(InstagramSubscriptionRow? individual,
+        InstagramCheckDirections direction)
     {
         if (_settings is null || _reader is null || _instagramBusy) return;
+        if (!InstagramCheckDirectionSelection.IsValid(direction)) return;
         SetInstagramBusy(true);
         using var cancellation = new CancellationTokenSource();
         _instagramBatchCancellation = cancellation;
         Notify(nameof(CanCancelInstagramBatch));
+        var dialog = new InstagramBatchProgressDialog(cancellation,
+            chooseDirections: individual is null, predetermined: direction);
+        var owner = Window.GetWindow(this);
+        if (owner is { IsVisible: true }) dialog.Owner = owner;
+        dialog.StartRequested += async (_, _) =>
+        {
+            try { await RunInstagramBatchAsync(dialog, cancellation.Token, individual); }
+            catch (Exception exception)
+            {
+                dialog.Model.Finish($"Не удалось завершить проверку: {exception.Message}", false);
+                _instagramBatchCancellation = null;
+                Notify(nameof(CanCancelInstagramBatch));
+                SetInstagramBusy(false);
+            }
+        };
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        try { dialog.ShowDialog(); }
+        finally
+        {
+            mainWindow?.HideDialogOverlay();
+            // A user can cancel direction selection without starting Selenium.
+            _instagramBatchCancellation = null;
+            Notify(nameof(CanCancelInstagramBatch));
+            SetInstagramBusy(false);
+        }
+    }
+
+    private async Task RunInstagramBatchAsync(InstagramBatchProgressDialog dialog,
+        CancellationToken cancellationToken, InstagramSubscriptionRow? individual = null)
+    {
+        var model = dialog.Model;
+        var directions = dialog.SelectedDirections;
         var completed = 0;
         var found = 0;
         var notFound = 0;
         var inconclusive = 0;
+        var notFoundFollowers = 0;
+        var notFoundFollowing = 0;
+        var total = 0;
+        var privileged = 0;
+        var missingActivity = 0;
+        var success = false;
+        var runOutcome = InstagramBatchOutcome.FAILED;
+        var failureReason = string.Empty;
+        var runId = Guid.NewGuid().ToString("N");
+        string? targetUserName = null;
+        string summary;
         try
         {
-            var settings = await _settings.LoadAsync();
+            if (!InstagramCheckDirectionSelection.IsValid(directions))
+                throw new ArgumentException("Выберите хотя бы одно направление проверки.");
+            model.Activate(InstagramBatchStage.SETTINGS,
+                "Читаем настройки основного и проверочного Instagram-аккаунтов...");
+            var settings = await _settings!.LoadAsync();
+            targetUserName = settings.InstagramTargetUserName;
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(settings.InstagramTargetUserName) ||
                 string.IsNullOrWhiteSpace(settings.InstagramBrowserUserName))
             {
-                SubscriptionsCheckMessage = "Сначала сохраните основной и проверочный Instagram-аккаунты.";
-                return;
+                summary = "Сначала сохраните основной и проверочный Instagram-аккаунты в настройках.";
+                SubscriptionsCheckMessage = summary;
+                model.InterruptActive();
             }
-            var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
-            var allCurrent = await lookup.ReadAllCurrentAsync(settings.Chats, cancellation.Token);
-            var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
-                .EnsureFromLegacyAsync(settings.InstagramTargetUserName, cancellation.Token);
-            var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
-            var plan = InstagramBatchEligibility.Prepare(allCurrent, ownNames);
-            if (plan.SearchCount == 0)
+            else
             {
-                SubscriptionsCheckMessage = "Нет актуальных участниц с корректной ссылкой аккаунта активности.";
-                return;
-            }
-
-            var store = new InstagramSubscriptionCheckStore(_reader.DatabasePath);
-            var total = plan.SearchCount;
-            SubscriptionsCheckMessage = $"Проверяем {plan.IFollowUserNames.Count} уникальных аккаунтов активности. " +
-                              $"Из них {plan.FollowsMeUserNames.Count} проверяем в обоих направлениях. " +
-                              $"VIP/администрация (только мои подписки): {plan.ExcludedCount}; " +
-                              $"без подходящей ссылки: {plan.MissingActivityProfileCount}; " +
-                              $"собственных профилей: {plan.OwnAccountsExcludedCount}; " +
-                              $"дубликатов: {plan.DuplicateCount}. Не закрывайте Chrome.";
-            var result = await _instagramBrowser.CheckParticipantsAsync(
-                settings.InstagramTargetUserName, plan.FollowsMeUserNames, plan.IFollowUserNames, progress =>
+                model.Activate(InstagramBatchStage.PARTICIPANTS,
+                    "Получаем актуальный список участниц и исключаем собственные аккаунты...");
+                new InstagramCheckProfileSemanticsMigration(_reader!.DatabasePath).EnsureApplied();
+                var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
+                var allCurrent = await lookup.ReadAllCurrentAsync(settings.Chats, cancellationToken);
+                var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                    .EnsureFromLegacyAsync(settings.InstagramTargetUserName, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
+                var plan = InstagramBatchEligibility.Prepare(allCurrent, ownNames);
+                privileged = plan.ExcludedCount;
+                missingActivity = plan.MissingActivityProfileCount;
+                var missingSubscription = plan.MissingSubscriptionProfileCount;
+                IReadOnlyList<string> followers;
+                IReadOnlyList<string> following;
+                if (individual is null)
                 {
-                    // This callback runs on the Selenium worker. Each completed direction
-                    // is committed before reporting progress to the UI thread.
-                    store.Save(settings.InstagramTargetUserName,
-                        settings.InstagramBrowserUserName, progress);
-                    completed = progress.Completed;
-                    switch (progress.Result.Status)
-                    {
-                        case InstagramSearchStatus.FOUND: found++; break;
-                        case InstagramSearchStatus.NOT_FOUND: notFound++; break;
-                        default: inconclusive++; break;
-                    }
-                    // Non-blocking UI dispatch prevents shutdown deadlocks while Chrome
-                    // is being closed. Persistence has already finished at this point.
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        var direction = progress.Kind == "followers" ? "Подписчики" : "Подписки";
-                        if (_instagramBatchCancellation is not null)
-                            SubscriptionsCheckMessage = $"Проверено {progress.Completed} из {total}: @{progress.UserName} ({direction}). " +
-                                              $"Найдено: {found}; нет в поиске: {notFound}; ошибок: {inconclusive}.";
-                    }));
-                }, cancellation.Token);
-            var ending = result.StopReason is null ? "Проверка завершена." :
-                $"Проверка остановлена: {result.StopReason}";
-            SubscriptionsCheckMessage = $"{ending} Выполнено {completed} из {total} поисков. " +
-                              $"Найдено: {found}; не найдено в поиске: {notFound}; " +
-                              $"не удалось проверить: {inconclusive}. " +
-                              $"VIP/администрация — проверены только мои подписки: {plan.ExcludedCount}; " +
-                              $"без ссылки активности: {plan.MissingActivityProfileCount}. " +
-                              "Отсутствие в поиске не является доказательством отписки.";
+                    followers = InstagramCheckDirectionSelection.Filter(plan.FollowsMeUserNames,
+                        directions, InstagramCheckDirections.FOLLOWERS);
+                    following = InstagramCheckDirectionSelection.Filter(plan.IFollowUserNames,
+                        directions, InstagramCheckDirections.FOLLOWING);
+                }
+                else
+                {
+                    // The participant must still be in the current register and must not
+                    // have changed the activity profile since the row was displayed.
+                    var current = allCurrent.FirstOrDefault(item =>
+                        item.ParticipantId == individual.ParticipantId &&
+                        string.Equals(item.UserName, individual.ActivityUserName,
+                            StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(item.ActivityProfileUrl, individual.ActivityProfileUrl,
+                            StringComparison.OrdinalIgnoreCase));
+                    if (current is null || InstagramOwnAccountFilter.IsOwnParticipant(current, ownNames))
+                        throw new InvalidOperationException(
+                            "Участница больше не присутствует в актуальном списке. Обновите вкладку.");
+                    var subscriptionName = InstagramActivityProfile.TryGetUserName(current.SubscriptionProfileUrl);
+                    if (!string.Equals(subscriptionName, individual.SubscriptionUserName,
+                            StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Страница для подписки изменилась. Обновите вкладку.");
+                    if (directions == InstagramCheckDirections.FOLLOWERS &&
+                        !plan.FollowsMeUserNames.Contains(current.UserName, StringComparer.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Для VIP и администрации подписку на меня не проверяем.");
+                    if (directions == InstagramCheckDirections.FOLLOWING &&
+                        string.IsNullOrWhiteSpace(subscriptionName))
+                        throw new InvalidOperationException("Не найдена корректная страница для подписки.");
+                    followers = directions == InstagramCheckDirections.FOLLOWERS ? [current.UserName] : [];
+                    following = directions == InstagramCheckDirections.FOLLOWING ? [subscriptionName!] : [];
+                    privileged = 0;
+                    missingActivity = 0;
+                }
+
+                total = followers.Count + following.Count;
+                model.ConfigureWorkload(total);
+                if (followers.Count == 0) model.Skip(InstagramBatchStage.FOLLOWERS);
+                if (following.Count == 0) model.Skip(InstagramBatchStage.FOLLOWING);
+                if (individual is null &&
+                    (((directions & InstagramCheckDirections.FOLLOWERS) != 0 && missingActivity > 0) ||
+                     ((directions & InstagramCheckDirections.FOLLOWING) != 0 && missingSubscription > 0)))
+                {
+                    summary = "В списке отсутствуют корректные Instagram-профили, необходимые для " +
+                              "выбранных направлений. Проверьте распознавание списка.";
+                    failureReason = summary;
+                    model.InterruptActive();
+                }
+                else if (total == 0)
+                {
+                    summary = "Нет актуальных участниц с корректной ссылкой аккаунта активности.";
+                    model.InterruptActive();
+                }
+                else
+                {
+                    model.Activate(InstagramBatchStage.BROWSER,
+                        $"Поисков запланировано: {total}. Запускаем Chrome...");
+                    var runStore = new InstagramBatchRunStore(_reader.DatabasePath);
+                    runStore.DiscardAbandonedDrafts(settings.InstagramTargetUserName);
+                    var result = await _instagramBrowser.CheckParticipantsAsync(
+                        settings.InstagramTargetUserName, followers,
+                        following, progress =>
+                        {
+                            // Stage only until success. Interrupted runs are discarded; last successful
+                            // results remain untouched.
+                            runStore.Stage(runId, settings.InstagramTargetUserName,
+                                settings.InstagramBrowserUserName, progress);
+                            completed = progress.Completed;
+                            switch (progress.Result.Status)
+                            {
+                                case InstagramSearchStatus.FOUND:
+                                    found++;
+                                    break;
+                                case InstagramSearchStatus.NOT_FOUND:
+                                    notFound++;
+                                    if (progress.Kind == "followers") notFoundFollowers++;
+                                    else if (progress.Kind == "following") notFoundFollowing++;
+                                    break;
+                                default: inconclusive++; break;
+                            }
+
+                            var foundSnapshot = found;
+                            var notFoundSnapshot = notFound;
+                            var inconclusiveSnapshot = inconclusive;
+                            Dispatcher.BeginInvoke(new Action(() =>
+                                model.Report(progress, foundSnapshot, notFoundSnapshot, inconclusiveSnapshot)));
+                        }, cancellationToken, stage =>
+                        {
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                switch (stage)
+                                {
+                                    case InstagramBatchBrowserStage.STARTING_CHROME:
+                                        model.Activate(InstagramBatchStage.BROWSER,
+                                            "Запускаем Chrome с сохранённым профилем Instagram...");
+                                        break;
+                                    case InstagramBatchBrowserStage.CHECKING_SESSION:
+                                        model.Activate(InstagramBatchStage.BROWSER,
+                                            "Проверяем сохранённую Instagram-сессию...");
+                                        break;
+                                    case InstagramBatchBrowserStage.CHECKING_FOLLOWERS:
+                                        model.Activate(InstagramBatchStage.FOLLOWERS,
+                                            "Проверяем подписки обычных участниц на меня...");
+                                        break;
+                                    case InstagramBatchBrowserStage.CHECKING_FOLLOWING:
+                                        model.Activate(InstagramBatchStage.FOLLOWING,
+                                            "Проверяем мои подписки на всех участниц, включая VIP и администрацию...");
+                                        break;
+                                }
+                            }));
+                        });
+                    success = result.StopReason is null && completed == total;
+                    runOutcome = success ? InstagramBatchOutcome.COMPLETED :
+                        cancellationToken.IsCancellationRequested ? InstagramBatchOutcome.STOPPED :
+                        InstagramBatchOutcome.FAILED;
+                    if (!success) failureReason = result.StopReason ?? "Не все поиски выполнены.";
+                    summary = success
+                        ? $"Проверка завершена: {completed} из {total} поисков. " +
+                          $"Найдено: {found}; не найдено: {notFound}; с ошибкой: {inconclusive}."
+                        : $"Проверка прервана: {result.StopReason ?? "не все поиски выполнены"}. " +
+                          $"Выполнено {completed} из {total} поисков. Предыдущие результаты не изменены.";
+                    if (!success) model.InterruptActive();
+                }
+
+                SubscriptionsCheckMessage = summary;
+            }
         }
         catch (OperationCanceledException)
         {
-            SubscriptionsCheckMessage = $"Проверка остановлена пользователем. Сохранено {completed} поисков. " +
-                              "Остальные участницы не проверены.";
+            runOutcome = InstagramBatchOutcome.STOPPED;
+            failureReason = "Остановлено пользователем.";
+            summary = $"Остановлено пользователем после {completed} из {total} поисков. " +
+                      "Временные результаты будут удалены.";
+            SubscriptionsCheckMessage = summary;
+            model.InterruptActive();
         }
         catch (Exception exception)
         {
-            SubscriptionsCheckMessage = $"Массовая проверка прервана после {completed} поисков: {exception.Message}. " +
-                              "Уже выполненные проверки сохранены.";
+            runOutcome = InstagramBatchOutcome.FAILED;
+            failureReason = exception.Message;
+            summary = $"Ошибка проверки после {completed} поисков: {exception.Message}. " +
+                      "Предыдущая успешная проверка остаётся без изменений.";
+            SubscriptionsCheckMessage = summary;
+            model.InterruptActive();
         }
         finally
         {
-            _instagramBatchCancellation = null;
-            Notify(nameof(CanCancelInstagramBatch));
-            SetInstagramBusy(false);
-            if (_page == WorkspacePage.Chat && _chatPage == ChatPage.Subscriptions)
+            model.Activate(InstagramBatchStage.FINISHING,
+                "Закрываем Chrome и завершаем обработку результатов...");
+            try { await _instagramBrowser.CloseBrowserAsync(); }
+            catch (Exception exception)
+            {
+                success = false;
+                runOutcome = InstagramBatchOutcome.FAILED;
+                failureReason += $" Не удалось закрыть Chrome: {exception.Message}";
+                SubscriptionsCheckMessage += $" Не удалось закрыть Chrome: {exception.Message}";
+            }
+
+            // Stopping right after the final Selenium result must still be respected.
+            if (success && cancellationToken.IsCancellationRequested)
+            {
+                success = false;
+                runOutcome = InstagramBatchOutcome.STOPPED;
+                failureReason = "Остановлено пользователем до публикации результатов.";
+                model.InterruptActive();
+            }
+
+            // All completed searches are already saved as drafts. Publish their results
+            // and the summary in ONE transaction only after a successful full run.
+            if (total > 0 && !string.IsNullOrWhiteSpace(targetUserName))
+            {
+                var runStore = new InstagramBatchRunStore(_reader!.DatabasePath);
+                var snapshot = new InstagramBatchResultSummary(
+                    DateTimeOffset.UtcNow, runOutcome, completed, total, found, notFound,
+                    inconclusive, privileged, missingActivity,
+                    success ? string.Empty : failureReason.Trim(),
+                    notFoundFollowers, notFoundFollowing, directions);
+                if (success)
+                {
+                    try
+                    {
+                        if (individual is null)
+                        {
+                            runStore.PublishCompleted(runId, targetUserName, snapshot);
+                            LatestSubscriptionBatch = snapshot;
+                        }
+                        else
+                        {
+                            runStore.PublishIndividual(runId, targetUserName,
+                                directions == InstagramCheckDirections.FOLLOWERS
+                                    ? individual.ActivityUserName
+                                    : individual.SubscriptionUserName,
+                                directions);
+                        }
+
+                        SubscriptionsCheckMessage = string.Empty;
+                    }
+                    catch (Exception exception)
+                    {
+                        success = false;
+                        runOutcome = InstagramBatchOutcome.FAILED;
+                        failureReason = $"Не удалось опубликовать результаты проверки: {exception.Message}";
+                        SubscriptionsCheckMessage = failureReason +
+                                                    " Предыдущая успешная проверка сохранена.";
+                        snapshot = snapshot with { Outcome = InstagramBatchOutcome.FAILED, Details = failureReason };
+                        model.InterruptActive();
+                    }
+                }
+
+                if (!success)
+                {
+                    // Discard temporary draft records; keep only published successful results.
+                    snapshot = snapshot with
+                    {
+                        Outcome = runOutcome,
+                        Details = string.IsNullOrWhiteSpace(failureReason)
+                            ? "Проверка прервана. Результаты последней успешной проверки сохранены."
+                            : failureReason
+                    };
+                    try { runStore.RecordInterrupted(runId, targetUserName, snapshot); }
+                    catch (Exception exception)
+                    {
+                        SubscriptionsCheckMessage += $" Не удалось очистить временные результаты: {exception.Message}";
+                    }
+
+                    if (string.IsNullOrWhiteSpace(SubscriptionsCheckMessage))
+                        SubscriptionsCheckMessage = individual is null
+                            ? "Проверка прервана. Показаны результаты предыдущей успешной проверки."
+                            : "Выборочная проверка прервана. Прежний статус участницы сохранён.";
+                }
+
+                model.SetResultSummary(snapshot);
+            }
+
+            // Refresh only after publishing. On interruption the existing view and its
+            // last completed result remain unchanged.
+            if (success && _page == WorkspacePage.Chat && _chatPage == ChatPage.Subscriptions)
             {
                 try { await LoadSubscriptionRowsAsync(); }
                 catch (Exception exception)
                 {
-                    SubscriptionsCheckMessage += $" Не удалось обновить таблицу: {exception.Message}";
+                    SubscriptionsCheckMessage =
+                        $"Проверка сохранена, но не удалось обновить таблицу: {exception.Message}";
                 }
             }
+
+            _instagramBatchCancellation = null;
+            Notify(nameof(CanCancelInstagramBatch));
+            SetInstagramBusy(false);
+            model.Finish(SubscriptionsCheckMessage, success);
         }
     }
 
     private async void CheckInstagramParticipantButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (_settings is null || _instagramBusy) return;
+        if (_settings is null || _instagramBusy || _reader is null) return;
         SetInstagramBusy(true);
+        var runId = Guid.NewGuid().ToString("N");
+        var target = string.Empty;
+        var stageStarted = false;
+        var runStore = new InstagramBatchRunStore(_reader.DatabasePath);
         try
         {
-            // Refresh before checking, so removed participants are not checked as current.
             await LoadInstagramParticipantsAsync();
             var participant = SelectedInstagramParticipant;
             if (participant is null)
             {
-                InstagramStatus = "Нет участниц с Instagram-ссылкой активности в актуальных списках.";
+                InstagramStatus = "В актуальном списке нет участниц для проверки.";
                 return;
             }
+
             var saved = await _settings.LoadAsync();
-            if (string.IsNullOrWhiteSpace(saved.InstagramTargetUserName))
+            target = saved.InstagramTargetUserName ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(target) ||
+                string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName))
             {
-                InstagramStatus = "Сначала сохраните основной Instagram-профиль.";
+                InstagramStatus = "Сначала сохраните основной и проверочный Instagram-аккаунты.";
                 return;
             }
+
+            new InstagramCheckProfileSemanticsMigration(_reader.DatabasePath).EnsureApplied();
+            runStore.DiscardAbandonedDrafts(target);
+            var subscriptionUserName = InstagramActivityProfile.TryGetUserName(
+                participant.SubscriptionProfileUrl);
+            if (string.IsNullOrWhiteSpace(subscriptionUserName))
+                throw new InvalidOperationException("Не указана корректная страница для подписки.");
             var privileged = InstagramParticipants.Any(item =>
                 string.Equals(item.UserName, participant.UserName, StringComparison.OrdinalIgnoreCase) &&
                 InstagramBatchEligibility.IsExcluded(item.Category));
-            if (privileged)
+            var directions = privileged ? InstagramCheckDirections.FOLLOWING : InstagramCheckDirections.BOTH;
+            string[] followers = privileged ? [] : [participant.UserName];
+            var following = new[] { subscriptionUserName };
+            InstagramStatus = $"Проверяем подписку на @{subscriptionUserName} и " +
+                              (privileged
+                                  ? "пропускаем обратное направление."
+                                  : $"подписку @{participant.UserName} на меня.") +
+                              " Не закрывайте Chrome.";
+            stageStarted = true;
+            var run = await _instagramBrowser.CheckParticipantsAsync(target, followers, following,
+                progress => runStore.Stage(runId, target, saved.InstagramBrowserUserName, progress));
+            if (run.StopReason is not null || run.Completed != run.Total)
+                throw new InvalidOperationException(run.StopReason ?? "Не все поиски завершены.");
+            // Both directions become visible together, not one at a time.
+            runStore.PublishIndividualDirections(runId, target, participant.UserName,
+                subscriptionUserName, directions);
+            var latest = new InstagramSubscriptionCheckStore(_reader.DatabasePath)
+                .Read(target, new[] { participant.UserName, subscriptionUserName });
+            var followersResult = latest.FirstOrDefault(item => item.Kind == "followers" &&
+                                                                string.Equals(item.UserName, participant.UserName,
+                                                                    StringComparison.OrdinalIgnoreCase));
+            var followingResult = latest.FirstOrDefault(item => item.Kind == "following" &&
+                                                                string.Equals(item.UserName, subscriptionUserName,
+                                                                    StringComparison.OrdinalIgnoreCase));
+
+            static string DescribeSaved(InstagramSavedCheck? savedCheck) => savedCheck?.Status switch
             {
-                InstagramSearchResult? following = null;
-                var store = _reader is not null && !string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName)
-                    ? new InstagramSubscriptionCheckStore(_reader.DatabasePath) : null;
-                InstagramStatus = $"Проверяем только мою подписку на @{participant.UserName}. Не закрывайте Chrome.";
-                var run = await _instagramBrowser.CheckParticipantsAsync(saved.InstagramTargetUserName,
-                    [], [participant.UserName], progress =>
-                    {
-                        store?.Save(saved.InstagramTargetUserName, saved.InstagramBrowserUserName!, progress);
-                        following = progress.Result;
-                    });
-                InstagramStatus = $"Проверка @{participant.UserName} (VIP/администрация)\n" +
-                                  "Участница → я: — (не проверяется)\n" +
-                                  $"Я → участница: {following?.Describe() ?? run.StopReason ?? "Не удалось проверить"}";
-                if (_page == WorkspacePage.Chat && _chatPage == ChatPage.Subscriptions)
-                    await LoadSubscriptionRowsAsync();
-                return;
-            }
-            InstagramStatus = $"Ищем @{participant.UserName} в подписчиках и подписках " +
-                              $"@{saved.InstagramTargetUserName}. Не закрывайте Chrome.";
-            var result = await _instagramBrowser.CheckParticipantAsync(
-                saved.InstagramTargetUserName, participant.ActivityProfileUrl);
-            if (_reader is not null && !string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName))
-            {
-                var store = new InstagramSubscriptionCheckStore(_reader.DatabasePath);
-                store.Save(saved.InstagramTargetUserName, saved.InstagramBrowserUserName,
-                    new InstagramBatchProgress(result.UserName, "followers", result.FollowsMe, 1, 2));
-                store.Save(saved.InstagramTargetUserName, saved.InstagramBrowserUserName,
-                    new InstagramBatchProgress(result.UserName, "following", result.IFollow, 2, 2));
-            }
-            InstagramStatus = $"Проверка @{result.UserName} (аккаунт активности)\n" +
-                              $"Участница → я: {result.FollowsMe.Describe()}\n" +
-                              $"Я → участница: {result.IFollow.Describe()}";
+                "FOUND" => "Найдена",
+                "NOT_FOUND" => "Не найдена в поиске",
+                "INCONCLUSIVE" => "Не удалось проверить",
+                _ => "Не проверено"
+            };
+
+            InstagramStatus = $"Проверка @{participant.UserName}\n" +
+                              $"Участница → я (@{participant.UserName}): " +
+                              (privileged ? "—" : DescribeSaved(followersResult)) + "\n" +
+                              $"Я → участница (@{subscriptionUserName}): " +
+                              DescribeSaved(followingResult);
+            if (_page == WorkspacePage.Chat && _chatPage == ChatPage.Subscriptions)
+                await LoadSubscriptionRowsAsync();
         }
         catch (Exception exception)
         {
-            InstagramStatus = $"Проверка участницы не удалась: {exception.Message}";
+            if (stageStarted)
+            {
+                try
+                {
+                    runStore.RecordInterrupted(runId, target, new InstagramBatchResultSummary(
+                        DateTimeOffset.UtcNow, InstagramBatchOutcome.FAILED, 0, 0, 0, 0, 0, 0, 0));
+                }
+                catch (Exception cleanupError)
+                {
+                    InstagramStatus = $"Не удалось очистить временные результаты: {cleanupError.Message}";
+                }
+            }
+
+            InstagramStatus = $"Проверка не завершена: {exception.Message}. " +
+                              "Результаты последней успешной проверки сохранены.";
         }
-        finally { SetInstagramBusy(false); }
+        finally
+        {
+            try { await _instagramBrowser.CloseBrowserAsync(); }
+            catch (Exception exception)
+            {
+                InstagramStatus += $" Не удалось закрыть Chrome: {exception.Message}";
+            }
+
+            SetInstagramBusy(false);
+        }
     }
 
     private async void SaveInstagramButton_OnClick(object sender, RoutedEventArgs args)
@@ -476,7 +869,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         {
             var target = InstagramUserName.Normalize(InstagramTargetBox.Text);
             var giving = string.IsNullOrWhiteSpace(InstagramGiveFromBox.Text)
-                ? null : InstagramUserName.Normalize(InstagramGiveFromBox.Text);
+                ? null
+                : InstagramUserName.Normalize(InstagramGiveFromBox.Text);
             if (string.Equals(target, giving, StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Резервный аккаунт должен отличаться от основного.");
             var browser = InstagramUserName.Normalize(InstagramBrowserBox.Text);
@@ -487,12 +881,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 InstagramStatus = "Для смены проверочного аккаунта сначала сбросьте текущую сессию.";
                 return;
             }
+
             await _settings.SaveInstagramAccountsAsync(target, browser);
             if (_reader is not null)
             {
                 await new InstagramOwnAccountStore(_reader.DatabasePath).SaveAsync(target, giving);
                 await LoadInstagramParticipantsAsync();
             }
+
             _instagramSessionCleared = false;
             InstagramStatus = "Собственные Instagram-профили сохранены в SQLite. " +
                               "Аккаунт Selenium настраивается отдельно.";
@@ -516,6 +912,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 InstagramStatus = "Сначала сохраните основной и проверочный аккаунты.";
                 return;
             }
+
             await _instagramBrowser.OpenLoginAsync();
             InstagramStatus = "Chrome открыт. Войдите вручную и нажмите «Проверить сессию».";
         }
@@ -556,13 +953,15 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 InstagramStatus = "Сначала сохраните основной Instagram-профиль.";
                 return;
             }
+
             InstagramStatus = "Прокручивайте список подписчиков вручную в Chrome до конца. " +
                               "Затем не прокручивайте 8 секунд. Selenium только считывает имена (не более 3 минут).";
             var followers = await _instagramBrowser.CollectFollowersAsync(settings.InstagramTargetUserName);
             InstagramStatus = $"Считано уникальных имён подписчиков: {followers.UserNames.Count}.\n" +
                               followers.Describe("Подписчики") +
                               (string.IsNullOrWhiteSpace(followers.Diagnostics)
-                                  ? string.Empty : $"\n{followers.Diagnostics}") +
+                                  ? string.Empty
+                                  : $"\n{followers.Diagnostics}") +
                               "\nЭто диагностический результат: проверка подписок пока не выполняется.";
         }
         catch (Exception exception)
@@ -640,9 +1039,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     Chats.Add(new WorkspaceChatRow(chat));
                 SelectedChat = _page == WorkspacePage.Chat
                     ? Chats.FirstOrDefault(row => previous is not null &&
-                        row.Chat.TelegramUserId == previous.TelegramUserId &&
-                        row.Chat.PeerId == previous.PeerId &&
-                        row.Chat.PeerType == previous.PeerType) ?? Chats.FirstOrDefault()
+                                                  row.Chat.TelegramUserId == previous.TelegramUserId &&
+                                                  row.Chat.PeerId == previous.PeerId &&
+                                                  row.Chat.PeerType == previous.PeerType) ?? Chats.FirstOrDefault()
                     : null;
             }
             finally
@@ -694,12 +1093,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                      }).OrderByDescending(task => task.MessageId))
                 Tasks.Add(new WorkspaceTaskCard(task));
         }
+
         TaskSummary = SelectedChat is null
             ? "Подключённых чатов пока нет."
             : _taskFilter switch
             {
                 TaskFilter.Skipped => $"Пропущенных: {Tasks.Count}. Реакции в Telegram не изменяются.",
-                TaskFilter.Completed => $"Выполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram.",
+                TaskFilter.Completed =>
+                    $"Выполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram.",
                 _ => $"Невыполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram."
             };
         Notify(nameof(HasTasks));
@@ -722,6 +1123,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _isRebuildingChatList = true;
         try { ChatList.SelectedItem = row; }
         finally { _isRebuildingChatList = false; }
+
         UpdateSelectedTasks();
         ShowChat();
     }
@@ -732,6 +1134,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _chatPage = ChatPage.Tasks;
         _subscriptionsLoaded = false;
         SubscriptionRows.Clear();
+        LatestSubscriptionBatch = null;
         SubscriptionsSyncMessage = string.Empty;
         Notify(nameof(SubscriptionCountLabel));
         _taskFilter = TaskFilter.Pending;
@@ -781,28 +1184,71 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
-    private async void RefreshSubscriptionsButton_OnClick(object sender, RoutedEventArgs args)
+    private void RefreshSubscriptionsButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (IsBusy || _synchronization is null || SelectedChat is null) return;
         var selected = SelectedChat;
         IsBusy = true;
-        SubscriptionsSyncMessage = "Ищем самый свежий список участниц в Telegram…";
-        try
+        using var cancellation = new CancellationTokenSource();
+        var dialog = new ParticipantListSyncProgressDialog(cancellation);
+        var owner = Window.GetWindow(this);
+        if (owner is { IsVisible: true }) dialog.Owner = owner;
+
+        dialog.StartRequested += async (_, _) =>
         {
-            var result = await _synchronization.RefreshLatestParticipantListAsync(selected.Chat);
-            if (!ReferenceEquals(selected, SelectedChat)) return;
-            await LoadSubscriptionRowsAsync();
-            SubscriptionsSyncMessage = result.SourceMessageId is null
-                ? "Сообщение со списком участниц не найдено. Прежний список сохранён."
-                : result.Applied
-                    ? "Список участниц обновлён по последнему сообщению Telegram."
-                    : "Список найден, но не применён: он уже учтён или требует проверки совпадений.";
-        }
-        catch (Exception exception)
+            var updated = false;
+            try
+            {
+                var result = await _synchronization.RefreshLatestParticipantListAsync(selected.Chat,
+                    update =>
+                    {
+                        if (dialog.Dispatcher.CheckAccess()) dialog.Model.Report(update);
+                        else dialog.Dispatcher.Invoke(() => dialog.Model.Report(update));
+                    }, cancellation.Token);
+                updated = result.Applied;
+                if (result.SourceMessageId is null)
+                    dialog.Model.Skip(ParticipantListSyncStage.SAVE);
+                dialog.Model.Activate(ParticipantListSyncStage.DISPLAY,
+                    "Обновляем таблицу участниц…");
+                if (ReferenceEquals(selected, SelectedChat))
+                    await LoadSubscriptionRowsAsync();
+
+                SubscriptionsSyncMessage = result.SourceMessageId is null
+                    ? "Список участниц в истории не найден. Предыдущий список сохранён."
+                    : result.Applied
+                        ? "Список участниц обновлён по последнему сообщению Telegram."
+                        : "Список найден, но он уже учтён или устарел.";
+                dialog.Model.Finish(result.SourceMessageId is null
+                        ? "Список не найден"
+                        : updated
+                            ? "Список обновлён"
+                            : "Список не изменён",
+                    SubscriptionsSyncMessage, ParticipantListSyncOutcome.COMPLETED);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                SubscriptionsSyncMessage = "Синхронизация остановлена.";
+                dialog.Model.Finish("Синхронизация остановлена",
+                    "Поиск остановлен. Ранее сохранённый список участниц не заменён.",
+                    ParticipantListSyncOutcome.STOPPED);
+            }
+            catch (Exception exception)
+            {
+                SubscriptionsSyncMessage = $"Не удалось обновить список участниц: {exception.Message}";
+                dialog.Model.Finish("Ошибка синхронизации", exception.Message,
+                    ParticipantListSyncOutcome.FAILED);
+            }
+            finally { IsBusy = false; }
+        };
+
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        try { dialog.ShowDialog(); }
+        finally
         {
-            SubscriptionsSyncMessage = $"Не удалось обновить список участниц: {exception.Message}";
+            mainWindow?.HideDialogOverlay();
+            IsBusy = false;
         }
-        finally { IsBusy = false; }
     }
 
     private void MyActivityTabButton_OnClick(object sender, RoutedEventArgs args)
@@ -843,7 +1289,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             await _synchronization.CompleteTaskAsync(row.Chat, messageId);
             if (_taskCache.TryGetValue(row, out var tasks))
                 _taskCache[row] = tasks.Select(task => task.MessageId == messageId
-                    ? task with { IsCompleted = true } : task).ToArray();
+                    ? task with { IsCompleted = true }
+                    : task).ToArray();
             UpdateSelectedTasks();
         }
         catch (Exception exception)
@@ -925,12 +1372,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             if (_taskCache.TryGetValue(row, out var items))
             {
                 _taskCache[row] = items.Select(task => task.MessageId == messageId
-                    ? task with { IsSkipped = skipped } : task).ToArray();
+                    ? task with { IsSkipped = skipped }
+                    : task).ToArray();
                 row.DetectedCount = _taskCache[row].Count(task => !task.IsSkipped);
                 _totalDetected = _taskCache.Sum(pair => pair.Value.Count(task => !task.IsSkipped));
                 Notify(nameof(TotalDetected));
                 Notify(nameof(SelectedChatTaskCount));
             }
+
             UpdateSelectedTasks();
         }
         catch (Exception exception)
@@ -968,6 +1417,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     errors.Add($"{chat.TelegramTitle}: {exception.Message}");
                 }
             }
+
             await ReloadAsync();
             ReactionRefreshMessage = errors.Count == 0
                 ? $"Синхронизация завершена. Новых сообщений: {updated}."
@@ -1053,6 +1503,7 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
     public string Title => Chat.DisplayName.Length > 0 ? Chat.DisplayName : Chat.TelegramTitle;
     public string Network => Chat.SocialNetwork;
     public string NetworkSymbol => string.Equals(Network, "Instagram", StringComparison.OrdinalIgnoreCase) ? "◎" : "➤";
+
     public int DetectedCount
     {
         get => _detectedCount;
@@ -1064,6 +1515,7 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetectedLabel)));
         }
     }
+
     public string DetectedLabel => $"Найдено заданий: {DetectedCount}";
 }
 
@@ -1071,6 +1523,7 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
 {
     private static readonly CultureInfo RUSSIAN_CULTURE = CultureInfo.GetCultureInfo("ru-RU");
     private DateTime? LocalDate => task.SentAtUtc?.ToLocalTime().DateTime;
+
     public string DateGroupLabel
     {
         get
@@ -1082,14 +1535,19 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
             return date.ToString("d MMMM yyyy", RUSSIAN_CULTURE);
         }
     }
+
     public string TimeLabel => LocalDate?.ToString("HH:mm", RUSSIAN_CULTURE) ?? string.Empty;
     public long MessageId => task.MessageId;
     public bool IsSkipped => task.IsSkipped;
     public bool CanSkip => !task.IsSkipped && !task.IsCompleted;
     public bool CanHideCompleted => task.IsCompleted && !task.IsSkipped;
+
     public bool CanComplete => !task.IsSkipped && !task.IsCompleted;
+
     // Presentation-only transformation: the original Telegram text and emoji offsets remain in SQLite.
-    private readonly WorkspaceTaskPresentation _presentation = WorkspaceTaskPresentation.Create(task.Text, task.CustomEmojiJson);
+    private readonly WorkspaceTaskPresentation _presentation =
+        WorkspaceTaskPresentation.Create(task.Text, task.CustomEmojiJson);
+
     public string CustomEmojiJson => _presentation.CustomEmojiJson;
     public string ReelUrl => _presentation.ReelUrl;
     public string FeedPostUrl => _presentation.FeedPostUrl;
@@ -1102,7 +1560,8 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     public string SourceUrl => task.SourceUrl;
     public bool HasSourceUrl => !string.IsNullOrWhiteSpace(task.SourceUrl);
     public string Title => string.IsNullOrWhiteSpace(task.AuthorName) ? "Автор неизвестен" : task.AuthorName;
-    public string Description => string.IsNullOrWhiteSpace(_presentation.Text)
-        ? "Сообщение без текста (возможно, содержит медиа)" : _presentation.Text;
-}
 
+    public string Description => string.IsNullOrWhiteSpace(_presentation.Text)
+        ? "Сообщение без текста (возможно, содержит медиа)"
+        : _presentation.Text;
+}

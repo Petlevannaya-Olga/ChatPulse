@@ -651,7 +651,8 @@ public sealed class WTelegramAuthenticationClient(
     /// or applying the chat's initial-import date limit.
     /// </summary>
     public async Task<TelegramChatMessage?> FindLatestMatchingMessageAsync(
-        TelegramChatOption chat, Func<string?, bool> matches, CancellationToken cancellationToken)
+        TelegramChatOption chat, Func<string?, bool> matches, CancellationToken cancellationToken,
+        Action<int, int>? onPageScanned = null)
     {
         ArgumentNullException.ThrowIfNull(chat);
         ArgumentNullException.ThrowIfNull(matches);
@@ -673,6 +674,7 @@ public sealed class WTelegramAuthenticationClient(
             var offsetId = 0;
             const int MAX_PAGES = 500;
             const int PAGE_LIMIT = 100;
+            var examined = 0;
             for (var page = 0; page < MAX_PAGES; page++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -681,8 +683,14 @@ public sealed class WTelegramAuthenticationClient(
                 if (history.Messages.Length == 0) return null;
                 // Telegram returns this page in descending message ID order.
                 foreach (var item in history.Messages)
-                    if (item is TL.Message message && matches(message.message))
-                        return new TelegramChatMessage(message.ID, message.message);
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    examined++;
+                    if (item is not TL.Message message || !matches(message.message)) continue;
+                    onPageScanned?.Invoke(page + 1, examined);
+                    return new TelegramChatMessage(message.ID, message.message);
+                }
+                onPageScanned?.Invoke(page + 1, examined);
 
                 if (history.Messages.Length < PAGE_LIMIT) return null;
                 var nextOffset = history.Messages[^1].ID;

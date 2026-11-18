@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.IO;
 using System.Diagnostics;
 using ChatPulse.Desktop.Settings;
@@ -259,7 +259,8 @@ public sealed class InstagramBrowserService : IDisposable
     /// </summary>
     public async Task<InstagramBatchRunResult> CheckParticipantsAsync(string targetUserName,
         IReadOnlyList<string> followsMeUserNames, IReadOnlyList<string> iFollowUserNames,
-        Action<InstagramBatchProgress> onResult, CancellationToken cancellationToken = default)
+        Action<InstagramBatchProgress> onResult, CancellationToken cancellationToken = default,
+        Action<InstagramBatchBrowserStage>? onStage = null)
     {
         ArgumentNullException.ThrowIfNull(followsMeUserNames);
         ArgumentNullException.ThrowIfNull(iFollowUserNames);
@@ -277,8 +278,12 @@ public sealed class InstagramBrowserService : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             return await Task.Run(() =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                onStage?.Invoke(InstagramBatchBrowserStage.STARTING_CHROME);
                 var driver = GetDriver();
+                onStage?.Invoke(InstagramBatchBrowserStage.CHECKING_SESSION);
                 driver.Navigate().GoToUrl("https://www.instagram.com/");
+                cancellationToken.ThrowIfCancellationRequested();
                 if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
                     throw new InvalidOperationException("Сессия Instagram отсутствует. Выполните вход в Chrome.");
 
@@ -288,6 +293,9 @@ public sealed class InstagramBrowserService : IDisposable
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (members.Length == 0) continue;
+                    onStage?.Invoke(kind == "followers"
+                        ? InstagramBatchBrowserStage.CHECKING_FOLLOWERS
+                        : InstagramBatchBrowserStage.CHECKING_FOLLOWING);
                     if (!OpenParticipantListForBatch(driver, target, kind, cancellationToken,
                             out var openError))
                         return new InstagramBatchRunResult(done, total,
@@ -1305,6 +1313,22 @@ public sealed class InstagramBrowserService : IDisposable
         return _driver;
     }
 
+    /// <summary>
+    /// Closes only Chrome started and owned by this service. The persistent Chrome
+    /// profile (including the Instagram login) remains on disk for the next run.
+    /// Do not pass the cancelled batch token: cleanup must always be attempted.
+    /// </summary>
+    public async Task CloseBrowserAsync()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed) return;
+            await Task.Run(CloseDriver);
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task ClearSessionAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -1342,6 +1366,14 @@ public sealed class InstagramBrowserService : IDisposable
         }
         finally { _gate.Release(); }
     }
+}
+
+public enum InstagramBatchBrowserStage
+{
+    STARTING_CHROME,
+    CHECKING_SESSION,
+    CHECKING_FOLLOWERS,
+    CHECKING_FOLLOWING
 }
 
 public sealed record InstagramBatchProgress(string UserName, string Kind,

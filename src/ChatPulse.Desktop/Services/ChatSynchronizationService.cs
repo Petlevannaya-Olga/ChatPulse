@@ -8,6 +8,19 @@ namespace ChatPulse.Desktop.Services;
 
 public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Applied);
 
+public enum ParticipantListSyncStage
+{
+    SETTINGS,
+    TELEGRAM,
+    SEARCH,
+    SAVE,
+    DISPLAY
+}
+
+public sealed record ParticipantListSyncProgress(
+    ParticipantListSyncStage Stage, string Description,
+    int PagesScanned = 0, int MessagesScanned = 0);
+
 /// <summary>
 /// Primary message history import with separate safe own-reaction reconciliation.
 /// Only completed imports advance the chat cursor; repeated imports use SQLite uniqueness.
@@ -204,15 +217,19 @@ public sealed class ChatSynchronizationService(
     /// The task import cursor, message history and Instagram checks are not modified.
     /// </summary>
     public async Task<ParticipantListRefreshResult> RefreshLatestParticipantListAsync(
-        ConfiguredChat configured, CancellationToken cancellationToken = default)
+        ConfiguredChat configured, Action<ParticipantListSyncProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configured);
+        progress?.Invoke(new(ParticipantListSyncStage.SETTINGS, "Проверяем настройки выбранного чата…"));
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var current = FindConfigured(await settings.LoadAsync(cancellationToken), configured);
             if (current.SynchronizationState != ChatSynchronizationState.COMPLETED)
                 throw new InvalidOperationException("Сначала завершите первоначальную синхронизацию чата.");
+            progress?.Invoke(new(ParticipantListSyncStage.TELEGRAM,
+                "Проверяем Telegram-аккаунт и доступ к чату…"));
             var owner = await telegram.GetAuthorizedUserIdAsync(cancellationToken);
             if (owner != current.TelegramUserId)
                 throw new InvalidOperationException("Telegram-аккаунт изменился.");
@@ -225,11 +242,20 @@ public sealed class ChatSynchronizationService(
             if (telegram is not ITelegramLatestMatchingMessageReader reader)
                 throw new InvalidOperationException("Поиск последнего списка не поддерживается Telegram-клиентом.");
 
+            progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
+                "Ищем самый свежий корректный список участниц…"));
             var latest = await reader.FindLatestMatchingMessageAsync(chat,
-                text => ParticipantListParser.TryParse(text, out _), cancellationToken);
+                text => ParticipantListParser.TryParse(text, out _), cancellationToken,
+                (pages, messages) => progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
+                    $"Просмотрено страниц: {pages} · сообщений: {messages}", pages, messages)));
+            cancellationToken.ThrowIfCancellationRequested();
             if (latest is null) return new ParticipantListRefreshResult(null, false);
 
-            var applied = await SaveParticipantsAsync(current, [latest], cancellationToken);
+            // Stop requests are accepted during search. Once saving starts we finish the
+            // registry's atomic update so a cancelled UI cannot leave partial changes.
+            progress?.Invoke(new(ParticipantListSyncStage.SAVE,
+                $"Обновляем реестр по сообщению №{latest.MessageId}…"));
+            var applied = await SaveParticipantsAsync(current, [latest], CancellationToken.None);
             return new ParticipantListRefreshResult(latest.MessageId, applied > 0);
         }
         finally { _gate.Release(); }

@@ -29,7 +29,7 @@ public sealed class InstagramSubscriptionPresentationTests
     }
 
     [Fact]
-    public void ChecksAreAppliedOnlyToActivityAccountAndInTheCorrectDirections()
+    public void FollowingUsesSubscriptionProfileAndFollowersUsesActivityProfile()
     {
         var participant = new InstagramParticipantOption(1, "Мария", "https://www.instagram.com/maria.active/",
             "maria.active", "Обычный", "https://www.instagram.com/maria.blog/", "Мария");
@@ -47,9 +47,27 @@ public sealed class InstagramSubscriptionPresentationTests
         Assert.Equal("Для подписки: @maria.blog", row.MainProfileLabel);
         Assert.Equal("Даёт актив с другой страницы: @maria.active", row.ActivityProfileLabel);
         Assert.Equal("Да", row.FollowsMeLabel);
-        Assert.Equal("Нет в поиске", row.IFollowLabel);
-        Assert.True(row.HasDiscrepancy);
+        Assert.Equal("Да", row.IFollowLabel);
+        Assert.False(row.HasDiscrepancy);
+        Assert.Equal("https://www.instagram.com/maria.blog/", row.ProfileActionUrl);
         Assert.Equal("https://www.instagram.com/maria.active/", row.ActivityProfileUrl);
+    }
+
+    [Fact]
+    public void MissingFollowingCheckForSubscriptionAccountIsUnverifiedEvenIfActivityWasChecked()
+    {
+        var participant = new InstagramParticipantOption(1, "Мария", "https://instagram.com/maria.active/",
+            "maria.active", "Обычный", "https://instagram.com/maria.blog/", "Мария");
+        var checks = new[]
+        {
+            new InstagramSavedCheck("maria.active", "following", "FOUND", "2026-11-18T10:00:00Z"),
+            new InstagramSavedCheck("maria.active", "followers", "FOUND", "2026-11-18T10:00:00Z")
+        };
+        var row = Assert.Single(InstagramSubscriptionPresentation.Build([participant], checks,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+        Assert.Equal("Да", row.FollowsMeLabel);
+        Assert.Equal("Не проверено", row.IFollowLabel);
+        Assert.True(row.IsUnverified);
     }
 
     [Fact]

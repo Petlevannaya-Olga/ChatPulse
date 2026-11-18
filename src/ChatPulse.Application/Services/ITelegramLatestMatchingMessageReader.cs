@@ -1,4 +1,4 @@
-using ChatPulse.Contracts.Telegram;
+﻿using ChatPulse.Contracts.Telegram;
 
 namespace ChatPulse.Application.Services;
 
@@ -10,5 +10,5 @@ public interface ITelegramLatestMatchingMessageReader
 {
     Task<TelegramChatMessage?> FindLatestMatchingMessageAsync(
         TelegramChatOption chat, Func<string?, bool> matches,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken, Action<int, int>? onPageScanned = null);
 }
