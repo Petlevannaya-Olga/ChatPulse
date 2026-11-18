@@ -29,6 +29,12 @@ public sealed class AppSettings
 {
     public string? UserName { get; set; }
 
+    /// <summary>Профиль, чьи подписчики и подписки будут проверяться.</summary>
+    public string? InstagramTargetUserName { get; set; }
+
+    /// <summary>Учётная запись браузера Selenium, без пароля и cookies.</summary>
+    public string? InstagramBrowserUserName { get; set; }
+
     public OnboardingStep CurrentOnboardingStep { get; set; } = OnboardingStep.Welcome;
 
     public TelegramOnboardingPage CurrentTelegramPage { get; set; } = TelegramOnboardingPage.ApiCredentials;

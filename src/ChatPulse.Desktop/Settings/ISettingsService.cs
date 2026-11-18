@@ -4,6 +4,9 @@ public interface ISettingsService
 {
     Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default);
 
+    Task SaveInstagramAccountsAsync(string target, string browser,
+        CancellationToken cancellationToken = default);
+
     Task SaveOnboardingStepAsync(
         OnboardingStep step, CancellationToken cancellationToken = default);
 

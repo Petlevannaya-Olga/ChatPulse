@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Windows.Data;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -18,6 +19,13 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private enum ChatPage { Tasks, Subscriptions, Members }
 
     private ISettingsService? _settings;
+    private readonly InstagramBrowserService _instagramBrowser = new();
+    private bool _instagramSettingsLoaded;
+    private bool _instagramSessionCleared;
+    private bool _instagramBusy;
+    private CancellationTokenSource? _instagramBatchCancellation;
+    private InstagramParticipantOption? _selectedInstagramParticipant;
+    private string _instagramStatus = "Аккаунт не подключён";
     private WorkspaceTaskReader? _reader;
     private ChatSynchronizationService? _synchronization;
     private WorkspaceTaskSkipStore? _skipStore;
@@ -44,6 +52,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         CollectionViewSource.GetDefaultView(Tasks).GroupDescriptions.Add(
             new PropertyGroupDescription(nameof(WorkspaceTaskCard.DateGroupLabel)));
         UpdateNavigationVisuals();
+        System.Windows.Application.Current.Exit += (_, _) =>
+        {
+            _instagramBatchCancellation?.Cancel();
+            _instagramBrowser.Dispose();
+        };
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -86,6 +99,343 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         TaskFilter.Skipped => "В этом чате пока нет пропущенных сообщений.",
         _ => "Нет невыполненных заданий в загруженной истории."
     };
+    public string InstagramStatus
+    {
+        get => _instagramStatus;
+        private set { _instagramStatus = value; Notify(); }
+    }
+
+    public ObservableCollection<InstagramParticipantOption> InstagramParticipants { get; } = [];
+    public ObservableCollection<InstagramCheckDisplayRow> InstagramCheckResults { get; } = [];
+    public bool CanCancelInstagramBatch => _instagramBatchCancellation is not null;
+
+    public InstagramParticipantOption? SelectedInstagramParticipant
+    {
+        get => _selectedInstagramParticipant;
+        set { _selectedInstagramParticipant = value; Notify(); }
+    }
+
+    public bool CanUseInstagram => !_instagramBusy;
+
+    private void SetInstagramBusy(bool busy)
+    {
+        _instagramBusy = busy;
+        Notify(nameof(CanUseInstagram));
+    }
+
+    private async Task LoadInstagramSettingsAsync()
+    {
+        if (_settings is null) return;
+        var saved = await _settings.LoadAsync();
+        InstagramTargetBox.Text = saved.InstagramTargetUserName ?? string.Empty;
+        InstagramBrowserBox.Text = saved.InstagramBrowserUserName ?? string.Empty;
+        _instagramSettingsLoaded = true;
+        InstagramStatus = string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName)
+            ? "Укажите аккаунты и сохраните настройки."
+            : "Настройки сохранены. Состояние сессии ещё не проверено.";
+    }
+
+    private async Task LoadInstagramParticipantsAsync()
+    {
+        if (_settings is null || _reader is null) return;
+        var state = await _settings.LoadAsync();
+        var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
+        var allCurrent = await lookup.ReadAllCurrentAsync(state.Chats);
+        var previouslySelected = SelectedInstagramParticipant?.ParticipantId;
+        InstagramParticipants.Clear();
+        foreach (var participant in allCurrent.Where(item => !string.IsNullOrWhiteSpace(item.UserName)))
+            InstagramParticipants.Add(participant);
+        SelectedInstagramParticipant = InstagramParticipants.FirstOrDefault(item =>
+            item.ParticipantId == previouslySelected) ?? InstagramParticipants.FirstOrDefault();
+
+        var plan = InstagramBatchEligibility.Prepare(allCurrent);
+        InstagramCheckResults.Clear();
+        foreach (var name in plan.UserNames)
+            InstagramCheckResults.Add(new InstagramCheckDisplayRow(name, "—", "—", ""));
+        if (string.IsNullOrWhiteSpace(state.InstagramTargetUserName)) return;
+        var store = new InstagramSubscriptionCheckStore(_reader.DatabasePath);
+        foreach (var saved in store.Read(state.InstagramTargetUserName, plan.UserNames))
+        {
+            var index = FindInstagramCheckRow(saved.UserName);
+            if (index < 0) continue;
+            var row = InstagramCheckResults[index];
+            InstagramCheckResults[index] = saved.Kind == "followers"
+                ? row with { FollowsMe = DescribeInstagramStatus(saved.Status), LastCheck = DisplayInstagramCheckTime(saved.CheckedAtUtc) }
+                : row with { IFollow = DescribeInstagramStatus(saved.Status), LastCheck = DisplayInstagramCheckTime(saved.CheckedAtUtc) };
+        }
+    }
+
+    private int FindInstagramCheckRow(string userName)
+    {
+        for (var index = 0; index < InstagramCheckResults.Count; index++)
+            if (string.Equals(InstagramCheckResults[index].UserName, userName,
+                    StringComparison.OrdinalIgnoreCase)) return index;
+        return -1;
+    }
+
+    private static string DisplayInstagramCheckTime(string isoTimestamp)
+        => DateTimeOffset.TryParse(isoTimestamp, out var date)
+            ? date.ToLocalTime().ToString("dd.MM HH:mm") : isoTimestamp;
+
+    private static string DescribeInstagramStatus(string status) => status switch
+    {
+        "FOUND" => "Найдена",
+        "NOT_FOUND" => "Не найдена в поиске",
+        "INCONCLUSIVE" => "Не удалось проверить",
+        _ => "—"
+    };
+
+    private void CancelInstagramBatchButton_OnClick(object sender, RoutedEventArgs args)
+        => _instagramBatchCancellation?.Cancel();
+
+    private async void CheckAllInstagramParticipantsButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_settings is null || _reader is null || _instagramBusy) return;
+        SetInstagramBusy(true);
+        using var cancellation = new CancellationTokenSource();
+        _instagramBatchCancellation = cancellation;
+        Notify(nameof(CanCancelInstagramBatch));
+        var completed = 0;
+        var found = 0;
+        var notFound = 0;
+        var inconclusive = 0;
+        try
+        {
+            var settings = await _settings.LoadAsync();
+            if (string.IsNullOrWhiteSpace(settings.InstagramTargetUserName) ||
+                string.IsNullOrWhiteSpace(settings.InstagramBrowserUserName))
+            {
+                InstagramStatus = "Сначала сохраните основной и проверочный Instagram-аккаунты.";
+                return;
+            }
+            var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
+            var allCurrent = await lookup.ReadAllCurrentAsync(settings.Chats, cancellation.Token);
+            var plan = InstagramBatchEligibility.Prepare(allCurrent);
+            if (plan.UserNames.Count == 0)
+            {
+                InstagramStatus = "Нет актуальных участниц для проверки: VIP и администрация исключены; " +
+                                  "необходима корректная Instagram-ссылка аккаунта активности.";
+                return;
+            }
+
+            InstagramCheckResults.Clear();
+            foreach (var userName in plan.UserNames)
+                InstagramCheckResults.Add(new InstagramCheckDisplayRow(userName, "—", "—", ""));
+            var store = new InstagramSubscriptionCheckStore(_reader.DatabasePath);
+            var total = plan.UserNames.Count * 2;
+            InstagramStatus = $"Проверяем {plan.UserNames.Count} уникальных аккаунтов активности. " +
+                              $"Исключено VIP/администрация: {plan.ExcludedCount}; " +
+                              $"без подходящей ссылки: {plan.MissingActivityProfileCount}; " +
+                              $"дубликатов: {plan.DuplicateCount}. Не закрывайте Chrome.";
+            var result = await _instagramBrowser.CheckParticipantsAsync(
+                settings.InstagramTargetUserName, plan.UserNames, progress =>
+                {
+                    // This callback runs on the Selenium worker. Each completed direction
+                    // is committed before reporting progress to the UI thread.
+                    store.Save(settings.InstagramTargetUserName,
+                        settings.InstagramBrowserUserName, progress);
+                    completed = progress.Completed;
+                    switch (progress.Result.Status)
+                    {
+                        case InstagramSearchStatus.FOUND: found++; break;
+                        case InstagramSearchStatus.NOT_FOUND: notFound++; break;
+                        default: inconclusive++; break;
+                    }
+                    // Non-blocking UI dispatch prevents shutdown deadlocks while Chrome
+                    // is being closed. Persistence has already finished at this point.
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        var index = FindInstagramCheckRow(progress.UserName);
+                        if (index >= 0)
+                        {
+                            var row = InstagramCheckResults[index];
+                            var label = DescribeInstagramStatus(progress.Result.Status.ToString());
+                            InstagramCheckResults[index] = progress.Kind == "followers"
+                                ? row with { FollowsMe = label, LastCheck = DateTime.Now.ToString("dd.MM HH:mm") }
+                                : row with { IFollow = label, LastCheck = DateTime.Now.ToString("dd.MM HH:mm") };
+                        }
+                        var direction = progress.Kind == "followers" ? "Подписчики" : "Подписки";
+                        if (_instagramBatchCancellation is not null)
+                            InstagramStatus = $"Проверено {progress.Completed} из {total}: @{progress.UserName} ({direction}). " +
+                                              $"Найдено: {found}; нет в поиске: {notFound}; ошибок: {inconclusive}.";
+                    }));
+                }, cancellation.Token);
+            var ending = result.StopReason is null ? "Проверка завершена." :
+                $"Проверка остановлена: {result.StopReason}";
+            InstagramStatus = $"{ending} Выполнено {completed} из {total} поисков. " +
+                              $"Найдено: {found}; не найдено в поиске: {notFound}; " +
+                              $"не удалось проверить: {inconclusive}. " +
+                              $"Исключено VIP/администрация: {plan.ExcludedCount}; " +
+                              $"без ссылки активности: {plan.MissingActivityProfileCount}. " +
+                              "Отсутствие в поиске не является доказательством отписки.";
+        }
+        catch (OperationCanceledException)
+        {
+            InstagramStatus = $"Проверка остановлена пользователем. Сохранено {completed} поисков. " +
+                              "Остальные участницы не проверены.";
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Массовая проверка прервана после {completed} поисков: {exception.Message}. " +
+                              "Уже выполненные проверки сохранены.";
+        }
+        finally
+        {
+            _instagramBatchCancellation = null;
+            Notify(nameof(CanCancelInstagramBatch));
+            SetInstagramBusy(false);
+        }
+    }
+
+    private async void CheckInstagramParticipantButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_settings is null || _instagramBusy) return;
+        SetInstagramBusy(true);
+        try
+        {
+            // Refresh before checking, so removed participants are not checked as current.
+            await LoadInstagramParticipantsAsync();
+            var participant = SelectedInstagramParticipant;
+            if (participant is null)
+            {
+                InstagramStatus = "Нет участниц с Instagram-ссылкой активности в актуальных списках.";
+                return;
+            }
+            var saved = await _settings.LoadAsync();
+            if (string.IsNullOrWhiteSpace(saved.InstagramTargetUserName))
+            {
+                InstagramStatus = "Сначала сохраните основной Instagram-профиль.";
+                return;
+            }
+            InstagramStatus = $"Ищем @{participant.UserName} в подписчиках и подписках " +
+                              $"@{saved.InstagramTargetUserName}. Не закрывайте Chrome.";
+            var result = await _instagramBrowser.CheckParticipantAsync(
+                saved.InstagramTargetUserName, participant.ActivityProfileUrl);
+            InstagramStatus = $"Проверка @{result.UserName} (аккаунт активности)\n" +
+                              $"Участница → я: {result.FollowsMe.Describe()}\n" +
+                              $"Я → участница: {result.IFollow.Describe()}";
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Проверка участницы не удалась: {exception.Message}";
+        }
+        finally { SetInstagramBusy(false); }
+    }
+
+    private async void SaveInstagramButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_settings is null || _instagramBusy) return;
+        SetInstagramBusy(true);
+        try
+        {
+            var target = InstagramUserName.Normalize(InstagramTargetBox.Text);
+            var browser = InstagramUserName.Normalize(InstagramBrowserBox.Text);
+            var previous = await _settings.LoadAsync();
+            if (previous.InstagramBrowserUserName is { } old &&
+                !string.Equals(old, browser, StringComparison.OrdinalIgnoreCase) && !_instagramSessionCleared)
+            {
+                InstagramStatus = "Для смены проверочного аккаунта сначала сбросьте текущую сессию.";
+                return;
+            }
+            await _settings.SaveInstagramAccountsAsync(target, browser);
+            _instagramSessionCleared = false;
+            InstagramStatus = "Аккаунты сохранены. Теперь откройте Instagram для входа.";
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            InstagramStatus = exception.Message;
+        }
+        finally { SetInstagramBusy(false); }
+    }
+
+    private async void InstagramLoginButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_settings is null || _instagramBusy) return;
+        SetInstagramBusy(true);
+        try
+        {
+            var saved = await _settings.LoadAsync();
+            if (string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName))
+            {
+                InstagramStatus = "Сначала сохраните основной и проверочный аккаунты.";
+                return;
+            }
+            await _instagramBrowser.OpenLoginAsync();
+            InstagramStatus = "Chrome открыт. Войдите вручную и нажмите «Проверить сессию».";
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Не удалось запустить Chrome: {exception.Message}";
+        }
+        finally { SetInstagramBusy(false); }
+    }
+
+    private async void CheckInstagramButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_instagramBusy) return;
+        SetInstagramBusy(true);
+        try
+        {
+            var active = await _instagramBrowser.HasSessionAsync();
+            InstagramStatus = active
+                ? "Cookie сессии обнаружен. Принадлежность аккаунту и доступ к спискам пока не подтверждены."
+                : "Сессия не обнаружена. Откройте Instagram и авторизуйтесь вручную.";
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Проверка сессии не удалась: {exception.Message}";
+        }
+        finally { SetInstagramBusy(false); }
+    }
+
+    private async void CollectInstagramListsButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_settings is null || _instagramBusy) return;
+        SetInstagramBusy(true);
+        try
+        {
+            var settings = await _settings.LoadAsync();
+            if (string.IsNullOrWhiteSpace(settings.InstagramTargetUserName))
+            {
+                InstagramStatus = "Сначала сохраните основной Instagram-профиль.";
+                return;
+            }
+            InstagramStatus = "Прокручивайте список подписчиков вручную в Chrome до конца. " +
+                              "Затем не прокручивайте 8 секунд. Selenium только считывает имена (не более 3 минут).";
+            var followers = await _instagramBrowser.CollectFollowersAsync(settings.InstagramTargetUserName);
+            InstagramStatus = $"Считано уникальных имён подписчиков: {followers.UserNames.Count}.\n" +
+                              followers.Describe("Подписчики") +
+                              (string.IsNullOrWhiteSpace(followers.Diagnostics)
+                                  ? string.Empty : $"\n{followers.Diagnostics}") +
+                              "\nЭто диагностический результат: проверка подписок пока не выполняется.";
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Не удалось получить списки Instagram: {exception.Message}";
+        }
+        finally { SetInstagramBusy(false); }
+    }
+
+    private async void ResetInstagramButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_instagramBusy || _settings is null) return;
+        if (MessageBox.Show("Удалить локальную сессию Instagram? Для нового аккаунта потребуется повторный вход.",
+                "ChatPulse — Instagram", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+        SetInstagramBusy(true);
+        try
+        {
+            await _instagramBrowser.ClearSessionAsync();
+            _instagramSessionCleared = true;
+            InstagramStatus = "Сессия очищена. Можно изменить проверочный аккаунт и сохранить настройки.";
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Не удалось очистить сессию: {exception.Message}";
+        }
+        finally { SetInstagramBusy(false); }
+    }
+
     public bool IsHomeVisible => _page == WorkspacePage.Home;
     public bool IsChatVisible => _page == WorkspacePage.Chat;
     public bool IsSettingsVisible => _page == WorkspacePage.Settings;
@@ -235,11 +585,20 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         NotifyPageState();
     }
 
-    private void SettingsButton_OnClick(object sender, RoutedEventArgs args)
+    private async void SettingsButton_OnClick(object sender, RoutedEventArgs args)
     {
         _page = WorkspacePage.Settings;
         ChatList.SelectedItem = null;
         NotifyPageState();
+        try
+        {
+            if (!_instagramSettingsLoaded) await LoadInstagramSettingsAsync();
+            await LoadInstagramParticipantsAsync();
+        }
+        catch (Exception exception)
+        {
+            InstagramStatus = $"Не удалось загрузить настройки Instagram: {exception.Message}";
+        }
     }
 
     private void TasksTabButton_OnClick(object sender, RoutedEventArgs args)
@@ -554,3 +913,6 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     public string Description => string.IsNullOrWhiteSpace(_presentation.Text)
         ? "Сообщение без текста (возможно, содержит медиа)" : _presentation.Text;
 }
+
+public sealed record InstagramCheckDisplayRow(string UserName, string FollowsMe,
+    string IFollow, string LastCheck);

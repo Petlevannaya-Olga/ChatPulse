@@ -15,6 +15,7 @@
     <ProjectReference Include="..\ChatPulse.Infrastructure\ChatPulse.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Selenium.WebDriver" />
     <PackageReference Include="MaterialDesignThemes" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />

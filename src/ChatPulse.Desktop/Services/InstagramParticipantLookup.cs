@@ -1,0 +1,122 @@
+using System.IO;
+using ChatPulse.Desktop.Settings;
+using Microsoft.Data.Sqlite;
+
+namespace ChatPulse.Desktop.Services;
+
+/// <summary>Only the activity account identifies a participant for mutual-follow checks.</summary>
+public sealed record InstagramParticipantOption(long ParticipantId, string Label,
+    string ActivityProfileUrl, string UserName, string Category = "Обычный");
+
+public static class InstagramActivityProfile
+{
+    public static string? TryGetUserName(string? profileUrl)
+    {
+        if (string.IsNullOrWhiteSpace(profileUrl) ||
+            !Uri.TryCreate(profileUrl.Trim(), UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("https" or "http") ||
+            uri.Host is not ("instagram.com" or "www.instagram.com")) return null;
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 1 || segments[0] is "p" or "reel" or "stories" or "explore" or
+            "accounts" or "direct" or "tv") return null;
+        try { return InstagramUserName.Normalize(Uri.UnescapeDataString(segments[0])); }
+        catch (ArgumentException) { return null; }
+    }
+}
+
+/// <summary>VIPs and the administrative team are not subject to the bulk follow audit.</summary>
+public static class InstagramBatchEligibility
+{
+    public static bool IsExcluded(string? category)
+    {
+        if (string.IsNullOrWhiteSpace(category)) return false;
+        return category.Contains("VIP", StringComparison.OrdinalIgnoreCase) ||
+               category.Contains("ВИП", StringComparison.OrdinalIgnoreCase) ||
+               category.Contains("АДМИН", StringComparison.OrdinalIgnoreCase) ||
+               category.Contains("МОДЕРАТОР", StringComparison.OrdinalIgnoreCase) ||
+               category.Contains("ОСНОВАТЕЛ", StringComparison.OrdinalIgnoreCase) ||
+               category.Contains("ДИРЕКТОР", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static InstagramBatchSelection Prepare(IEnumerable<InstagramParticipantOption> current)
+    {
+        var participants = current.ToArray();
+        var excluded = participants.Count(item => IsExcluded(item.Category));
+        var missing = participants.Count(item => !IsExcluded(item.Category) &&
+            string.IsNullOrWhiteSpace(item.UserName));
+        // A participant who belongs to administration/VIP in any connected chat is
+        // excluded everywhere. One Instagram account is checked only once per run.
+        var blocked = participants.Where(item => IsExcluded(item.Category) &&
+            !string.IsNullOrWhiteSpace(item.UserName))
+            .Select(item => item.UserName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var eligible = participants.Where(item => !IsExcluded(item.Category) &&
+            !string.IsNullOrWhiteSpace(item.UserName) && !blocked.Contains(item.UserName))
+            .Select(item => item.UserName).ToArray();
+        var unique = eligible.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new InstagramBatchSelection(unique, excluded, missing, eligible.Length - unique.Length);
+    }
+}
+
+public sealed record InstagramBatchSelection(IReadOnlyList<string> UserNames,
+    int ExcludedCount, int MissingActivityProfileCount, int DuplicateCount);
+
+/// <summary>Reads the current chat-local registers, not historical participants.</summary>
+public sealed class InstagramParticipantLookup(string databasePath)
+{
+    public async Task<IReadOnlyList<InstagramParticipantOption>> ReadCurrentAsync(
+        IEnumerable<ConfiguredChat> chats, CancellationToken cancellationToken = default)
+        => (await ReadAllCurrentAsync(chats, cancellationToken))
+            .Where(item => !string.IsNullOrWhiteSpace(item.UserName)).ToArray();
+
+    public async Task<IReadOnlyList<InstagramParticipantOption>> ReadAllCurrentAsync(
+        IEnumerable<ConfiguredChat> chats, CancellationToken cancellationToken = default)
+    {
+        var instagramChats = chats.Where(chat =>
+            string.Equals(chat.SocialNetwork, "Instagram", StringComparison.OrdinalIgnoreCase) &&
+            chat.SynchronizationState == ChatSynchronizationState.COMPLETED).ToArray();
+        if (!File.Exists(databasePath) || instagramChats.Length == 0)
+            return [];
+
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadOnly
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var exists = connection.CreateCommand();
+        exists.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ChatParticipants'";
+        if (await exists.ExecuteScalarAsync(cancellationToken) is null)
+            return [];
+
+        var members = new List<InstagramParticipantOption>();
+        foreach (var chat in instagramChats)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT ParticipantId, Position, DisplayName, ActivityProfileUrl, Category
+                FROM ChatParticipants
+                WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+                    AND IsCurrent=1
+                ORDER BY Position, ParticipantId
+                """;
+            command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+            command.Parameters.AddWithValue("$type", chat.PeerType);
+            command.Parameters.AddWithValue("$peer", chat.PeerId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var url = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+                var name = InstagramActivityProfile.TryGetUserName(url) ?? string.Empty;
+                var position = reader.IsDBNull(1) ? "" : $"№{reader.GetInt32(1)} · ";
+                var display = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                var label = $"{chat.TelegramTitle}: {position}" +
+                    (string.IsNullOrWhiteSpace(display) ? $"@{name}" : $"{display} (@{name})");
+                members.Add(new InstagramParticipantOption(reader.GetInt64(0), label, url, name,
+                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4)));
+            }
+        }
+        return members;
+    }
+}

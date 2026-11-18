@@ -52,6 +52,18 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         }
     }
 
+    public Task SaveInstagramAccountsAsync(string target, string browser,
+        CancellationToken cancellationToken = default)
+    {
+        var targetName = InstagramUserName.Normalize(target);
+        var browserName = InstagramUserName.Normalize(browser);
+        return UpdateAsync(settings =>
+        {
+            settings.InstagramTargetUserName = targetName;
+            settings.InstagramBrowserUserName = browserName;
+        }, cancellationToken);
+    }
+
     public Task SaveOnboardingStepAsync(
         OnboardingStep step, CancellationToken cancellationToken = default)
         => UpdateAsync(settings => settings.CurrentOnboardingStep = step, cancellationToken);
