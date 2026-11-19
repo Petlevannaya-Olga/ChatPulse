@@ -60,8 +60,9 @@ public sealed class ChatParticipantRegistry(string databasePath)
         var snapshots = messages.OrderBy(item => item.MessageId).Select(item =>
         {
             var instagramOnly = chat.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase);
+            var allowDamagedPenaltyDomains = ChatParticipantHistoryRuleSelection.SupportsChat14(chat);
             var valid = ParticipantListParser.TryParse(item.Text, out var parsed, profileOpens,
-                instagramOnly);
+                instagramOnly, allowDamagedPenaltyDomains);
             if (valid && parsed is not null && parsed.Participants.Any(participant =>
                     participant.ProfileRequiresVerification))
             {
@@ -69,7 +70,8 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 valid = false;
             }
             else if (!valid && profileOpens is not null && ParticipantListParser.TryParse(item.Text, out _,
-                instagramOnly: chat.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase)))
+                instagramOnly: instagramOnly,
+                allowDamagedPenaltyDomains: allowDamagedPenaltyDomains))
                 profileCheckFailed = true;
             return (item.MessageId, item.SentAtUtc, Valid: valid, Parsed: parsed);
         }).Where(item => item.Valid && item.Parsed is not null).ToArray();

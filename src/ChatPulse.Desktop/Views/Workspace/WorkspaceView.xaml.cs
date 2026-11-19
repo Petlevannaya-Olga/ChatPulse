@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+﻿using ChatPulse.Application.Services;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -32,6 +33,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _instagramStatus = "Аккаунт не подключён";
     private WorkspaceTaskReader? _reader;
     private ChatSynchronizationService? _synchronization;
+    private ITelegramParticipantListHistoryReader? _participantHistoryReader;
+    private CancellationTokenSource? _historyImportCancellation;
+    private bool _historyImportRunning;
+    private WorkspaceChatRow? _selectedHistoryChat;
+    private string _participantHistoryLastReport = string.Empty;
     private WorkspaceTaskSkipStore? _skipStore;
     private WorkspaceCompletedTaskHideStore? _hideStore;
     private WorkspaceChatRow? _selectedChat;
@@ -107,6 +113,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         System.Windows.Application.Current.Exit += (_, _) =>
         {
             _instagramBatchCancellation?.Cancel();
+            _historyImportCancellation?.Cancel();
             _instagramBrowser.Dispose();
         };
     }
@@ -168,7 +175,38 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify(nameof(HasTasks));
             Notify(nameof(HasNoTasks));
             Notify(nameof(IsNotBusy));
+            Notify(nameof(CanRebuildParticipantHistory));
         }
+    }
+
+    public WorkspaceChatRow? SelectedHistoryChat
+    {
+        get => _selectedHistoryChat;
+        set
+        {
+            if (ReferenceEquals(_selectedHistoryChat, value)) return;
+            _selectedHistoryChat = value;
+            Notify();
+            Notify(nameof(CanRebuildParticipantHistory));
+            Notify(nameof(ParticipantHistoryRulesHint));
+        }
+    }
+
+    public bool CanRebuildParticipantHistory => !IsBusy && !_instagramBusy &&
+        !_historyImportRunning && _participantHistoryReader is not null &&
+        ChatParticipantHistoryRuleSelection.SupportsChat14(SelectedHistoryChat?.Chat);
+
+    public string ParticipantHistoryRulesHint => SelectedHistoryChat is null
+        ? "Выберите подключённый чат."
+        : ChatParticipantHistoryRuleSelection.SupportsChat14(SelectedHistoryChat.Chat)
+            ? "Для этого чата настроены правила 14-го чата. Будут проверены все доступные списки Telegram."
+            : "Исторический парсер для выбранного чата пока не настроен. " +
+              "Правила 14-го чата не будут применяться к чужим спискам.";
+
+    public string ParticipantHistoryLastReport
+    {
+        get => _participantHistoryLastReport;
+        private set { _participantHistoryLastReport = value; Notify(); }
     }
 
     public bool HasTasks => !IsBusy && Tasks.Count > 0;
@@ -368,6 +406,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         _instagramBusy = busy;
         Notify(nameof(CanUseInstagram));
+        Notify(nameof(CanRebuildParticipantHistory));
     }
 
     private async Task LoadInstagramSettingsAsync()
@@ -906,6 +945,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         try
         {
             await LoadInstagramParticipantsAsync();
+            await LoadLastParticipantHistoryReportAsync();
             var participant = SelectedInstagramParticipant;
             if (participant is null)
             {
@@ -1206,11 +1246,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     }
 
     public void Initialize(ISettingsService settings, WorkspaceTaskReader reader,
-        ChatSynchronizationService synchronization)
+        ChatSynchronizationService synchronization,
+        ITelegramParticipantListHistoryReader participantHistoryReader)
     {
         _settings = settings;
         _reader = reader;
         _synchronization = synchronization;
+        _participantHistoryReader = participantHistoryReader;
+        Notify(nameof(CanRebuildParticipantHistory));
         _skipStore = new WorkspaceTaskSkipStore(reader.DatabasePath);
         _hideStore = new WorkspaceCompletedTaskHideStore(reader.DatabasePath);
     }
@@ -1238,6 +1281,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             try
             {
                 var previous = SelectedChat?.Chat;
+                var historyPrevious = SelectedHistoryChat?.Chat;
                 Chats.Clear();
                 _taskCache.Clear();
                 _totalDetected = 0;
@@ -1250,6 +1294,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                                                   row.Chat.PeerId == previous.PeerId &&
                                                   row.Chat.PeerType == previous.PeerType) ?? Chats.FirstOrDefault()
                     : null;
+                SelectedHistoryChat = Chats.FirstOrDefault(row => historyPrevious is not null &&
+                    row.Chat.TelegramUserId == historyPrevious.TelegramUserId &&
+                    row.Chat.PeerType == historyPrevious.PeerType &&
+                    row.Chat.PeerId == historyPrevious.PeerId) ??
+                    Chats.FirstOrDefault(row => ChatParticipantHistoryRuleSelection.SupportsChat14(row.Chat)) ??
+                    Chats.FirstOrDefault();
             }
             finally
             {
@@ -1376,6 +1426,127 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         catch (Exception exception)
         {
             InstagramStatus = $"Не удалось загрузить настройки Instagram: {exception.Message}";
+        }
+    }
+
+    private async void ParticipantHistoryChat_OnSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (sender is ComboBox comboBox)
+            SelectedHistoryChat = comboBox.SelectedItem as WorkspaceChatRow;
+        await LoadLastParticipantHistoryReportAsync();
+    }
+
+    private async Task LoadLastParticipantHistoryReportAsync()
+    {
+        var selected = SelectedHistoryChat;
+        if (_reader is null || selected is null)
+        {
+            ParticipantHistoryLastReport = string.Empty;
+            return;
+        }
+        try
+        {
+            var last = await new ChatParticipantHistoryStore(_reader.DatabasePath)
+                .ReadLastRunAsync(selected.Chat);
+            if (!ReferenceEquals(SelectedHistoryChat, selected)) return;
+            ParticipantHistoryLastReport = last is null
+                ? "Полная история этого чата ещё не восстанавливалась."
+                : $"Последнее обновление истории: {last.Value.Outcome}." +
+                  (string.IsNullOrWhiteSpace(last.Value.Errors)
+                      ? string.Empty : $"\nОшибки списков: {last.Value.Errors}");
+        }
+        catch (Exception exception)
+        {
+            if (ReferenceEquals(SelectedHistoryChat, selected))
+                ParticipantHistoryLastReport =
+                    $"Не удалось прочитать отчёт истории: {exception.Message}";
+        }
+    }
+
+    private void RebuildParticipantHistoryButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        var selected = SelectedHistoryChat;
+        if (!CanRebuildParticipantHistory || selected is null || _participantHistoryReader is null ||
+            _reader is null)
+            return;
+
+        var chat = selected.Chat;
+        using var cancellation = new CancellationTokenSource();
+        _historyImportCancellation = cancellation;
+        _historyImportRunning = true;
+        SetInstagramBusy(true);
+        Notify(nameof(CanRebuildParticipantHistory));
+
+        var dialog = new ParticipantHistoryProgressDialog(selected.Title, cancellation);
+        dialog.StartRequested += async (_, _) =>
+        {
+            try
+            {
+                var store = new ChatParticipantHistoryStore(_reader.DatabasePath);
+                var service = new ChatParticipantHistoryImportService(_participantHistoryReader,
+                    store, new Chat14ParticipantHistoryParser());
+                void Post(Action action)
+                {
+                    _ = dialog.Dispatcher.BeginInvoke(DispatcherPriority.Background, action);
+                }
+
+                var result = await service.RebuildAsync(chat,
+                    (url, token) => _instagramBrowser.ProfileOpensAsync(url, token),
+                    cancellation.Token,
+                    (pages, scanned, found) => Post(() =>
+                        dialog.SetPageProgress(pages, scanned, found)),
+                    (processed, total) => Post(() =>
+                        dialog.SetParsingProgress(processed, total)),
+                    () => Post(dialog.SetSaving));
+
+                (string Outcome, string? Errors)? report = null;
+                string? reportError = null;
+                try { report = await store.ReadLastRunAsync(chat); }
+                catch (Exception exception) { reportError = exception.Message; }
+                var title = result.Outcome switch
+                {
+                    "COMPLETED" => "История восстановлена",
+                    "PARTIAL" => "История восстановлена частично",
+                    _ => "История не обновлена"
+                };
+                var details = $"Найдено списков: {result.FoundCount}. " +
+                              $"Принято: {result.AcceptedCount}. " +
+                              $"Отклонено: {result.RejectedCount}.\n" +
+                              $"Номера сообщений: {result.OldestMessageId}–{result.NewestMessageId}." +
+                              (result.AcceptedCount == 0
+                                  ? "\nПредыдущая история сохранена."
+                                  : "\nИсторический реестр обновлён. " +
+                                    "Актуальная таблица подписок не затронута.") +
+                              (string.IsNullOrWhiteSpace(report?.Errors)
+                                  ? string.Empty : $"\n\nПричины отклонения:\n{report.Value.Errors}") +
+                              (reportError is null ? string.Empty :
+                                  $"\nНе удалось прочитать сохранённый отчёт: {reportError}");
+                dialog.Finish(title, details);
+                await LoadLastParticipantHistoryReportAsync();
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                dialog.Finish("Синхронизация остановлена",
+                    "Полное восстановление отменено. Ранее сохранённая история не заменена.");
+            }
+            catch (Exception exception)
+            {
+                dialog.Finish("Ошибка обновления истории",
+                    $"{exception.Message}\nРанее сохранённая история не заменена.");
+            }
+        };
+        var owner = Window.GetWindow(this);
+        if (owner is { IsVisible: true }) dialog.Owner = owner;
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        try { dialog.ShowDialog(); }
+        finally
+        {
+            mainWindow?.HideDialogOverlay();
+            _historyImportCancellation = null;
+            _historyImportRunning = false;
+            SetInstagramBusy(false);
+            Notify(nameof(CanRebuildParticipantHistory));
         }
     }
 

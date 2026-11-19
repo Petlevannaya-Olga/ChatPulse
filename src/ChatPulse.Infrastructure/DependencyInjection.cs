@@ -29,6 +29,11 @@ public static class DependencyInjection
                 provider.GetRequiredService<ITelegramApiCredentialsStore>(),
                 provider.GetRequiredService<ITelegramCredentialChangeJournal>(),
                 provider.GetRequiredService<TelegramAuthorizationEvents>()));
+        // Use the already-authorized singleton. Never create a second WTelegram session
+        // for full participant-history import.
+        services.AddSingleton<ITelegramParticipantListHistoryReader>(provider =>
+            (ITelegramParticipantListHistoryReader)
+                provider.GetRequiredService<ITelegramAuthenticationClient>());
 
         return services;
     }

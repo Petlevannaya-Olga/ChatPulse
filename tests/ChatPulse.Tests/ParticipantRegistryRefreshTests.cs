@@ -499,6 +499,80 @@ public sealed class ParticipantRegistryRefreshTests
     }
 
     [Fact]
+    public async Task OtherChat_DamagedPenaltyDomainIsStillRejected()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        const string latest = """
+            СПИСОК УЧАСТНИЦ
+            1
+            https://www.instagram.com/first_check
+            2
+            https://www.instagram.com/second_check
+            3
+            https://www.instagram.com/third_check
+            ШТРАФНЫЕ ДНИ
+            4
+            https://www.com/fourth_check
+            """;
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(1448, latest));
+
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+
+        Assert.Equal(ParticipantListApplyStatus.UNPARSEABLE_MESSAGE, result.Status);
+        Assert.Contains("www.com", result.ParseFailureReason);
+        Assert.Null(await new ChatParticipantRegistry(database).ReadLatestSourceAsync(chat));
+    }
+
+    [Fact]
+    public async Task Chat14_DamagedPenaltyDomainInNewestRegisterIsApplied()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        chat.TelegramTitle = "14 Пост чат б/с";
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        const string latest = """
+            14 ЧАТ
+            VIP УЧАСТНИКИ
+            1 VIP
+            https://www.instagram.com/vip_check
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first_check
+            2
+            https://www.instagram.com/second_check
+            3
+            https://www.instagram.com/first_check
+            ШТРАФНЫЕ ДНИ
+            4
+            https://www.com/mariagorbunovarus
+            """;
+        var telegram = Client();
+        telegram.ChatsImpl = _ => Task.FromResult(new TelegramChatsSnapshot(123,
+            [new TelegramChatOption(101, "Channel", "14 Пост чат б/с", "Группа")]));
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(1448, latest));
+
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+
+        Assert.Equal(ParticipantListApplyStatus.APPLIED, result.Status);
+        Assert.True(result.Applied);
+        Assert.Equal(1448L, (await new ChatParticipantRegistry(database)
+            .ReadLatestSourceAsync(chat))?.MessageId);
+        Assert.Equal(1L, await CountCurrentAsync(database, "mariagorbunovarus"));
+        Assert.Equal(1L, await CountCurrentAsync(database, "first_check"));
+    }
+
+    [Fact]
     public async Task MalformedNewestRegisterIsReportedAndCannotBeHiddenByOlderValidRegister()
     {
         using var temp = new TestDirectory();

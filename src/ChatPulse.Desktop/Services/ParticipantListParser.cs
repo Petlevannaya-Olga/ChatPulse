@@ -64,8 +64,10 @@ public static class ParticipantListParser
     }
 
     public static bool TryParse(string? text, out ParsedParticipantList? result,
-        Func<string, bool?>? profileOpens = null, bool instagramOnly = false)
-        => TryParse(text, out result, out _, profileOpens, instagramOnly);
+        Func<string, bool?>? profileOpens = null, bool instagramOnly = false,
+        bool allowDamagedPenaltyDomains = false)
+        => TryParse(text, out result, out _, profileOpens, instagramOnly,
+            allowDamagedPenaltyDomains);
 
     /// <summary>
     /// Returns the first verified parsing error for display in the synchronization
@@ -73,7 +75,7 @@ public static class ParticipantListParser
     /// </summary>
     public static bool TryParse(string? text, out ParsedParticipantList? result,
         out string? failureReason, Func<string, bool?>? profileOpens = null,
-        bool instagramOnly = false)
+        bool instagramOnly = false, bool allowDamagedPenaltyDomains = false)
     {
         result = null;
         failureReason = null;
@@ -198,14 +200,14 @@ public static class ParticipantListParser
                     line.Contains("Актив даёт отсюда", StringComparison.OrdinalIgnoreCase))
                     nextIsActivity = true;
 
-                // Every link in an Instagram register must have an Instagram domain.
-                // Only the penalty section tolerates the Cyrillic X suffix.
+                // Only chat-specific penalty rules may recover usernames from
+                // damaged URL domains. Other sections always require Instagram.
                 if (instagramOnly && (position.HasValue || administratorRole is not null))
                 {
                     foreach (Match rawLink in ANY_LINK.Matches(line))
                     {
                         var normalized = NormalizeProfile(rawLink.Value,
-                            status == ParticipantStatus.PENALTY);
+                            status == ParticipantStatus.PENALTY, allowDamagedPenaltyDomains);
                         if (normalized is null ||
                             !normalized.StartsWith("https://www.instagram.com/", StringComparison.OrdinalIgnoreCase))
                         {
@@ -215,11 +217,14 @@ public static class ParticipantListParser
                         }
                     }
                 }
-                var links = status == ParticipantStatus.PENALTY ? PENALTY_PROFILE_LINK : PROFILE_LINK;
+                var links = status == ParticipantStatus.PENALTY
+                    ? allowDamagedPenaltyDomains && instagramOnly ? ANY_LINK : PENALTY_PROFILE_LINK
+                    : PROFILE_LINK;
                 foreach (Match match in links.Matches(line))
                 {
                     if (!position.HasValue && administratorRole is null) continue;
-                    var url = NormalizeProfile(match.Value, status == ParticipantStatus.PENALTY);
+                    var url = NormalizeProfile(match.Value, status == ParticipantStatus.PENALTY,
+                        allowDamagedPenaltyDomains);
                     if (url is null) continue;
                     if (instagramOnly &&
                         !url.StartsWith("https://www.instagram.com/", StringComparison.OrdinalIgnoreCase))
@@ -461,7 +466,8 @@ public static class ParticipantListParser
         return numbered >= 5 && linked >= 5 && !awaitingProfile;
     }
 
-    private static string? NormalizeProfile(string raw, bool penalty)
+    private static string? NormalizeProfile(string raw, bool penalty,
+        bool allowDamagedPenaltyDomains = false)
     {
         var value = raw.StartsWith("http", StringComparison.OrdinalIgnoreCase)
             ? raw : "https://" + raw;
@@ -475,10 +481,11 @@ public static class ParticipantListParser
             // as supplied rather than silently rewritten as Instagram accounts.
             return $"https://t.me/{username}";
         }
-        // Never silently rewrite arbitrary domains (for example www.com) into
-        // Instagram URLs. Their author must correct the source message.
+        // Only a chat with explicit rules may recover a penalty username from
+        // a malformed domain. The host is not trusted as an Instagram identity.
         if (!uri.Host.Equals("instagram.com", StringComparison.OrdinalIgnoreCase) &&
-            !uri.Host.Equals("www.instagram.com", StringComparison.OrdinalIgnoreCase))
+            !uri.Host.Equals("www.instagram.com", StringComparison.OrdinalIgnoreCase) &&
+            !(penalty && allowDamagedPenaltyDomains))
             return null;
         if (penalty && username[^1] is ('Х' or 'х'))
         {

@@ -316,8 +316,10 @@ public sealed class ChatSynchronizationService(
                 return missing;
             }
             var instagramOnly = current.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase);
+            var allowDamagedPenaltyDomains = ChatParticipantHistoryRuleSelection.SupportsChat14(current);
             if (!ParticipantListParser.TryParse(latest.Text, out _, out var parseFailureReason,
-                    instagramOnly: instagramOnly))
+                    instagramOnly: instagramOnly,
+                    allowDamagedPenaltyDomains: allowDamagedPenaltyDomains))
             {
                 // Do not load an older register or write a partially parsed list.
                 var previous = await registry.ReadLatestSourceAsync(current, CancellationToken.None);

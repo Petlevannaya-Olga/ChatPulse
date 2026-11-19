@@ -398,8 +398,7 @@ public sealed class ParticipantListIntegrationTests
             4
             https://www.instagram.com/new_personX
             """;
-        static bool? Opens(string url) => url.EndsWith("/new_person", StringComparison.Ordinal)
-            ? true : false;
+        static bool? Opens(string url) => url.EndsWith("/new_person", StringComparison.Ordinal);
         Assert.True(ParticipantListParser.TryParse(register, out var parsed, Opens));
         Assert.Contains(parsed!.Participants, item =>
             item.SubscriptionProfileUrl == "https://www.instagram.com/new_person" &&
@@ -934,6 +933,65 @@ public sealed class ParticipantListIntegrationTests
 
         Assert.True(ParticipantListParser.LooksLikeParticipantList(text));
         Assert.False(ParticipantListParser.TryParse(text, out _, instagramOnly: true));
+    }
+
+    [Fact]
+    public void FourteenthChat_DamagedPenaltyDomainIsAcceptedOnlyWithChatRules()
+    {
+        const string list = """
+            14 ЧАТ
+            VIP УЧАСТНИКИ
+            1 VIP
+            https://www.instagram.com/first_vip
+            ВСЕ МЫ
+            1
+            https://instagram.com/_mar_g.o
+            Подписка сюда
+            Актив дает отсюда
+            https://instagram.com/mar_fozzz
+            2
+            https://instagram.com/another_account
+            3
+            https://instagram.com/_mar_g.o
+            Подписка сюда
+            Актив дает отсюда
+            https://instagram.com/mar_fozzz
+            ШТРАФНЫЕ ДНИ
+            4
+            https://www.com/mariagorbunovarus/
+            5
+            https://bad.net/_mar_g.oХ/
+            """;
+        Assert.False(ParticipantListParser.TryParse(list, out _, instagramOnly: true));
+        Assert.True(ParticipantListParser.TryParse(list, out var parsed,
+            out var failure, instagramOnly: true, allowDamagedPenaltyDomains: true), failure);
+        Assert.NotNull(parsed);
+        Assert.Null(failure);
+        Assert.Equal(4, parsed.Participants.Count);
+        Assert.Single(parsed.Participants, participant =>
+            participant.SubscriptionProfileUrl == "https://www.instagram.com/mariagorbunovarus" &&
+            participant.Status == ParticipantStatus.PENALTY);
+        var existing = Assert.Single(parsed.Participants, participant =>
+            participant.SubscriptionProfileUrl == "https://www.instagram.com/_mar_g.o");
+        Assert.Equal(ParticipantStatus.PENALTY, existing.Status);
+        Assert.Equal("https://www.instagram.com/mar_fozzz", existing.ActivityProfileUrl);
+    }
+
+    [Fact]
+    public void FourteenthChat_RulesDoNotAllowBadDomainInOrdinarySection()
+    {
+        const string list = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            https://www.com/second
+            3
+            https://www.instagram.com/third
+            """;
+        Assert.False(ParticipantListParser.TryParse(list, out _, out var reason,
+            instagramOnly: true, allowDamagedPenaltyDomains: true));
+        Assert.Contains("www.com", reason);
     }
 
     [Fact]

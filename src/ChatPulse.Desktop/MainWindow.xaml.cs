@@ -35,7 +35,8 @@ public partial class MainWindow : Window
         ILogger<MainWindow> logger,
         ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents,
         TelegramConnectionMonitor connectionMonitor,
-        WorkspaceTaskReader workspaceTaskReader)
+        WorkspaceTaskReader workspaceTaskReader,
+        ChatPulse.Application.Services.ITelegramParticipantListHistoryReader participantHistoryReader)
     {
         InitializeComponent();
         _settings = settings;
@@ -43,7 +44,8 @@ public partial class MainWindow : Window
         FourthStepScreen.Initialize(_settings, _synchronization, firstChatSetup);
         FourthStepScreen.BackRequested += async (_, _) => await NavigateAsync(OnboardingStep.FirstChat);
         FourthStepScreen.ContinueRequested += FourthStepScreen_OnContinueRequested;
-        WorkspaceScreen.Initialize(_settings, workspaceTaskReader, _synchronization);
+        WorkspaceScreen.Initialize(_settings, workspaceTaskReader, _synchronization,
+            participantHistoryReader);
         _telegramSetup = telegramSetup;
         _firstChatSetup = firstChatSetup;
         _logger = logger;
