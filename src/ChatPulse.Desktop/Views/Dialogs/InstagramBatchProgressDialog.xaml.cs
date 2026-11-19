@@ -15,7 +15,8 @@ public partial class InstagramBatchProgressDialog : Window
     private const double OWNER_VERTICAL_PADDING = 32;
 
     public InstagramBatchProgressDialog(CancellationTokenSource cancellation,
-        bool chooseDirections = true, InstagramCheckDirections predetermined = InstagramCheckDirections.BOTH)
+        bool chooseDirections = true, InstagramCheckDirections predetermined = InstagramCheckDirections.BOTH,
+        string? individualUserName = null)
     {
         _chooseDirections = chooseDirections;
         SelectedDirections = predetermined;
@@ -23,6 +24,16 @@ public partial class InstagramBatchProgressDialog : Window
         InitializeComponent();
         Model = new InstagramBatchProgressModel();
         DataContext = Model;
+        if (individualUserName is not null)
+        {
+            Width = 420;
+            BatchContent.Visibility = Visibility.Collapsed;
+            IndividualContent.Visibility = Visibility.Visible;
+            IndividualUserName.Text = $"@{individualUserName}";
+            IndividualDirection.Text = predetermined == InstagramCheckDirections.FOLLOWERS
+                ? "Подписана на меня"
+                : "Я подписана";
+        }
         Loaded += (_, _) => QueueRecenter();
         SizeChanged += (_, _) => QueueRecenter();
         if (!_chooseDirections)

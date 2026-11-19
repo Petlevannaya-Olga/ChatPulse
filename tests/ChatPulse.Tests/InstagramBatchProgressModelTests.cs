@@ -140,4 +140,53 @@ public sealed class InstagramBatchProgressModelTests
         Assert.True(model.HasSummary);
     }
 
+    [Theory]
+    [InlineData(1, 0, "Подписка найдена")]
+    [InlineData(0, 1, "Подписка не найдена")]
+    public void IndividualCheckShowsShortOutcome(int found, int notFound, string expected)
+    {
+        var model = new InstagramBatchProgressModel();
+        model.ConfigureWorkload(1);
+        model.SetResultSummary(new InstagramBatchResultSummary(
+            DateTimeOffset.UtcNow, InstagramBatchOutcome.COMPLETED,
+            1, 1, found, notFound, 0, 0, 0));
+        model.Finish(string.Empty, successful: true);
+
+        Assert.Equal(expected, model.IndividualResultLabel);
+        Assert.Equal("Результат сохранён в таблице.", model.IndividualResultDetail);
+        Assert.Equal("Закрыть", model.ActionLabel);
+    }
+
+    [Fact]
+    public void FailedIndividualCheckKeepsErrorWithoutBatchStatistics()
+    {
+        var model = new InstagramBatchProgressModel();
+        model.Finish("Instagram недоступен. Предыдущий результат сохранён.", successful: false);
+
+        Assert.Equal("Не удалось проверить подписку", model.IndividualResultLabel);
+        Assert.Contains("Предыдущий результат сохранён", model.IndividualResultDetail);
+    }
+
+    [Fact]
+    public void IndividualProgressTextUpdatesOnStop()
+    {
+        var model = new InstagramBatchProgressModel();
+        Assert.Equal("Проверяем Instagram...", model.IndividualProgressLabel);
+        model.RequestStop();
+        Assert.Equal("Останавливаем проверку...", model.IndividualProgressLabel);
+    }
+
+    [Fact]
+    public void StoppedIndividualCheckShowsStoppedStatus()
+    {
+        var model = new InstagramBatchProgressModel();
+        model.SetResultSummary(new InstagramBatchResultSummary(
+            DateTimeOffset.UtcNow, InstagramBatchOutcome.STOPPED,
+            0, 1, 0, 0, 0, 0, 0));
+        model.Finish("Проверка остановлена. Статус не изменён.", successful: false);
+
+        Assert.Equal("Проверка остановлена", model.IndividualResultLabel);
+        Assert.Contains("Статус не изменён", model.IndividualResultDetail);
+    }
+
 }

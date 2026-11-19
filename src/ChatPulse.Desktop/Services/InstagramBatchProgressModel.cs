@@ -130,6 +130,24 @@ public sealed class InstagramBatchProgressModel : INotifyPropertyChanged
     public bool CanAct => !_isRunning || !_stopRequested;
     public string ActionLabel => !_isRunning ? "Закрыть" : _stopRequested ? "Останавливаем..." : "Остановить";
 
+    // Individual checks display a short status rather than batch statistics.
+    public string IndividualProgressLabel => _stopRequested ? "Останавливаем проверку..." : "Проверяем Instagram...";
+
+    public string IndividualResultLabel => _resultSummary switch
+    {
+        { Outcome: InstagramBatchOutcome.COMPLETED, Found: 1 } => "Подписка найдена",
+        { Outcome: InstagramBatchOutcome.COMPLETED, NotFound: 1 } => "Подписка не найдена",
+        { Outcome: InstagramBatchOutcome.COMPLETED } => "Проверка завершена",
+        { Outcome: InstagramBatchOutcome.STOPPED } => "Проверка остановлена",
+        _ => "Не удалось проверить подписку"
+    };
+
+    public string IndividualResultDetail => !string.IsNullOrWhiteSpace(_summary)
+        ? _summary
+        : _resultSummary?.Outcome == InstagramBatchOutcome.COMPLETED
+            ? "Результат сохранён в таблице."
+            : "Предыдущий результат сохранён без изменений.";
+
     public void Activate(InstagramBatchStage stage, string? detail = null)
     {
         if (!_isRunning) return;
@@ -177,6 +195,7 @@ public sealed class InstagramBatchProgressModel : INotifyPropertyChanged
         Notify(nameof(CanStop));
         Notify(nameof(CanAct));
         Notify(nameof(ActionLabel));
+        Notify(nameof(IndividualProgressLabel));
     }
 
     public void InterruptActive()
@@ -213,6 +232,8 @@ public sealed class InstagramBatchProgressModel : INotifyPropertyChanged
         Notify(nameof(CanStop));
         Notify(nameof(CanAct));
         Notify(nameof(ActionLabel));
+        Notify(nameof(IndividualResultLabel));
+        Notify(nameof(IndividualResultDetail));
     }
 
     private void NotifyProgress()

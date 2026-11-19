@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -7,6 +7,7 @@ using System.Windows.Data;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Threading;
 using ChatPulse.Desktop.Services;
@@ -70,6 +71,23 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private ParticipantListSourceInfo? _latestParticipantListSource;
     private int _loadVersion;
     private int _totalDetected;
+
+    private void SubscriptionTableSurface_OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is not Grid surface)
+            return;
+
+        var width = e.NewSize.Width;
+        var height = e.NewSize.Height;
+        if (width <= 0 || height <= 0)
+        {
+            surface.Clip = Geometry.Empty;
+            return;
+        }
+
+        const double radius = 11;
+        surface.Clip = new RectangleGeometry(new Rect(0, 0, width, height), radius, radius);
+    }
 
     public WorkspaceView()
     {
@@ -531,7 +549,10 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _instagramBatchCancellation = cancellation;
         Notify(nameof(CanCancelInstagramBatch));
         var dialog = new InstagramBatchProgressDialog(cancellation,
-            chooseDirections: individual is null, predetermined: direction);
+            chooseDirections: individual is null, predetermined: direction,
+            individualUserName: individual is null ? null :
+                direction == InstagramCheckDirections.FOLLOWERS
+                    ? individual.ActivityUserName : individual.SubscriptionUserName);
         var owner = Window.GetWindow(this);
         if (owner is { IsVisible: true }) dialog.Owner = owner;
         dialog.StartRequested += async (_, _) =>
