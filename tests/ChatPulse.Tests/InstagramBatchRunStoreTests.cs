@@ -107,6 +107,67 @@ public sealed class InstagramBatchRunStoreTests
     }
 
     [Fact]
+    public void CompletedWithOneInconclusiveSearchCannotReplaceLastSuccessfulRun()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"chatpulse-error-{Guid.NewGuid():N}.db");
+        try
+        {
+            var checks = new InstagramSubscriptionCheckStore(path);
+            checks.Save("main", "checker", Progress("member", "following", InstagramSearchStatus.FOUND, 1, 1));
+            var previous = Summary(1, 1, 1, 0, InstagramBatchOutcome.COMPLETED);
+            var summaryStore = new InstagramBatchSummaryStore(path);
+            summaryStore.Save("main", previous);
+
+            var store = new InstagramBatchRunStore(path);
+            store.Stage("error_run", "main", "checker",
+                Progress("member", "following", InstagramSearchStatus.INCONCLUSIVE, 1, 1));
+            var invalid = previous with { Found = 0, Errors = 1 };
+            Assert.Throws<InvalidOperationException>(() => store.PublishCompleted("error_run", "main", invalid));
+            store.RecordInterrupted("error_run", "main", invalid with { Outcome = InstagramBatchOutcome.FAILED });
+
+            Assert.Equal("FOUND", Assert.Single(checks.Read("main", ["member"])).Status);
+            Assert.Equal(previous, summaryStore.Read("main"));
+            Assert.Equal(0, CountRows(path, "InstagramBatchCheckDrafts"));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void InconclusiveIndividualSearchDoesNotReplacePreviousResult()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"chatpulse-individual-error-{Guid.NewGuid():N}.db");
+        try
+        {
+            var checks = new InstagramSubscriptionCheckStore(path);
+            checks.Save("main", "checker", Progress("member", "following", InstagramSearchStatus.FOUND, 1, 1));
+            var store = new InstagramBatchRunStore(path);
+            store.Stage("individual_error", "main", "checker",
+                Progress("member", "following", InstagramSearchStatus.INCONCLUSIVE, 1, 1));
+            Assert.Throws<InvalidOperationException>(() => store.PublishIndividual("individual_error", "main",
+                "member", InstagramCheckDirections.FOLLOWING));
+            Assert.Equal("FOUND", Assert.Single(checks.Read("main", ["member"])).Status);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void PreviouslySavedInconclusiveStatusesAreNotDisplayed()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"chatpulse-legacy-error-{Guid.NewGuid():N}.db");
+        try
+        {
+            var checks = new InstagramSubscriptionCheckStore(path);
+            checks.Save("main", "checker", Progress("member", "followers", InstagramSearchStatus.INCONCLUSIVE, 1, 2));
+            checks.Save("main", "checker", Progress("member", "following", InstagramSearchStatus.FOUND, 2, 2));
+            var visible = checks.Read("main", ["member"]);
+            Assert.Single(visible);
+            Assert.Equal("following", visible[0].Kind);
+            Assert.Equal("FOUND", visible[0].Status);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
     public void IndividualCheckUpdatesOnlyOneDirectionAndLeavesBatchSummaryUnchanged()
     {
         var path = Path.Combine(Path.GetTempPath(), $"chatpulse-individual-{Guid.NewGuid():N}.db");

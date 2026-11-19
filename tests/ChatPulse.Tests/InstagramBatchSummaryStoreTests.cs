@@ -45,6 +45,38 @@ public sealed class InstagramBatchSummaryStoreTests
     }
 
     [Fact]
+    public void ErrorSummaryIsNotPublishedAndLegacyErrorSummaryIsNotShown()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"chatpulse-summary-error-{Guid.NewGuid():N}.db");
+        try
+        {
+            var store = new InstagramBatchSummaryStore(path);
+            var successful = new InstagramBatchResultSummary(
+                DateTimeOffset.UtcNow, InstagramBatchOutcome.COMPLETED, 2, 2,
+                1, 1, 0, 0, 0, NotFoundFollowers: 1, NotFoundFollowing: 0);
+            store.Save("main", successful);
+            var invalid = successful with { Found = 0, Errors = 1 };
+            Assert.Throws<ArgumentException>(() => store.Save("main", invalid));
+            Assert.Equal(successful, store.Read("main"));
+
+            // Simulate a faulty summary previously saved by an older app version.
+            using (var connection = new SqliteConnection($"Data Source={path}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE InstagramBatchSummaries
+                    SET Found=0, Errors=1
+                    WHERE TargetUserName='main'
+                    """;
+                command.ExecuteNonQuery();
+            }
+            Assert.Null(store.Read("main"));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
     public void ReadsOldSummaryWithoutDirectionalColumnsAndMigratesItOnSave()
     {
         var path = Path.Combine(Path.GetTempPath(), $"chatpulse-summary-{Guid.NewGuid():N}.db");

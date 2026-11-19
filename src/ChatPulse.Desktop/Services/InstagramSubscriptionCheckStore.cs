@@ -65,7 +65,8 @@ public sealed class InstagramSubscriptionCheckStore(string databasePath)
         var command = connection.CreateCommand();
         command.CommandText = """
             SELECT ParticipantUserName, Direction, SearchStatus, CheckedAtUtc
-            FROM InstagramSubscriptionChecks WHERE TargetUserName=$target
+            FROM InstagramSubscriptionChecks
+            WHERE TargetUserName=$target AND SearchStatus IN ('FOUND','NOT_FOUND')
             """;
         command.Parameters.AddWithValue("$target", targetUserName);
         using var reader = command.ExecuteReader();

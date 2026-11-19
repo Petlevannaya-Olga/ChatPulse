@@ -23,6 +23,15 @@
             <Setter Property="CornerRadius" Value="16" />
             <Setter Property="Padding" Value="22" />
         </Style>
+        <Style x:Key="SubscriptionPanelCard" TargetType="Border" BasedOn="{StaticResource PanelCard}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="Background" Value="Transparent" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <!-- Векторная кнопка: размер и толщина стрелки не зависят от системного шрифта. -->
         <Style x:Key="SidebarToggleButton" TargetType="Button">
             <Setter Property="Width" Value="32" />
@@ -105,6 +114,37 @@
                     <Setter Property="HorizontalContentAlignment" Value="Center" />
                 </DataTrigger>
             </Style.Triggers>
+        </Style>
+        <!-- Full-surface clickable information cards, independent from action buttons. -->
+        <Style x:Key="SubscriptionsInfoCardButton" TargetType="Button">
+            <Setter Property="Background" Value="#FAF7FE" />
+            <Setter Property="BorderBrush" Value="#E8DBF5" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14,12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F3ECFD" />
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#D4B9F2" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EEE4FC" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="WorkspaceActionButton" TargetType="Button">
             <Setter Property="Height" Value="36" />
@@ -224,6 +264,26 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+        <Style x:Key="SubscriptionsFeatureTile" TargetType="Button" BasedOn="{StaticResource FeatureTile}">
+            <Setter Property="Background" Value="#FFF4F9" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSubscriptionsVisible}" Value="True">
+                    <Setter Property="Background">
+                        <Setter.Value>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#FBE3F5" Offset="0" />
+                                <GradientStop Color="#F4DDFD" Offset="1" />
+                            </LinearGradientBrush>
+                        </Setter.Value>
+                    </Setter>
+                    <Setter Property="Effect">
+                        <Setter.Value>
+                            <DropShadowEffect Color="#B944BE" BlurRadius="18" ShadowDepth="0" Opacity="0.22" />
+                        </Setter.Value>
+                    </Setter>
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
     </UserControl.Resources>
 
@@ -518,14 +578,33 @@
             </ScrollViewer>
 
             <!-- Плитки чата закреплены над прокручиваемым списком заданий. -->
-            <Grid Grid.Row="1" Margin="0,16,10,18"
+            <Grid Grid.Row="1"
                   Visibility="{Binding IsChatVisible, Converter={StaticResource BoolVisible}}">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Margin" Value="0,16,10,18" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                                <Setter Property="Margin" Value="0,6,0,0" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Margin="0,0,0,22">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
@@ -540,8 +619,7 @@
                             </StackPanel>
                         </Button>
                         <Button Grid.Column="1" Click="SubscriptionsTabButton_OnClick" Margin="5,0"
-                                Tag="{Binding IsSubscriptionsVisible}" Style="{StaticResource FeatureTile}"
-                                Background="#FFF4F9" MinHeight="166">
+                                Tag="{Binding IsSubscriptionsVisible}" Style="{StaticResource SubscriptionsFeatureTile}" MinHeight="166">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -772,192 +850,131 @@
 
                     <!-- Show the current chat's register including VIP/admin; only owner profiles are excluded.
                          Subscription checks can be started and stopped directly from this tab. -->
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  Visibility="{Binding IsSubscriptionsVisible, Converter={StaticResource BoolVisible}}">
-                        <Border Style="{StaticResource PanelCard}">
+                    <!-- Only the DataGrid scrolls vertically. The surrounding cards and filters stay fixed. -->
+                    <Border Grid.Row="1" Style="{StaticResource SubscriptionPanelCard}"
+                            Visibility="{Binding IsSubscriptionsVisible, Converter={StaticResource BoolVisible}}">
 
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <!-- The summary and both actions share the top row. -->
+                            <!-- Information and actions are grouped by purpose; detail buttons do not start checks. -->
                             <Grid Grid.Row="0" Margin="0,0,0,12">
+                                <Grid.Style>
+                                    <Style TargetType="Grid">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <!-- Only the summary card toggles the Expander; buttons do not. -->
-                                <Border Grid.Column="0" Margin="0,0,14,0"
-                                    Background="#FAF7FE" BorderBrush="#E8DBF5" BorderThickness="1"
-                                    CornerRadius="12" Padding="12,9" Cursor="Hand"
-                                    PreviewMouseLeftButtonUp="LatestSubscriptionSummaryCard_OnPreviewMouseLeftButtonUp"
-                                    Visibility="{Binding HasLatestSubscriptionBatch, Converter={StaticResource BoolVisible}}">
-                                <Grid>
-                                <Expander x:Name="LatestSubscriptionSummaryExpander"
-                                          IsExpanded="False" Foreground="#39295F"
-                                          DataContext="{Binding LatestSubscriptionBatch}">
-                                    <!-- Transparent full-width header; content stays left, chevron stays right. -->
-                                    <Expander.Template>
-                                        <ControlTemplate TargetType="{x:Type Expander}">
-                                            <Grid Background="Transparent" HorizontalAlignment="Stretch">
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="Auto" />
-                                                </Grid.RowDefinitions>
-                                                <Grid Grid.Row="0" Background="Transparent" MinHeight="28"
-                                                      HorizontalAlignment="Stretch">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="Auto" />
-                                                    </Grid.ColumnDefinitions>
-                                                    <ContentPresenter Grid.Column="0"
-                                                                      ContentSource="Header"
-                                                                      HorizontalAlignment="Left"
-                                                                      VerticalAlignment="Center"
-                                                                      Margin="0,0,12,0" />
-                                                    <Path x:Name="HeaderChevron" Grid.Column="1"
-                                                          Data="M 1,2 L 6,7 L 11,2"
-                                                          Width="12" Height="9"
-                                                          Stretch="Fill" Stroke="#9D8AAE"
-                                                          StrokeThickness="1.8"
-                                                          StrokeStartLineCap="Round"
-                                                          StrokeEndLineCap="Round"
-                                                          StrokeLineJoin="Round"
-                                                          RenderTransformOrigin="0.5,0.5"
-                                                          VerticalAlignment="Center" Margin="8,0,4,0" />
-                                                </Grid>
-                                                <ContentPresenter x:Name="ExpandedContent" Grid.Row="1"
-                                                                  ContentSource="Content" Visibility="Collapsed" />
-                                            </Grid>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsExpanded" Value="True">
-                                                    <Setter TargetName="ExpandedContent" Property="Visibility" Value="Visible" />
-                                                    <Setter TargetName="HeaderChevron" Property="RenderTransform">
-                                                        <Setter.Value>
-                                                            <RotateTransform Angle="180" />
-                                                        </Setter.Value>
-                                                    </Setter>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Expander.Template>
-                                    <Expander.Header>
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding FinishedAtLabel}" FontSize="13"
-                                                       FontWeight="SemiBold" Foreground="#39295F"
-                                                       VerticalAlignment="Center" />
-                                            <TextBlock Text="  ·  " Foreground="#A18DAD" FontSize="12"
-                                                       VerticalAlignment="Center" />
-                                            <TextBlock Text="{Binding ProgressLabel}" Foreground="#766787"
-                                                       FontSize="12" VerticalAlignment="Center" />
+                                <Border Grid.Column="0" Margin="0,0,7,0" MinHeight="142"
+                                        Background="#FAF7FE" BorderBrush="#E8DBF5"
+                                        BorderThickness="1" CornerRadius="12" Padding="14,12">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Button Grid.Row="0" Margin="0,0,0,8"
+                                                Style="{StaticResource SubscriptionsInfoCardButton}"
+                                                Padding="0" Background="Transparent" BorderThickness="0"
+                                                Click="ShowLastInstagramCheckDetails_OnClick"
+                                                ToolTip="Открыть отчёт последней успешной проверки">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                                    <TextBlock Text="♡" FontSize="18" Foreground="#8B42CF"
+                                                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                    <TextBlock Text="Проверка подписок" FontSize="14"
+                                                               FontWeight="SemiBold" Foreground="#39295F"
+                                                               VerticalAlignment="Center" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding LatestCheckDateLabel, Mode=OneWay}"
+                                                           FontSize="12" FontWeight="SemiBold" Foreground="#4F3D72" />
+                                                <TextBlock Text="{Binding LatestCheckCountsLabel, Mode=OneWay}"
+                                                           Foreground="#827393" FontSize="11" TextWrapping="Wrap"
+                                                           Margin="0,4,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal"
+                                                    HorizontalAlignment="Right">
+                                            <Button Content="Отчёт" Height="34" Margin="0,0,8,0"
+                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                    Click="ShowLastInstagramCheckDetails_OnClick"
+                                                    ToolTip="Посмотреть результаты последней успешной проверки" />
+                                            <Button Content="Проверить" Height="34"
+                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                    Background="{StaticResource AccentBrush}" Foreground="White"
+                                                    BorderThickness="0" IsEnabled="{Binding CanUseInstagram}"
+                                                    Click="CheckAllInstagramParticipantsButton_OnClick" />
                                         </StackPanel>
-                                    </Expander.Header>
-                                    <StackPanel Margin="0,10,0,2" HorizontalAlignment="Left">
-                                        <TextBlock Text="{Binding CheckedDirectionsLabel}" Foreground="#766787"
-                                                   FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10" />
-                                        <WrapPanel VerticalAlignment="Top">
-                                            <TextBlock Margin="0,0,26,0">
-                                                <Run Text="{Binding Found, Mode=OneWay}" FontSize="22" FontWeight="SemiBold"
-                                                     Foreground="#248357" />
-                                                <Run Text=" Найдено" FontSize="12" Foreground="#736686" />
-                                            </TextBlock>
-                                            <TextBlock Margin="0,0,26,0">
-                                                <Run Text="{Binding NotFound, Mode=OneWay}" FontSize="22" FontWeight="SemiBold"
-                                                     Foreground="#39295F" />
-                                                <Run Text=" Не найдено" FontSize="12" Foreground="#736686" />
-                                            </TextBlock>
-                                            <TextBlock>
-                                                <Run Text="{Binding Errors, Mode=OneWay}" FontSize="22" FontWeight="SemiBold"
-                                                     Foreground="#39295F" />
-                                                <Run Text=" С ошибкой" FontSize="12" Foreground="#736686" />
-                                            </TextBlock>
-                                        </WrapPanel>
-                                        <StackPanel Margin="0,9,0,0"
-                                                    Visibility="{Binding HasNotFoundBreakdown, Converter={StaticResource BoolVisible}}">
-                                            <TextBlock FontSize="11" Foreground="#766787" Margin="0,0,0,4">
-                                                <Run Text="{Binding NotFoundFollowingLabel, Mode=OneWay}" FontWeight="SemiBold" />
-                                                <Run Text=" — нет в моих подписках" />
-                                            </TextBlock>
-                                            <TextBlock FontSize="11" Foreground="#766787">
-                                                <Run Text="{Binding NotFoundFollowersLabel, Mode=OneWay}" FontWeight="SemiBold" />
-                                                <Run Text=" — нет среди моих подписчиков" />
-                                            </TextBlock>
-                                        </StackPanel>
-                                        <TextBlock Text="Разбивка по направлениям недоступна для этой прошлой проверки."
-                                                   FontSize="11" Foreground="#827393" TextWrapping="Wrap"
-                                                   Margin="0,8,0,0"
-                                                   Visibility="{Binding HasLegacyBreakdown, Converter={StaticResource BoolVisible}}" />
-                                        <TextBlock Text="{Binding Caution}" FontSize="11" Foreground="#827393"
-                                                   Margin="0,8,0,0" TextWrapping="Wrap" />
-                                        <TextBlock Text="{Binding Details}" FontSize="11" Foreground="#AA4965"
-                                                   TextWrapping="Wrap" Margin="0,5,0,0">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding HasDetails}" Value="True">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </StackPanel>
-                                </Expander>
-                                </Grid>
+                                    </Grid>
                                 </Border>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                            HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,1,0,0">
-                        <!-- The publication date belongs to the synchronization action, not a separate row. -->
-                                                        <Button  Margin="0,0,8,0" Height="48" Padding="14,3"
-                                                                VerticalAlignment="Center"
-                                                                Click="RefreshSubscriptionsButton_OnClick"
-                                                                IsEnabled="{Binding IsNotBusy}"
-                                                                Style="{StaticResource WorkspaceActionButton}"
-                                                                ToolTip="Дата публикации последнего применённого списка в Telegram">
-                                                            <StackPanel Orientation="Vertical" HorizontalAlignment="Center"
-                                                                        VerticalAlignment="Center">
-                                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                                                    <Path Data="M 13,3 A 7,7 0 1 0 19,10 M 13,0 L 13,5 L 18,5"
-                                                                          Width="14" Height="14" Stretch="Uniform"
-                                                                          Fill="Transparent" Stroke="#6738AE" StrokeThickness="2"
-                                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                                          Margin="0,0,6,0" VerticalAlignment="Center" />
-                                                                    <TextBlock Text="Синхронизировать" Foreground="#6738AE"
-                                                                               FontSize="12" FontWeight="SemiBold"
-                                                                               VerticalAlignment="Center" />
-                                                                </StackPanel>
-                                                                <TextBlock Text="{Binding ParticipantListMessageDateLabel, Mode=OneWay}"
-                                                                           FontSize="10" Foreground="#817399"
-                                                                           HorizontalAlignment="Center" Margin="0,2,0,0" />
-                                                            </StackPanel>
-                                                        </Button>
-                                                        <Button  Content="Проверить" Height="48"
-                                                                Click="CheckAllInstagramParticipantsButton_OnClick"
-                                                                IsEnabled="{Binding CanUseInstagram}"
-                                                                Style="{StaticResource WorkspaceActionButton}"
-                                                                Background="{StaticResource AccentBrush}" Foreground="White"
-                                                                BorderThickness="0" VerticalAlignment="Center" />
-                                </StackPanel>
+                                <Border Grid.Column="1" Margin="7,0,0,0" MinHeight="142"
+                                        Background="#FAF7FE" BorderBrush="#E8DBF5"
+                                        BorderThickness="1" CornerRadius="12" Padding="14,12">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Button Grid.Row="0" Margin="0,0,0,8"
+                                                Style="{StaticResource SubscriptionsInfoCardButton}"
+                                                Padding="0" Background="Transparent" BorderThickness="0"
+                                                Click="ShowParticipantListDetails_OnClick"
+                                                ToolTip="Посмотреть сведения о последнем списке Telegram">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                                    <TextBlock Text="↻" FontSize="17" Foreground="#8B42CF"
+                                                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                                                    <TextBlock Text="Список участниц" FontSize="14"
+                                                               FontWeight="SemiBold" Foreground="#39295F"
+                                                               VerticalAlignment="Center" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding ParticipantListMessageDateLabel, Mode=OneWay}"
+                                                           FontSize="12" FontWeight="SemiBold" Foreground="#4F3D72" />
+                                                <TextBlock Text="{Binding ParticipantLastSyncLabel, Mode=OneWay}"
+                                                           Foreground="#827393" FontSize="11" TextWrapping="Wrap"
+                                                           Margin="0,4,0,0" />
+                                            </StackPanel>
+                                        </Button>
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal"
+                                                    HorizontalAlignment="Right">
+                                            <Button Content="Отчёт" Height="34" Margin="0,0,8,0"
+                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                    Click="ShowParticipantListDetails_OnClick"
+                                                    ToolTip="Открыть отчёт по актуальному списку участниц" />
+                                            <Button Content="Синхронизировать" Height="34"
+                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                    Background="{StaticResource AccentBrush}" Foreground="White"
+                                                    BorderThickness="0" IsEnabled="{Binding IsNotBusy}"
+                                                    Click="RefreshSubscriptionsButton_OnClick" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
                             </Grid>
-                            <!-- Filters and search are independent of the action buttons. -->
+                            <!-- Filtering works independently of the check and synchronization actions above. -->
                             <Grid Grid.Row="1" Margin="0,0,0,12">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <CheckBox Grid.Column="0" Content="Расхождения"
                                           IsChecked="{Binding ShowOnlySubscriptionDiscrepancies, Mode=TwoWay}"
                                           Foreground="#39295F" FontSize="12" FontWeight="SemiBold"
                                           VerticalAlignment="Center" Margin="0,0,18,0"
                                           ToolTip="Показать только участниц с расхождениями; без отметки — всех" />
-                                <Border Grid.Column="1" MinWidth="180" Margin="0,0,10,0" HorizontalAlignment="Stretch" Background="#FCFAFF" BorderBrush="#DED0EE"
+                                <Border Grid.Column="1" MinWidth="180"
+                                        HorizontalAlignment="Stretch" Background="#FCFAFF" BorderBrush="#DED0EE"
                                         BorderThickness="1" CornerRadius="10" Padding="11,4" MinHeight="44">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -966,8 +983,8 @@
                                         </Grid.ColumnDefinitions>
                                         <Path Data="M 11,3 A 8,8 0 1 1 10.99,3 M 17.5,17.5 L 23,23"
                                               Width="17" Height="17" Stroke="#967CAD" StrokeThickness="2"
-                                              Fill="Transparent" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Stretch="Uniform"
-                                              VerticalAlignment="Center" HorizontalAlignment="Left" />
+                                              Fill="Transparent" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Stretch="Uniform" VerticalAlignment="Center" HorizontalAlignment="Left" />
                                         <TextBox x:Name="SubscriptionSearchBox" Grid.Column="1"
                                                  Text="{Binding SubscriptionQuery, UpdateSourceTrigger=PropertyChanged}"
                                                  BorderThickness="0" Background="Transparent" Padding="0"
@@ -992,43 +1009,37 @@
                                         </TextBlock>
                                     </Grid>
                                 </Border>
-                                                            </Grid>
-                                <StackPanel Grid.Row="2" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding SubscriptionsSyncMessage}" Foreground="#8243A0"
-                                               FontSize="12" TextWrapping="Wrap">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
+                                <!-- One compact vector icon toggles between maximize and restore. -->
+                                <Button Grid.Column="2"
+                                        Click="ToggleSubscriptionTableExpansionButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}"
+                                        Height="44" Width="44" Margin="12,0,0,0" Padding="0"
+                                        ToolTip="{Binding SubscriptionTableExpandLabel}"
+                                        AutomationProperties.Name="{Binding SubscriptionTableExpandLabel}">
+                                    <Path Width="21" Height="21" Stretch="Uniform"
+                                          Stroke="#7640B5" StrokeThickness="2"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round" Fill="Transparent">
+                                        <Path.Style>
+                                            <Style TargetType="Path">
+                                                <!-- Maximize: four outward-facing corners. -->
+                                                <Setter Property="Data" Value="M 9,3 L 3,3 L 3,9 M 15,3 L 21,3 L 21,9 M 21,15 L 21,21 L 15,21 M 9,21 L 3,21 L 3,15" />
                                                 <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding SubscriptionsSyncMessage}" Value="">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding SubscriptionsSyncMessage}" Value="{x:Null}">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                                                        <!-- Restore: four corners turned toward the center. -->
+                                                        <Setter Property="Data" Value="M 3,9 L 9,9 L 9,3 M 21,9 L 15,9 L 15,3 M 15,21 L 15,15 L 21,15 M 3,15 L 9,15 L 9,21" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding SubscriptionsCheckMessage}" Foreground="#8243A0"
-                                               FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding SubscriptionsCheckMessage}" Value="">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding SubscriptionsCheckMessage}" Value="{x:Null}">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                </StackPanel>
-                            <Border Grid.Row="3" Background="#EAE1F1" Height="1"
+                                        </Path.Style>
+                                    </Path>
+                                </Button>
+                            </Grid>
+                            <Border Grid.Row="2" Background="#EAE1F1" Height="1"
                                     Margin="0,0,0,13" />
-                            <DataGrid Grid.Row="4" Height="390"
+                            <DataGrid x:Name="SubscriptionDataGrid" Grid.Row="3" MinHeight="0"
                                       ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                       ItemsSource="{Binding SubscriptionRowsView}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
                                       CanUserAddRows="False" CanUserDeleteRows="False"
@@ -1038,7 +1049,7 @@
                                       BorderBrush="#E6DAF1" BorderThickness="1"
                                       Background="White" AlternatingRowBackground="#FCFAFF"
                                       RowBackground="White" SelectionMode="Single"
-                                      SelectionUnit="FullRow" MinHeight="190">
+                                      SelectionUnit="FullRow">
                                 <DataGrid.ColumnHeaderStyle>
                                     <Style TargetType="DataGridColumnHeader">
                                         <Setter Property="Background" Value="#F8F4FD" />
@@ -1063,15 +1074,30 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTemplateColumn Header="Instagram-профили" Width="22*" MinWidth="190">
+                                    <DataGridTemplateColumn Header="Профиль" Width="22*" MinWidth="190">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel Margin="8,6">
-                                                    <TextBlock Text="{Binding MainProfileLabel}" TextWrapping="Wrap"
-                                                               Foreground="#24154C" />
-                                                    <TextBlock Text="{Binding ActivityProfileLabel}" Margin="0,4,0,0"
-                                                               Foreground="#8A409F" FontSize="11" TextWrapping="Wrap"
-                                                               Visibility="{Binding HasDifferentActivityProfile, Converter={StaticResource BoolVisible}}" />
+                                                    <TextBlock TextWrapping="Wrap" Foreground="#6239A2">
+                                                        <Hyperlink NavigateUri="{Binding ProfileActionUri, Mode=OneWay}"
+                                                                   IsEnabled="{Binding CanOpenProfile}"
+                                                                   RequestNavigate="OpenParticipantProfileLink_OnRequestNavigate"
+                                                                   ToolTip="Открыть профиль в Instagram"
+                                                                   Foreground="#6239A2">
+                                                            <Run Text="{Binding ProfileUserNameLabel, Mode=OneWay}" />
+                                                        </Hyperlink>
+                                                    </TextBlock>
+                                                    <TextBlock Margin="0,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                                               Foreground="#8A409F"
+                                                               Visibility="{Binding HasDifferentActivityProfile, Converter={StaticResource BoolVisible}}">
+                                                        <Run Text="Даёт актив с другой страницы: " />
+                                                        <Hyperlink NavigateUri="{Binding ActivityProfileUri, Mode=OneWay}"
+                                                                   RequestNavigate="OpenParticipantProfileLink_OnRequestNavigate"
+                                                                   ToolTip="Открыть профиль для актива"
+                                                                   Foreground="#8A409F">
+                                                            <Run Text="{Binding ActivityUserNameLabel, Mode=OneWay}" />
+                                                        </Hyperlink>
+                                                    </TextBlock>
                                                 </StackPanel>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
@@ -1141,6 +1167,9 @@
                                                         <Style TargetType="Button" BasedOn="{StaticResource SubscriptionRefreshButton}">
                                                             <Setter Property="IsEnabled" Value="{Binding CanCheckFollowers}" />
                                                             <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding FollowsMeStatus}" Value="NOT_APPLICABLE">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
                                                                 <DataTrigger Binding="{Binding DataContext.CanUseInstagram, RelativeSource={RelativeSource AncestorType=UserControl}}" Value="False">
                                                                     <Setter Property="IsEnabled" Value="False" />
                                                                 </DataTrigger>
@@ -1152,31 +1181,19 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTemplateColumn Header="Действия" Width="Auto" MinWidth="125">
+                                    <DataGridTemplateColumn Header="Обновлено" Width="12*" MinWidth="142">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <StackPanel Margin="7,5">
-                                                    <Button Content="{Binding ProfileActionLabel}"
-                                                            Tag="{Binding ProfileActionUrl}"
-                                                            Click="OpenParticipantActivityProfileButton_OnClick"
-                                                            IsEnabled="{Binding CanOpenProfile}"
-                                                            Style="{StaticResource WorkspaceActionButton}" />
-                                                    <TextBlock Text="{Binding LastCheck}" HorizontalAlignment="Center"
-                                                               Foreground="#827393" FontSize="10" Margin="0,4,0,0" />
-                                                </StackPanel>
+                                                <TextBlock Text="{Binding LastCheck}" Margin="10,6"
+                                                           Foreground="#827393" FontSize="11"
+                                                           VerticalAlignment="Center" TextWrapping="Wrap" />
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
-                            <Border Grid.Row="5" Margin="0,12,0,0" Background="#FAF7FD"
-                                    BorderBrush="#EEE3F5" BorderThickness="1" CornerRadius="9" Padding="12,10">
-                                <TextBlock Foreground="#786B8B" FontSize="11" TextWrapping="Wrap"
-                                           Text="Мою подписку проверяем по странице для подписки, подписку участницы на меня — по странице активности. У VIP и администрации в столбце «Подписана на меня» стоит прочерк. «Нет в поиске» не доказывает отписку." />
-                            </Border>
                         </Grid>
-                        </Border>
-                    </ScrollViewer>
+                    </Border>
                     <Border Grid.Row="1" Style="{StaticResource PanelCard}"
                             Visibility="{Binding IsMyActivityVisible, Converter={StaticResource BoolVisible}}">
                         <StackPanel>

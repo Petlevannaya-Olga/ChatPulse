@@ -1,0 +1,175 @@
+<Window x:Class="ChatPulse.Desktop.Views.Dialogs.SubscriptionInfoDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ChatPulse — Подписки"
+        Width="510" SizeToContent="Height" MaxHeight="600"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner" FontFamily="Segoe UI"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <LinearGradientBrush x:Key="ActionBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#7545F9" Offset="0" />
+            <GradientStop Color="#BB35E8" Offset="0.55" />
+            <GradientStop Color="#FB239D" Offset="1" />
+        </LinearGradientBrush>
+        <Style x:Key="DialogButton" TargetType="Button">
+            <Setter Property="MinWidth" Value="125" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="{StaticResource ActionBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="9">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.88" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid Margin="10">
+        <Border Background="White" CornerRadius="19" Padding="22,18">
+            <Border.Effect>
+                <DropShadowEffect Color="#18083A" BlurRadius="24" ShadowDepth="6" Opacity="0.28" />
+            </Border.Effect>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock x:Name="TitleText" FontSize="20" FontWeight="SemiBold" Foreground="#24154C"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="SubtitleText" Margin="0,3,0,13" FontSize="12"
+                               Foreground="#796C98" TextWrapping="Wrap" />
+                    <TextBlock x:Name="UnavailableText" Foreground="#77648C" FontSize="13"
+                               TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8" />
+
+                    <!-- Read-only details of the last completed Instagram check. -->
+                    <StackPanel x:Name="CheckDetailsPanel" Visibility="Collapsed">
+                        <TextBlock x:Name="CheckDateText" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="#39295F" />
+                        <TextBlock x:Name="CheckCountText" Margin="0,3,0,0" FontSize="12"
+                                   Foreground="#796C98" />
+                        <TextBlock x:Name="CheckDirectionsText" Margin="0,3,0,11" FontSize="12"
+                                   Foreground="#796C98" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="FoundText" FontSize="24" FontWeight="SemiBold"
+                                           Foreground="#248357" />
+                                <TextBlock Text="Найдено" FontSize="12" Foreground="#77648C"
+                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="24,0,0,0">
+                                <TextBlock x:Name="NotFoundText" FontSize="24" FontWeight="SemiBold"
+                                           Foreground="#39295F" />
+                                <TextBlock Text="Не найдено" FontSize="12" Foreground="#77648C"
+                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="24,0,0,0">
+                                <TextBlock x:Name="ErrorsText" FontSize="24" FontWeight="SemiBold"
+                                           Foreground="#39295F" />
+                                <TextBlock Text="С ошибкой" FontSize="12" Foreground="#77648C"
+                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel x:Name="CheckBreakdownPanel" Margin="0,7,0,0" Visibility="Collapsed">
+                            <TextBlock Text="Из них не найдено:" FontSize="12" Foreground="#39295F"
+                                       FontWeight="SemiBold" Margin="0,0,0,6" />
+                            <Grid Width="320" HorizontalAlignment="Left" Margin="0,0,0,5">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Нет в моих подписках" FontSize="12" Foreground="#67547D" />
+                                <TextBlock x:Name="NotFoundFollowingText" Grid.Column="1" FontSize="12"
+                                           FontWeight="SemiBold" Foreground="#39295F" />
+                            </Grid>
+                            <Grid Width="320" HorizontalAlignment="Left">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Нет среди моих подписчиков" FontSize="12" Foreground="#67547D" />
+                                <TextBlock x:Name="NotFoundFollowersText" Grid.Column="1" FontSize="12"
+                                           FontWeight="SemiBold" Foreground="#39295F" />
+                            </Grid>
+                        </StackPanel>
+                        <TextBlock x:Name="LegacyCheckBreakdownText" Margin="0,7,0,0" FontSize="11"
+                                   Foreground="#827393" TextWrapping="Wrap" Visibility="Collapsed"
+                                   Text="Разбивка по направлениям недоступна для этой проверки." />
+                        <TextBlock Text="Отсутствие в поиске Instagram не доказывает отписку."
+                                   FontSize="11" Foreground="#827393" TextWrapping="Wrap" Margin="0,9,0,0" />
+                    </StackPanel>
+
+                    <!-- Read-only details of the current Telegram participant register. -->
+                    <StackPanel x:Name="ListDetailsPanel" Visibility="Collapsed">
+                        <TextBlock Text="Список опубликован" FontSize="12" Foreground="#796C98" />
+                        <TextBlock x:Name="ListSourceText" FontSize="15" FontWeight="SemiBold"
+                                   Foreground="#39295F" Margin="0,3,0,0" />
+                        <TextBlock x:Name="ListMessageIdText" Margin="0,2,0,11" FontSize="11"
+                                   Foreground="#827393" />
+                        <TextBlock Text="Последняя успешная синхронизация" FontSize="12"
+                                   Foreground="#796C98" />
+                        <TextBlock x:Name="LastSyncText" Margin="0,3,0,0" FontSize="14"
+                                   FontWeight="SemiBold" Foreground="#39295F" TextWrapping="Wrap" />
+                        <TextBlock x:Name="LegacySyncHintText" Visibility="Collapsed" Margin="0,3,0,0"
+                                   Text="Время появится после следующей успешной синхронизации."
+                                   FontSize="11" Foreground="#827393" TextWrapping="Wrap" />
+                        <!-- Participant counts on a single line; no nested cards. -->
+                        <StackPanel Orientation="Horizontal" Margin="0,14,0,5" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,21,0">
+                                <TextBlock x:Name="ListTotalText" FontSize="23" FontWeight="SemiBold"
+                                           Foreground="#24154C" VerticalAlignment="Center" />
+                                <TextBlock Text="Всего" FontSize="12" Foreground="#796C98"
+                                           VerticalAlignment="Center" Margin="6,2,0,0" />
+                            </StackPanel>
+                            <StackPanel x:Name="CategoryCountsPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0">
+                                    <Path Width="17" Height="17" Stretch="Uniform" Fill="Transparent"
+                                          Stroke="#A24BA4" StrokeThickness="1.8" StrokeLineJoin="Round"
+                                          VerticalAlignment="Center"
+                                          Data="M 12,2 L 20,5 V 11 C 20,16 16.5,20 12,22 C 7.5,20 4,16 4,11 V 5 Z" />
+                                    <TextBlock x:Name="AdminCountText" FontSize="19" FontWeight="SemiBold"
+                                               Foreground="#6D38A9" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                    <TextBlock Text="Админы" FontSize="11" Foreground="#827393"
+                                               VerticalAlignment="Center" Margin="5,2,0,0" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0">
+                                    <Path Width="17" Height="17" Stretch="Uniform" Fill="Transparent"
+                                          Stroke="#BA4F99" StrokeThickness="1.8" StrokeLineJoin="Round"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          VerticalAlignment="Center"
+                                          Data="M 2,7 L 7,12 L 12,5 L 17,12 L 22,7 L 20,19 H 4 Z M 4,22 H 20" />
+                                    <TextBlock x:Name="VipCountText" FontSize="19" FontWeight="SemiBold"
+                                               Foreground="#6D38A9" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                    <TextBlock Text="VIP" FontSize="11" Foreground="#827393"
+                                               VerticalAlignment="Center" Margin="5,2,0,0" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Path Width="17" Height="17" Stretch="Uniform" Fill="Transparent"
+                                          Stroke="#8650C5" StrokeThickness="1.8" StrokeLineJoin="Round"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          VerticalAlignment="Center"
+                                          Data="M 12,4 A 4,4 0 1 1 11.99,4 M 4,21 C 4,17 7,15 12,15 C 17,15 20,17 20,21" />
+                                    <TextBlock x:Name="RegularCountText" FontSize="19" FontWeight="SemiBold"
+                                               Foreground="#6D38A9" VerticalAlignment="Center" Margin="5,0,0,0" />
+                                    <TextBlock Text="Обычные" FontSize="11" Foreground="#827393"
+                                               VerticalAlignment="Center" Margin="5,2,0,0" />
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                    <Button Content="Закрыть" HorizontalAlignment="Right" Margin="0,16,0,0"
+                            Style="{StaticResource DialogButton}" Click="CloseButton_OnClick" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>

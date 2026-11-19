@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 
 namespace ChatPulse.Desktop.Services;
 
@@ -12,6 +12,11 @@ public sealed record InstagramSubscriptionRow(
     string FollowsMeStatus, string IFollowStatus, string LastCheck)
 {
     public bool HasActivityProfile => !string.IsNullOrWhiteSpace(ActivityUserName);
+    /// <summary>Главный Instagram-профиль, на который нужно подписаться.</summary>
+    public string ProfileUserNameLabel => !string.IsNullOrWhiteSpace(SubscriptionUserName)
+        ? $"@{SubscriptionUserName}"
+        : HasActivityProfile ? $"@{ActivityUserName}" : "—";
+    public string ActivityUserNameLabel => $"@{ActivityUserName}";
     public bool HasDifferentActivityProfile => HasActivityProfile &&
         !string.IsNullOrWhiteSpace(SubscriptionUserName) &&
         !string.Equals(SubscriptionUserName, ActivityUserName, StringComparison.OrdinalIgnoreCase);
@@ -28,7 +33,10 @@ public sealed record InstagramSubscriptionRow(
     public bool IsUnverified => (FollowsMeStatus != "NOT_APPLICABLE" &&
                                 FollowsMeStatus is not ("FOUND" or "NOT_FOUND")) ||
                                 IFollowStatus is not ("FOUND" or "NOT_FOUND");
-    public bool CanOpenProfile => !string.IsNullOrWhiteSpace(ProfileActionUrl);
+    public bool CanOpenProfile => ProfileActionUri is not null;
+    public Uri? ProfileActionUri => TryGetInstagramUri(ProfileActionUrl);
+    public Uri? ActivityProfileUri => HasDifferentActivityProfile
+        ? TryGetInstagramUri(ActivityProfileUrl) : null;
     public bool CanCheckFollowing => !string.IsNullOrWhiteSpace(SubscriptionUserName);
     public bool CanCheckFollowers => HasActivityProfile && FollowsMeStatus != "NOT_APPLICABLE";
     // A missing "I follow her" result must lead to the account to follow, not the activity account.
@@ -37,10 +45,14 @@ public sealed record InstagramSubscriptionRow(
         : HasActivityProfile ? ActivityProfileUrl : string.Empty;
     public string ProfileActionLabel => IFollowStatus == "NOT_FOUND" ? "Открыть профиль" : "Instagram";
 
+    private static Uri? TryGetInstagramUri(string profileUrl) =>
+        InstagramActivityProfile.TryGetUserName(profileUrl) is not null &&
+        Uri.TryCreate(profileUrl, UriKind.Absolute, out var uri) ? uri : null;
+
     private static string Describe(string status) => status switch
     {
         "FOUND" => "Да",
-        "NOT_FOUND" => "Нет в поиске",
+        "NOT_FOUND" => "Нет",
         "INCONCLUSIVE" => "Ошибка проверки",
         "NOT_APPLICABLE" => "—",
         _ => "Не проверено"
@@ -79,7 +91,7 @@ public static class InstagramSubscriptionPresentation
                 .FirstOrDefault();
             var lastCheck = DateTimeOffset.TryParse(checkedAt, CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var parsed)
-                ? parsed.ToLocalTime().ToString("dd.MM HH:mm", CultureInfo.GetCultureInfo("ru-RU"))
+                ? parsed.ToLocalTime().ToString("dd.MM.yyyy HH:mm", CultureInfo.GetCultureInfo("ru-RU"))
                 : "—";
             results.Add(new InstagramSubscriptionRow(
                 participant.ParticipantId,
@@ -91,7 +103,10 @@ public static class InstagramSubscriptionPresentation
                     followers?.Status ?? "UNVERIFIED",
                 following?.Status ?? "UNVERIFIED", lastCheck));
         }
-        return results;
+        // Keep the order from the Telegram list within each category.
+        // OrderBy is stable: administration first, then VIP, then regular participants.
+        return results.OrderBy(row => InstagramParticipantCategoryCounts.GetDisplayPriority(row.Category))
+            .ToArray();
     }
 }
 
@@ -101,6 +116,16 @@ public sealed record InstagramParticipantCategoryCounts(int Administration, int 
 {
     public int Total => Administration + Vip + Regular;
 
+    // Use the same category classification for counts and the display order.
+    internal static int GetDisplayPriority(string? category) =>
+        IsAdministration(category) ? 0 : IsVip(category) ? 1 : 2;
+
+    /// <summary>Headcount in the Telegram register, including the owner's accounts.</summary>
+    public static InstagramParticipantCategoryCounts FromRegister(
+        IEnumerable<InstagramParticipantOption> participants) =>
+        FromCategories(participants.Select(participant => participant.Category));
+
+    /// <summary>Headcount eligible for display/checks after own accounts are excluded.</summary>
     public static InstagramParticipantCategoryCounts FromParticipants(
         IEnumerable<InstagramParticipantOption> participants, IReadOnlySet<string> ownUserNames) =>
         FromCategories(participants

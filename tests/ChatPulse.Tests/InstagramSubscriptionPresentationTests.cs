@@ -25,7 +25,32 @@ public sealed class InstagramSubscriptionPresentationTests
         Assert.Contains(rows, row => row.Category == "VIP");
         Assert.Contains(rows, row => row.Category == "Администратор");
         Assert.Contains(rows, row => row.ActivityUserName == "normal");
-        Assert.Contains(rows, row => row.DisplayName == "Missing" && !row.CanOpenProfile);
+        Assert.Contains(rows, row => row.DisplayName == "Missing" && row.CanOpenProfile &&
+            row.ProfileUserNameLabel == "@only.sub");
+    }
+
+    [Fact]
+    public void SortsAdministrationThenVipThenRegularAndKeepsOriginalOrderWithinGroups()
+    {
+        var participants = new[]
+        {
+            Make(1, "regular.first", "Обычный"),
+            Make(2, "vip.first", "VIP basic lite"),
+            Make(3, "admin.first", "Модератор 14 чата"),
+            Make(4, "regular.second", "Обычный"),
+            Make(5, "admin.second", "Директор чатов"),
+            Make(6, "vip.second", "ВИП"),
+            Make(7, "admin.third", "Основатель"),
+            Make(8, "admin.fourth", "Администратор")
+        };
+
+        var rows = InstagramSubscriptionPresentation.Build(participants, [],
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.Equal(new long[] { 3, 5, 7, 8, 2, 6, 1, 4 },
+            rows.Select(row => row.ParticipantId));
+        Assert.Equal(new InstagramParticipantCategoryCounts(4, 2, 2),
+            InstagramParticipantCategoryCounts.FromRows(rows));
     }
 
     [Fact]
@@ -51,6 +76,39 @@ public sealed class InstagramSubscriptionPresentationTests
         Assert.False(row.HasDiscrepancy);
         Assert.Equal("https://www.instagram.com/maria.blog/", row.ProfileActionUrl);
         Assert.Equal("https://www.instagram.com/maria.active/", row.ActivityProfileUrl);
+    }
+
+    [Fact]
+    public void ProfileColumnUsesSubscriptionLinkAndActivityAccountOnSecondLine()
+    {
+        var participant = new InstagramParticipantOption(1, "Мария", "https://www.instagram.com/maria.active/",
+            "maria.active", "Обычный", "https://www.instagram.com/maria.blog/", "Мария");
+        var checks = new[]
+        {
+            new InstagramSavedCheck("maria.blog", "following", "FOUND", "2026-11-18T10:01:00Z")
+        };
+        var row = Assert.Single(InstagramSubscriptionPresentation.Build([participant], checks,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+
+        Assert.Equal("@maria.blog", row.ProfileUserNameLabel);
+        Assert.Equal("https://www.instagram.com/maria.blog/", row.ProfileActionUrl);
+        Assert.Equal(new Uri(row.ProfileActionUrl), row.ProfileActionUri);
+        Assert.True(row.HasDifferentActivityProfile);
+        Assert.Equal("@maria.active", row.ActivityUserNameLabel);
+        Assert.Equal("https://www.instagram.com/maria.active/", row.ActivityProfileUrl);
+        Assert.Equal(new Uri(row.ActivityProfileUrl), row.ActivityProfileUri);
+        Assert.Matches(@"^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$", row.LastCheck);
+    }
+
+    [Fact]
+    public void SingleProfileUsesActivityAccountAndHasNoSecondaryLink()
+    {
+        var participant = Make(1, "single.profile", "Обычный");
+        var row = Assert.Single(InstagramSubscriptionPresentation.Build([participant], [],
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
+        Assert.Equal("@single.profile", row.ProfileUserNameLabel);
+        Assert.False(row.HasDifferentActivityProfile);
+        Assert.Equal("—", row.LastCheck);
     }
 
     [Fact]
@@ -120,7 +178,7 @@ public sealed class InstagramSubscriptionPresentationTests
             new HashSet<string>(StringComparer.OrdinalIgnoreCase), crossChatVip));
 
         Assert.Equal("—", row.FollowsMeLabel);
-        Assert.Equal("Нет в поиске", row.IFollowLabel);
+        Assert.Equal("Нет", row.IFollowLabel);
         Assert.True(row.HasDiscrepancy);
     }
 

@@ -5,11 +5,16 @@ using Microsoft.Data.Sqlite;
 
 namespace ChatPulse.Desktop.Services;
 
-public sealed record ParticipantListSourceInfo(long MessageId, DateTime? SentAtUtc)
+public sealed record ParticipantListSourceInfo(long MessageId, DateTime? SentAtUtc,
+    DateTime? LastSuccessfulSyncAtUtc = null)
 {
     public string DateLabel => SentAtUtc is { } date
         ? date.ToLocalTime().ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)
         : "Дата списка неизвестна";
+
+    public string LastSuccessfulSyncLabel => LastSuccessfulSyncAtUtc is { } date
+        ? date.ToLocalTime().ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)
+        : "Дата синхронизации неизвестна";
 }
 
 public enum ParticipantListApplyStatus
@@ -18,7 +23,8 @@ public enum ParticipantListApplyStatus
     APPLIED,
     ALREADY_CURRENT,
     OLDER_MESSAGE,
-    AMBIGUOUS_MATCH
+    AMBIGUOUS_MATCH,
+    PROFILE_CHECK_INCONCLUSIVE
 }
 
 public sealed record ParticipantListApplyResult(int AppliedCount, ParticipantListApplyStatus Status);
@@ -44,15 +50,26 @@ public sealed class ChatParticipantRegistry(string databasePath)
     /// </summary>
     public async Task<ParticipantListApplyResult> UpdateDetailedAsync(ConfiguredChat chat,
         IEnumerable<(long MessageId, string? Text, DateTime? SentAtUtc)> messages,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Func<string, bool?>? profileOpens = null)
     {
+        var profileCheckFailed = false;
         var snapshots = messages.OrderBy(item => item.MessageId).Select(item =>
         {
-            var valid = ParticipantListParser.TryParse(item.Text, out var parsed);
+            var valid = ParticipantListParser.TryParse(item.Text, out var parsed, profileOpens);
+            if (valid && parsed is not null && parsed.Participants.Any(participant =>
+                    participant.ProfileRequiresVerification))
+            {
+                profileCheckFailed = true;
+                valid = false;
+            }
+            else if (!valid && profileOpens is not null && ParticipantListParser.TryParse(item.Text, out _))
+                profileCheckFailed = true;
             return (item.MessageId, item.SentAtUtc, Valid: valid, Parsed: parsed);
         }).Where(item => item.Valid && item.Parsed is not null).ToArray();
         if (snapshots.Length == 0)
-            return new ParticipantListApplyResult(0, ParticipantListApplyStatus.NO_VALID_LIST);
+            return new ParticipantListApplyResult(0, profileCheckFailed
+                ? ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE
+                : ParticipantListApplyStatus.NO_VALID_LIST);
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -65,6 +82,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL, PeerId INTEGER NOT NULL,
                 SourceMessageId INTEGER NOT NULL,
                 SourceSentAtUnixSeconds INTEGER,
+                LastSuccessfulSyncAtUnixSeconds INTEGER,
                 PRIMARY KEY (TelegramUserId, PeerType, PeerId)
             );
             CREATE TABLE IF NOT EXISTS ChatParticipants (
@@ -83,16 +101,27 @@ public sealed class ChatParticipantRegistry(string databasePath)
         var schema = connection.CreateCommand();
         schema.CommandText = "PRAGMA table_info(ChatParticipantRegistryVersions)";
         var hasTimestamp = false;
+        var hasLastSuccessfulSync = false;
         await using (var columns = await schema.ExecuteReaderAsync(cancellationToken))
         {
             while (await columns.ReadAsync(cancellationToken))
+            {
                 if (string.Equals(columns.GetString(1), "SourceSentAtUnixSeconds", StringComparison.Ordinal))
                     hasTimestamp = true;
+                if (string.Equals(columns.GetString(1), "LastSuccessfulSyncAtUnixSeconds", StringComparison.Ordinal))
+                    hasLastSuccessfulSync = true;
+            }
         }
         if (!hasTimestamp)
         {
             var migration = connection.CreateCommand();
             migration.CommandText = "ALTER TABLE ChatParticipantRegistryVersions ADD COLUMN SourceSentAtUnixSeconds INTEGER";
+            await migration.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (!hasLastSuccessfulSync)
+        {
+            var migration = connection.CreateCommand();
+            migration.CommandText = "ALTER TABLE ChatParticipantRegistryVersions ADD COLUMN LastSuccessfulSyncAtUnixSeconds INTEGER";
             await migration.ExecuteNonQueryAsync(cancellationToken);
         }
         var applied = 0;
@@ -140,20 +169,20 @@ public sealed class ChatParticipantRegistry(string databasePath)
             if (prior is not null && Convert.ToInt64(prior) == snapshot.MessageId &&
                 SnapshotMatchesCurrent(snapshot.Parsed!.Participants, known))
             {
-                if (snapshot.SentAtUtc is { } existingSentAt)
-                {
-                    var backfill = connection.CreateCommand();
-                    backfill.Transaction = transaction;
-                    backfill.CommandText = """
-                        UPDATE ChatParticipantRegistryVersions
-                        SET SourceSentAtUnixSeconds=$sentAt
-                        WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
-                        """;
-                    AddChatParameters(backfill, chat);
-                    backfill.Parameters.AddWithValue("$sentAt",
-                        new DateTimeOffset(existingSentAt.ToUniversalTime()).ToUnixTimeSeconds());
-                    await backfill.ExecuteNonQueryAsync(cancellationToken);
-                }
+                var markSynced = connection.CreateCommand();
+                markSynced.Transaction = transaction;
+                markSynced.CommandText = """
+                    UPDATE ChatParticipantRegistryVersions
+                    SET LastSuccessfulSyncAtUnixSeconds=$synced,
+                        SourceSentAtUnixSeconds=COALESCE($sentAt, SourceSentAtUnixSeconds)
+                    WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+                    """;
+                AddChatParameters(markSynced, chat);
+                markSynced.Parameters.AddWithValue("$synced", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                markSynced.Parameters.AddWithValue("$sentAt", snapshot.SentAtUtc is { } existingSentAt
+                    ? (object)new DateTimeOffset(existingSentAt.ToUniversalTime()).ToUnixTimeSeconds()
+                    : DBNull.Value);
+                await markSynced.ExecuteNonQueryAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 status = ParticipantListApplyStatus.ALREADY_CURRENT;
                 continue;
@@ -226,10 +255,12 @@ public sealed class ChatParticipantRegistry(string databasePath)
             saveVersion.Transaction = transaction;
             saveVersion.CommandText = """
                 INSERT INTO ChatParticipantRegistryVersions
-                    (TelegramUserId, PeerType, PeerId, SourceMessageId, SourceSentAtUnixSeconds)
-                VALUES ($owner, $type, $peer, $source, $sentAt)
+                    (TelegramUserId, PeerType, PeerId, SourceMessageId, SourceSentAtUnixSeconds,
+                     LastSuccessfulSyncAtUnixSeconds)
+                VALUES ($owner, $type, $peer, $source, $sentAt, $synced)
                 ON CONFLICT(TelegramUserId, PeerType, PeerId)
                 DO UPDATE SET SourceMessageId=excluded.SourceMessageId,
+                    LastSuccessfulSyncAtUnixSeconds=excluded.LastSuccessfulSyncAtUnixSeconds,
                     SourceSentAtUnixSeconds=CASE
                         WHEN excluded.SourceSentAtUnixSeconds IS NOT NULL THEN excluded.SourceSentAtUnixSeconds
                         WHEN ChatParticipantRegistryVersions.SourceMessageId=excluded.SourceMessageId
@@ -239,6 +270,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 """;
             AddChatParameters(saveVersion, chat);
             saveVersion.Parameters.AddWithValue("$source", snapshot.MessageId);
+            saveVersion.Parameters.AddWithValue("$synced", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             saveVersion.Parameters.AddWithValue("$sentAt", snapshot.SentAtUtc is { } sentAt
                 ? (object)new DateTimeOffset(sentAt.ToUniversalTime()).ToUnixTimeSeconds()
                 : DBNull.Value);
@@ -290,15 +322,21 @@ public sealed class ChatParticipantRegistry(string databasePath)
         var schema = connection.CreateCommand();
         schema.CommandText = "PRAGMA table_info(ChatParticipantRegistryVersions)";
         var hasTimestamp = false;
+        var hasLastSuccessfulSync = false;
         await using (var columns = await schema.ExecuteReaderAsync(cancellationToken))
         {
             while (await columns.ReadAsync(cancellationToken))
+            {
                 if (string.Equals(columns.GetString(1), "SourceSentAtUnixSeconds", StringComparison.Ordinal))
                     hasTimestamp = true;
+                if (string.Equals(columns.GetString(1), "LastSuccessfulSyncAtUnixSeconds", StringComparison.Ordinal))
+                    hasLastSuccessfulSync = true;
+            }
         }
         var query = connection.CreateCommand();
         query.CommandText = $"""
-            SELECT SourceMessageId, {(hasTimestamp ? "SourceSentAtUnixSeconds" : "NULL")}
+            SELECT SourceMessageId, {(hasTimestamp ? "SourceSentAtUnixSeconds" : "NULL")},
+                   {(hasLastSuccessfulSync ? "LastSuccessfulSyncAtUnixSeconds" : "NULL")}
             FROM ChatParticipantRegistryVersions
             WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
             """;
@@ -307,7 +345,9 @@ public sealed class ChatParticipantRegistry(string databasePath)
         if (!await reader.ReadAsync(cancellationToken)) return null;
         var time = reader.IsDBNull(1) ? (DateTime?)null
             : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).UtcDateTime;
-        return new ParticipantListSourceInfo(reader.GetInt64(0), time);
+        var synced = reader.IsDBNull(2) ? (DateTime?)null
+            : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(2)).UtcDateTime;
+        return new ParticipantListSourceInfo(reader.GetInt64(0), time, synced);
     }
 
     private static void AddChatParameters(SqliteCommand command, ConfiguredChat chat)

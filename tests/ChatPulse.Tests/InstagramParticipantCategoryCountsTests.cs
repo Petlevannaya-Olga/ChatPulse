@@ -1,4 +1,4 @@
-using ChatPulse.Desktop.Services;
+﻿using ChatPulse.Desktop.Services;
 using Xunit;
 
 namespace ChatPulse.Tests;
@@ -34,6 +34,18 @@ public sealed class InstagramParticipantCategoryCountsTests
         var rows = InstagramSubscriptionPresentation.Build(participants, [], own);
         Assert.Equal(counts, InstagramParticipantCategoryCounts.FromRows(rows));
         Assert.Equal(rows.Count, counts.Total);
+    }
+
+    [Fact]
+    public void FullRegisterCountsThirtyRegularEvenWhenOwnProfileIsExcludedFromChecking()
+    {
+        var participants = Enumerable.Range(1, 30).Select(number =>
+            Make(number, number == 30 ? "own_profile" : $"regular_{number}", "Обычный")).ToArray();
+        var own = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "own_profile" };
+
+        Assert.Equal(30, InstagramParticipantCategoryCounts.FromRegister(participants).Regular);
+        Assert.Equal(29, InstagramParticipantCategoryCounts.FromParticipants(participants, own).Regular);
+        Assert.Equal(29, InstagramSubscriptionPresentation.Build(participants, [], own).Count);
     }
 
     [Fact]

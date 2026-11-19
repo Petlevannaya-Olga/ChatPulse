@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.IO;
 using System.Diagnostics;
 using ChatPulse.Desktop.Settings;
@@ -50,6 +50,52 @@ public sealed class InstagramBrowserService : IDisposable
             }, cancellationToken);
         }
         catch (WebDriverException) { return false; }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Confirms whether the exact Instagram profile page is available. Returns null
+    /// when Instagram does not provide reliable evidence (login, restriction, timeout).
+    /// A successful browser navigation by itself does not prove that a profile exists.
+    /// </summary>
+    public async Task<bool?> ProfileOpensAsync(string profileUrl,
+        CancellationToken cancellationToken = default)
+    {
+        var userName = InstagramActivityProfile.TryGetUserName(profileUrl)
+            ?? throw new ArgumentException("Нужна корректная ссылка Instagram-профиля.", nameof(profileUrl));
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    var driver = GetDriver();
+                    driver.Navigate().GoToUrl($"https://www.instagram.com/{userName}/");
+                    if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null) return (bool?)null;
+                    var watch = Stopwatch.StartNew();
+                    while (watch.Elapsed < TimeSpan.FromSeconds(10))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var currentUrl = driver.Url;
+                        var text = driver.FindElement(By.TagName("body")).Text;
+                        if (InstagramProfilePageEvidence.IsExplicitlyUnavailable(text)) return false;
+                        if (InstagramProfilePageEvidence.HasMatchingProfileHeading(userName, currentUrl,
+                                driver.FindElements(By.CssSelector(
+                                    "main header h1, main header h2, main header h3, " +
+                                    "main header [role='heading'], main header span"))
+                                    .Where(element => element.Displayed).Select(element => element.Text)))
+                            return true;
+                        WaitWithCancellation(350, cancellationToken);
+                    }
+                    return (bool?)null;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (WebDriverException) { return (bool?)null; }
+                catch (InvalidOperationException) { return (bool?)null; }
+            }, cancellationToken);
+        }
         finally { _gate.Release(); }
     }
 

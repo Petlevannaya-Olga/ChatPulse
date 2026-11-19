@@ -7,6 +7,8 @@ using System.Windows.Data;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Navigation;
+using System.Windows.Threading;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Views.Dialogs;
 using ChatPulse.Desktop.Settings;
@@ -40,6 +42,15 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _reactionRefreshMessage = string.Empty;
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
+    private bool _isSubscriptionTableExpanded;
+    private static readonly string[] SubscriptionColumnKeys =
+        ["participant", "profile", "i-follow", "follows-me", "updated"];
+    private readonly DispatcherTimer _subscriptionColumnSaveTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(450)
+    };
+    private bool _subscriptionColumnsRestored;
+    private bool _restoringSubscriptionColumnWidths;
 
     private enum TaskFilter { Pending, Completed, Skipped }
 
@@ -56,12 +67,18 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _participantListMessageDateLabel = string.Empty;
     private string _subscriptionsCheckMessage = string.Empty;
     private InstagramBatchResultSummary? _latestSubscriptionBatch;
+    private ParticipantListSourceInfo? _latestParticipantListSource;
     private int _loadVersion;
     private int _totalDetected;
 
     public WorkspaceView()
     {
         InitializeComponent();
+        _subscriptionColumnSaveTimer.Tick += SubscriptionColumnSaveTimer_OnTick;
+        var widthDescriptor = DependencyPropertyDescriptor.FromProperty(
+            DataGridColumn.WidthProperty, typeof(DataGridColumn));
+        foreach (var column in SubscriptionDataGrid.Columns)
+            widthDescriptor?.AddValueChanged(column, SubscriptionColumnWidth_OnChanged);
         _subscriptionRowsView = CollectionViewSource.GetDefaultView(SubscriptionRows);
         _subscriptionRowsView.Filter = FilterSubscriptionRow;
         DataContext = this;
@@ -88,7 +105,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             _selectedChat = value;
             // A previously started load must never publish rows for another chat.
             _subscriptionRowsLoadVersion++;
-            ParticipantListMessageDateLabel = string.Empty;
+            SetLatestParticipantListSource(null);
             Notify();
             Notify(nameof(SelectedChatTitle));
             Notify(nameof(SelectedChatNetwork));
@@ -196,14 +213,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var request = ++_subscriptionTileLoadVersion;
         try
         {
-            var settings = await _settings.LoadAsync();
             var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
             var participants = await lookup.ReadAllCurrentAsync([chat.Chat]);
-            var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
-                .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
-            var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
+            // The participant-list tile shows the full Telegram register. Own accounts
+            // are excluded from subscription checks, but remain part of its headcount.
             if (request == _subscriptionTileLoadVersion && ReferenceEquals(chat, SelectedChat))
-                SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromParticipants(participants, ownNames));
+                SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromRegister(participants));
         }
         catch (Exception)
         {
@@ -262,10 +277,35 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             _latestSubscriptionBatch = value;
             Notify();
             Notify(nameof(HasLatestSubscriptionBatch));
+            Notify(nameof(LatestCheckDateLabel));
+            Notify(nameof(LatestCheckCountsLabel));
         }
     }
 
     public bool HasLatestSubscriptionBatch => LatestSubscriptionBatch is not null;
+
+    public string LatestCheckDateLabel => LatestSubscriptionBatch is { } summary
+        ? $"Последняя успешная: {summary.FinishedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm}"
+        : "Успешных проверок ещё нет";
+
+    public string LatestCheckCountsLabel => LatestSubscriptionBatch is { } summary
+        ? $"Найдено: {summary.Found} · Не найдено: {summary.NotFound} · Ошибок: {summary.Errors}"
+        : "Нажмите для просмотра подробностей";
+
+    public string ParticipantLastSyncLabel => _latestParticipantListSource is { LastSuccessfulSyncAtUtc: { } synced }
+        ? $"Синхронизация: {synced.ToLocalTime():dd.MM.yyyy HH:mm}"
+        : "Дата синхронизации неизвестна";
+
+    private void SetLatestParticipantListSource(ParticipantListSourceInfo? source)
+    {
+        _latestParticipantListSource = source;
+        ParticipantListMessageDateLabel = source is null
+            ? "Список ещё не загружен"
+            : source.SentAtUtc is null
+                ? "Дата списка неизвестна"
+                : $"Список от {source.DateLabel}";
+        Notify(nameof(ParticipantLastSyncLabel));
+    }
 
     public bool ShowOnlySubscriptionDiscrepancies
     {
@@ -355,7 +395,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         if (_settings is null || _reader is null || currentChat is null)
         {
             LatestSubscriptionBatch = null;
-            ParticipantListMessageDateLabel = string.Empty;
+            SetLatestParticipantListSource(null);
             SubscriptionRows.Clear();
             _subscriptionRowsView.Refresh();
             SubscriptionsSummary = "Выберите Instagram-чат для просмотра участниц.";
@@ -413,14 +453,18 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 SubscriptionRows.Add(row);
             _subscriptionRowsView.Refresh();
             LatestSubscriptionBatch = latestBatch;
-            ParticipantListMessageDateLabel = source is null
-                ? "Список ещё не загружен"
-                : source.SentAtUtc is null
-                    ? "Дата списка неизвестна"
-                    : $"Список от {source.DateLabel}";
-            SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromRows(SubscriptionRows));
+            SetLatestParticipantListSource(source);
+            // The headline counts everyone in the source register; the rows/checks
+            // intentionally omit the owner's Instagram identities.
+            var registerCounts = InstagramParticipantCategoryCounts.FromRegister(participants);
+            SetSubscriptionTileCounts(registerCounts);
+            var excludedOwn = participants.Count - SubscriptionRows.Count;
             var discrepancies = SubscriptionRows.Count(row => row.HasDiscrepancy);
-            SubscriptionsSummary = $"Участниц: {SubscriptionRows.Count}. Расхождений по результатам поиска: " +
+            var ownAccountNote = excludedOwn > 0
+                ? $" Собственных аккаунтов исключено из проверки: {excludedOwn}."
+                : string.Empty;
+            SubscriptionsSummary = $"В списке: {registerCounts.Total}. Для проверки: {SubscriptionRows.Count}." +
+                                   ownAccountNote + " Расхождений по результатам поиска: " +
                                    $"{discrepancies}. Для VIP и администрации проверяем только мои подписки.";
             if (SubscriptionsSyncMessage.StartsWith("Не удалось загрузить список участниц:",
                     StringComparison.Ordinal) ||
@@ -447,12 +491,13 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                row.SubscriptionUserName.Contains(query.TrimStart('@'), StringComparison.OrdinalIgnoreCase);
     }
 
-    private void OpenParticipantActivityProfileButton_OnClick(object sender, RoutedEventArgs args)
+    private void OpenParticipantProfileLink_OnRequestNavigate(object sender, RequestNavigateEventArgs args)
     {
-        if (sender is not Button { Tag: string profileUrl } ||
-            InstagramActivityProfile.TryGetUserName(profileUrl) is null ||
-            !Uri.TryCreate(profileUrl, UriKind.Absolute, out var uri)) return;
-        try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
+        args.Handled = true;
+        if (args.Uri is not { IsAbsoluteUri: true } uri) return;
+        var profileUrl = uri.AbsoluteUri;
+        if (InstagramActivityProfile.TryGetUserName(profileUrl) is null) return;
+        try { Process.Start(new ProcessStartInfo(profileUrl) { UseShellExecute = true }); }
         catch (Exception)
         {
             MessageBox.Show("Не удалось открыть Instagram-профиль.", "ChatPulse",
@@ -678,16 +723,21 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                                 }
                             }));
                         });
-                    success = result.StopReason is null && completed == total;
+                    // A search with INCONCLUSIVE is not a successful check. Never
+                    // replace the previous published snapshot with partial/failed results.
+                    success = result.StopReason is null && completed == total && inconclusive == 0;
                     runOutcome = success ? InstagramBatchOutcome.COMPLETED :
                         cancellationToken.IsCancellationRequested ? InstagramBatchOutcome.STOPPED :
                         InstagramBatchOutcome.FAILED;
-                    if (!success) failureReason = result.StopReason ?? "Не все поиски выполнены.";
+                    if (!success)
+                        failureReason = result.StopReason ?? (inconclusive > 0
+                            ? $"Не удалось выполнить {inconclusive} поисковых проверок."
+                            : "Не все поиски выполнены.");
                     summary = success
                         ? $"Проверка завершена: {completed} из {total} поисков. " +
                           $"Найдено: {found}; не найдено: {notFound}; с ошибкой: {inconclusive}."
-                        : $"Проверка прервана: {result.StopReason ?? "не все поиски выполнены"}. " +
-                          $"Выполнено {completed} из {total} поисков. Предыдущие результаты не изменены.";
+                        : $"Проверка не сохранена: {failureReason} " +
+                          $"Выполнено {completed} из {total} поисков. Предыдущие успешные результаты не изменены.";
                     if (!success) model.InterruptActive();
                 }
 
@@ -1064,6 +1114,71 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public bool IsSubscriptionsVisible => _chatPage == ChatPage.Subscriptions;
     public bool IsMyActivityVisible => _chatPage == ChatPage.MyActivity;
     public bool IsSidebarExpanded => _isSidebarExpanded;
+    public bool IsSubscriptionTableExpanded => _isSubscriptionTableExpanded;
+    public string SubscriptionTableExpandLabel => _isSubscriptionTableExpanded ? "Свернуть" : "Развернуть";
+
+    private void SetSubscriptionTableExpanded(bool expanded)
+    {
+        if (_isSubscriptionTableExpanded == expanded) return;
+        _isSubscriptionTableExpanded = expanded;
+        Notify(nameof(IsSubscriptionTableExpanded));
+        Notify(nameof(SubscriptionTableExpandLabel));
+    }
+
+    private void ToggleSubscriptionTableExpansionButton_OnClick(object sender, RoutedEventArgs args)
+        => SetSubscriptionTableExpanded(!_isSubscriptionTableExpanded);
+
+    private void RestoreSubscriptionColumnWidths(AppSettings settings)
+    {
+        if (_subscriptionColumnsRestored) return;
+        _restoringSubscriptionColumnWidths = true;
+        try
+        {
+            var widths = settings.SubscriptionColumnWidths;
+            for (var index = 0; index < SubscriptionDataGrid.Columns.Count &&
+                                index < SubscriptionColumnKeys.Length; index++)
+            {
+                var column = SubscriptionDataGrid.Columns[index];
+                if (widths is not null && widths.TryGetValue(SubscriptionColumnKeys[index], out var width) &&
+                    double.IsFinite(width) && width >= column.MinWidth && width <= 4000)
+                    column.Width = new DataGridLength(width, DataGridLengthUnitType.Pixel);
+            }
+            _subscriptionColumnsRestored = true;
+        }
+        finally
+        {
+            _restoringSubscriptionColumnWidths = false;
+        }
+    }
+
+    private void SubscriptionColumnWidth_OnChanged(object? sender, EventArgs args)
+    {
+        if (!_subscriptionColumnsRestored || _restoringSubscriptionColumnWidths || _settings is null)
+            return;
+        _subscriptionColumnSaveTimer.Stop();
+        _subscriptionColumnSaveTimer.Start();
+    }
+
+    private async void SubscriptionColumnSaveTimer_OnTick(object? sender, EventArgs args)
+    {
+        _subscriptionColumnSaveTimer.Stop();
+        if (!_subscriptionColumnsRestored || _settings is null) return;
+        var widths = new Dictionary<string, double>(StringComparer.Ordinal);
+        for (var index = 0; index < SubscriptionDataGrid.Columns.Count &&
+                            index < SubscriptionColumnKeys.Length; index++)
+        {
+            var column = SubscriptionDataGrid.Columns[index];
+            var width = column.ActualWidth;
+            if (double.IsFinite(width) && width >= column.MinWidth && width <= 4000)
+                widths[SubscriptionColumnKeys[index]] = Math.Round(width, 1);
+        }
+        if (widths.Count != SubscriptionColumnKeys.Length) return;
+        try { await _settings.SaveSubscriptionColumnWidthsAsync(widths); }
+        catch (Exception)
+        {
+            // Settings changes must not interrupt subscription checks or table interaction.
+        }
+    }
 
     public void Initialize(ISettingsService settings, WorkspaceTaskReader reader,
         ChatSynchronizationService synchronization)
@@ -1092,6 +1207,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         {
             var settings = await _settings!.LoadAsync();
             if (version != _loadVersion) return;
+            RestoreSubscriptionColumnWidths(settings);
 
             _isRebuildingChatList = true;
             try
@@ -1199,10 +1315,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private void ShowChat()
     {
         if (SelectedChat is null) return;
+        SetSubscriptionTableExpanded(false);
         _subscriptionRowsLoadVersion++;
         _chatPage = ChatPage.Tasks;
         SubscriptionRows.Clear();
         LatestSubscriptionBatch = null;
+        SetLatestParticipantListSource(null);
         SubscriptionsSyncMessage = string.Empty;
         SetSubscriptionTileCounts(null);
         _taskFilter = TaskFilter.Pending;
@@ -1237,12 +1355,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private void TasksTabButton_OnClick(object sender, RoutedEventArgs args)
     {
+        SetSubscriptionTableExpanded(false);
         _chatPage = ChatPage.Tasks;
         NotifyPageState();
     }
 
     private async void SubscriptionsTabButton_OnClick(object sender, RoutedEventArgs args)
     {
+        SetSubscriptionTableExpanded(false);
         _chatPage = ChatPage.Subscriptions;
         NotifyPageState();
         SubscriptionsSummary = "Загружаем актуальный список участниц…";
@@ -1253,18 +1373,26 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
-    private void LatestSubscriptionSummaryCard_OnPreviewMouseLeftButtonUp(object sender,
-        System.Windows.Input.MouseButtonEventArgs args)
-    {
-        if (!HasLatestSubscriptionBatch) return;
+    private void ShowLastInstagramCheckDetails_OnClick(object sender, RoutedEventArgs args)
+        => ShowSubscriptionInfoDialog(new SubscriptionInfoDialog(LatestSubscriptionBatch));
 
-        LatestSubscriptionSummaryExpander.IsExpanded = !LatestSubscriptionSummaryExpander.IsExpanded;
-        args.Handled = true;
+    private void ShowParticipantListDetails_OnClick(object sender, RoutedEventArgs args)
+        => ShowSubscriptionInfoDialog(new SubscriptionInfoDialog(_latestParticipantListSource,
+            _subscriptionTileCounts));
+
+    private void ShowSubscriptionInfoDialog(SubscriptionInfoDialog dialog)
+    {
+        var owner = Window.GetWindow(this);
+        if (owner is { IsVisible: true }) dialog.Owner = owner;
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        try { dialog.ShowDialog(); }
+        finally { mainWindow?.HideDialogOverlay(); }
     }
 
     private void RefreshSubscriptionsButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (IsBusy || _synchronization is null || SelectedChat is null) return;
+        if (IsBusy || _instagramBusy || _synchronization is null || SelectedChat is null) return;
         var selected = SelectedChat;
         IsBusy = true;
         using var cancellation = new CancellationTokenSource();
@@ -1281,7 +1409,17 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     {
                         if (dialog.Dispatcher.CheckAccess()) dialog.Model.Report(update);
                         else dialog.Dispatcher.Invoke(() => dialog.Model.Report(update));
-                    }, cancellation.Token);
+                    }, cancellation.Token,
+                    profileUrl =>
+                    {
+                        var userName = InstagramActivityProfile.TryGetUserName(profileUrl);
+                        var update = new ParticipantListSyncProgress(ParticipantListSyncStage.SAVE,
+                            $"Проверяем страницу Instagram @{userName}…");
+                        if (dialog.Dispatcher.CheckAccess()) dialog.Model.Report(update);
+                        else dialog.Dispatcher.Invoke(() => dialog.Model.Report(update));
+                        return _instagramBrowser.ProfileOpensAsync(profileUrl, cancellation.Token)
+                            .GetAwaiter().GetResult();
+                    });
                 if (result.SourceMessageId is null)
                     dialog.Model.Skip(ParticipantListSyncStage.SAVE);
                 dialog.Model.Activate(ParticipantListSyncStage.DISPLAY,
@@ -1293,7 +1431,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     dialog.Model.SetSourceMessageDate(sentAtUtc);
                 // Found does not mean applied: preserve the currently applied date
                 // and explain newer-but-ambiguous or older Telegram messages.
-                SubscriptionsSyncMessage = result.Status == ParticipantListApplyStatus.AMBIGUOUS_MATCH
+                SubscriptionsSyncMessage = result.Status is
+                    ParticipantListApplyStatus.AMBIGUOUS_MATCH or
+                    ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE
                     ? result.OutcomeDescription
                     : string.Empty;
                 // Keep the "already current" outcome concise in the sync dialog even
@@ -1530,6 +1670,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private void NotifyPageState()
     {
+        if (_page != WorkspacePage.Chat || _chatPage != ChatPage.Subscriptions)
+            SetSubscriptionTableExpanded(false);
         Notify(nameof(IsHomeVisible));
         Notify(nameof(IsChatVisible));
         Notify(nameof(IsSettingsVisible));

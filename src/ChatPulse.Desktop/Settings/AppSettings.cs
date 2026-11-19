@@ -41,6 +41,9 @@ public sealed class AppSettings
 
     public bool IsOnboardingCompleted { get; set; }
 
+    /// <summary>Ширины столбцов таблицы подписок в пикселях; общие для всех чатов.</summary>
+    public Dictionary<string, double> SubscriptionColumnWidths { get; set; } = [];
+
     /// <summary>Конфигурация подключённых чатов, не история заданий.</summary>
     public List<ConfiguredChat> Chats { get; set; } = [];
 

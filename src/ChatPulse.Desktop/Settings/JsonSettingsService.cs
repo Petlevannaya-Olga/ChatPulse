@@ -64,6 +64,21 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
         }, cancellationToken);
     }
 
+    public Task SaveSubscriptionColumnWidthsAsync(IReadOnlyDictionary<string, double> widths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(widths);
+        foreach (var (key, width) in widths)
+        {
+            if (string.IsNullOrWhiteSpace(key) || !double.IsFinite(width) || width is < 1 or > 4000)
+                throw new ArgumentException("Некорректные ширины столбцов.", nameof(widths));
+        }
+
+        // Store only the UI preference. Atomic update preserves all unrelated settings.
+        var snapshot = new Dictionary<string, double>(widths, StringComparer.Ordinal);
+        return UpdateAsync(settings => settings.SubscriptionColumnWidths = snapshot, cancellationToken);
+    }
+
     public Task SaveOnboardingStepAsync(
         OnboardingStep step, CancellationToken cancellationToken = default)
         => UpdateAsync(settings => settings.CurrentOnboardingStep = step, cancellationToken);

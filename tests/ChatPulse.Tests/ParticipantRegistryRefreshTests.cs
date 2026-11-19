@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
@@ -94,6 +94,7 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.Equal(31L, stored.MessageId);
         Assert.Equal(timestamp, stored.SentAtUtc);
         Assert.Equal(timestamp.ToLocalTime().ToString("dd.MM.yyyy HH:mm"), stored.DateLabel);
+        Assert.NotNull(stored.LastSuccessfulSyncAtUtc);
     }
 
     [Fact]
@@ -113,6 +114,7 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.NotNull(result);
         Assert.Equal(30L, result.MessageId);
         Assert.Equal(newerDate, result.SentAtUtc);
+        Assert.NotNull(result.LastSuccessfulSyncAtUtc);
     }
 
     [Fact]
@@ -139,7 +141,94 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.Equal("Дата списка неизвестна", (await registry.ReadLatestSourceAsync(chat))?.DateLabel);
         var timestamp = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
         await registry.UpdateAsync(chat, [(20L, UPDATED_REGISTER, (DateTime?)timestamp)]);
-        Assert.Equal(timestamp, (await registry.ReadLatestSourceAsync(chat))?.SentAtUtc);
+        var upgraded = await registry.ReadLatestSourceAsync(chat);
+        Assert.Equal(timestamp, upgraded?.SentAtUtc);
+        Assert.NotNull(upgraded?.LastSuccessfulSyncAtUtc);
+    }
+
+    [Fact]
+    public async Task RepeatedCurrentList_UpdatesSyncTimeButPreservesOriginalMessageDate()
+    {
+        using var temp = new TestDirectory();
+        var chat = Chat();
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var sentAt = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
+        Assert.Equal(1, await registry.UpdateAsync(chat, [(30L, UPDATED_REGISTER, (DateTime?)sentAt)]));
+
+        // Simulate a successful synchronization long ago, then confirm that a
+        // second search for the same Telegram message refreshes only sync time.
+        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        {
+            await connection.OpenAsync();
+            var command = connection.CreateCommand();
+            command.CommandText = "UPDATE ChatParticipantRegistryVersions SET LastSuccessfulSyncAtUnixSeconds=1";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var result = await registry.UpdateDetailedAsync(chat, [(30L, UPDATED_REGISTER, (DateTime?)sentAt)]);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, result.Status);
+        var stored = await registry.ReadLatestSourceAsync(chat);
+        Assert.NotNull(stored);
+        Assert.Equal(30L, stored.MessageId);
+        Assert.Equal(sentAt, stored.SentAtUtc);
+        Assert.NotNull(stored.LastSuccessfulSyncAtUtc);
+        Assert.True(stored.LastSuccessfulSyncAtUtc.Value > DateTime.UnixEpoch);
+    }
+
+    [Fact]
+    public async Task LegacyListWithoutSyncTime_IsUpdatedWhenSameMessageIsSynchronizedAgain()
+    {
+        using var temp = new TestDirectory();
+        var chat = Chat();
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var sentAt = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
+        Assert.Equal(1, await registry.UpdateAsync(chat,
+            [(30L, UPDATED_REGISTER, (DateTime?)sentAt)]));
+
+        // Existing lists predate the column that records the sync time.
+        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        {
+            await connection.OpenAsync();
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE ChatParticipantRegistryVersions
+                SET LastSuccessfulSyncAtUnixSeconds=NULL
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var previous = await registry.ReadLatestSourceAsync(chat);
+        Assert.NotNull(previous);
+        Assert.Equal(sentAt, previous.SentAtUtc);
+        Assert.Null(previous.LastSuccessfulSyncAtUtc);
+
+        var result = await registry.UpdateDetailedAsync(chat,
+            [(30L, UPDATED_REGISTER, (DateTime?)sentAt)]);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, result.Status);
+        var updated = await registry.ReadLatestSourceAsync(chat);
+        Assert.NotNull(updated);
+        Assert.Equal(sentAt, updated.SentAtUtc);
+        Assert.NotNull(updated.LastSuccessfulSyncAtUtc);
+    }
+
+    [Fact]
+    public async Task OlderList_DoesNotUpdateSuccessfulSyncTime()
+    {
+        using var temp = new TestDirectory();
+        var chat = Chat();
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        Assert.Equal(1, await registry.UpdateAsync(chat, [(30L, UPDATED_REGISTER, (DateTime?)null)]));
+        var before = await registry.ReadLatestSourceAsync(chat);
+        Assert.NotNull(before);
+        Assert.NotNull(before.LastSuccessfulSyncAtUtc);
+
+        Assert.Equal(0, await registry.UpdateAsync(chat, [(10L, ORIGINAL_REGISTER, (DateTime?)null)]));
+        var after = await registry.ReadLatestSourceAsync(chat);
+        Assert.Equal(before.LastSuccessfulSyncAtUtc, after?.LastSuccessfulSyncAtUtc);
+        Assert.Equal(before.MessageId, after?.MessageId);
     }
 
     [Fact]

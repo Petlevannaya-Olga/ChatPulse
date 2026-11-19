@@ -17,6 +17,7 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
         ParticipantListApplyStatus.ALREADY_CURRENT => "Список уже актуален",
         ParticipantListApplyStatus.OLDER_MESSAGE => "Найден более старый список",
         ParticipantListApplyStatus.AMBIGUOUS_MATCH => "Список не применён",
+        ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE => "Профиль не подтверждён",
         _ => "Список не найден"
     };
 
@@ -46,6 +47,9 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
                 ParticipantListApplyStatus.AMBIGUOUS_MATCH =>
                     found + " Список не применён: несколько участниц нельзя однозначно сопоставить по Instagram-профилям. " +
                     "Предыдущий список сохранён." + saved,
+                ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE =>
+                    found + " Список не применён: не удалось надёжно подтвердить страницу участницы " +
+                    "из раздела «ШТРАФНЫЕ ДНИ». Предыдущий список сохранён." + saved,
                 _ => found + " Список не применён." + saved
             };
         }
@@ -262,7 +266,7 @@ public sealed class ChatSynchronizationService(
     /// </summary>
     public async Task<ParticipantListRefreshResult> RefreshLatestParticipantListAsync(
         ConfiguredChat configured, Action<ParticipantListSyncProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Func<string, bool?>? profileOpens = null)
     {
         ArgumentNullException.ThrowIfNull(configured);
         progress?.Invoke(new(ParticipantListSyncStage.SETTINGS, "Проверяем настройки выбранного чата…"));
@@ -295,14 +299,18 @@ public sealed class ChatSynchronizationService(
             cancellationToken.ThrowIfCancellationRequested();
             if (latest is null) return new ParticipantListRefreshResult(null, false);
 
-            // Stop requests are accepted during search. Once saving starts we finish the
-            // registry's atomic update so a cancelled UI cannot leave partial changes.
+            // A profile check can be cancelled before writing to SQLite. Once the
+            // registry begins its transaction, the update runs to atomic completion.
             progress?.Invoke(new(ParticipantListSyncStage.SAVE,
                 $"Обновляем реестр по сообщению №{latest.MessageId}…",
                 SourceMessageSentAtUtc: latest.SentAtUtc));
             var registry = new ChatParticipantRegistry(databasePath);
-            var applied = await registry.UpdateDetailedAsync(current,
-                [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None);
+            var applied = profileOpens is null
+                ? await registry.UpdateDetailedAsync(current,
+                    [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None)
+                : await Task.Run(() => registry.UpdateDetailedAsync(current,
+                    [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None,
+                    profileOpens), CancellationToken.None);
             var stored = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
             return new ParticipantListRefreshResult(latest.MessageId, applied.AppliedCount > 0,
                 latest.SentAtUtc, applied.Status, stored);

@@ -11,8 +11,9 @@ public sealed class InstagramBatchSummaryStore(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetUserName);
         if (summary.Outcome != InstagramBatchOutcome.COMPLETED ||
-            summary.CompletedSearches != summary.TotalSearches)
-            throw new ArgumentException("Публиковать можно только полностью завершённую проверку.", nameof(summary));
+            summary.CompletedSearches != summary.TotalSearches || summary.TotalSearches <= 0 ||
+            summary.Errors != 0 || summary.Found + summary.NotFound != summary.TotalSearches)
+            throw new ArgumentException("Публиковать можно только проверку без ошибок.", nameof(summary));
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
         connection.Open();
@@ -25,8 +26,9 @@ public sealed class InstagramBatchSummaryStore(string databasePath)
         string targetUserName, InstagramBatchResultSummary summary)
     {
         if (summary.Outcome != InstagramBatchOutcome.COMPLETED ||
-            summary.CompletedSearches != summary.TotalSearches)
-            throw new ArgumentException("Нельзя публиковать прерванный запуск.", nameof(summary));
+            summary.CompletedSearches != summary.TotalSearches || summary.TotalSearches <= 0 ||
+            summary.Errors != 0 || summary.Found + summary.NotFound != summary.TotalSearches)
+            throw new ArgumentException("Нельзя публиковать проверку с ошибками.", nameof(summary));
         using (var create = connection.CreateCommand())
         {
             create.Transaction = transaction;
@@ -139,7 +141,10 @@ public sealed class InstagramBatchSummaryStore(string databasePath)
             SELECT FinishedAtUtc, Outcome, CompletedSearches, TotalSearches, Found, NotFound,
                    Errors, PrivilegedParticipants, MissingActivityProfiles, Details,
                    {followers}, {following}, {directions}
-            FROM InstagramBatchSummaries WHERE TargetUserName=$target AND Outcome='COMPLETED'
+            FROM InstagramBatchSummaries
+            WHERE TargetUserName=$target AND Outcome='COMPLETED' AND Errors=0
+              AND CompletedSearches=TotalSearches AND TotalSearches>0
+              AND Found + NotFound=TotalSearches
             """;
         command.Parameters.AddWithValue("$target", NormalizeTarget(targetUserName));
         using var reader = command.ExecuteReader();

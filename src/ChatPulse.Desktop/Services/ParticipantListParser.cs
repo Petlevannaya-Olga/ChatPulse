@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace ChatPulse.Desktop.Services;
@@ -11,7 +10,8 @@ public enum ParticipantStatus
 }
 
 public sealed record ParsedParticipant(int? Position, string SubscriptionProfileUrl,
-    string ActivityProfileUrl, string Category, ParticipantStatus Status, string? DisplayName = null);
+    string ActivityProfileUrl, string Category, ParticipantStatus Status, string? DisplayName = null,
+    bool ProfileRequiresVerification = false);
 
 public sealed record ParsedParticipantList(IReadOnlyList<ParsedParticipant> Participants);
 
@@ -25,11 +25,10 @@ public static class ParticipantListParser
     private static readonly Regex PROFILE_LINK = new(
         @"(?:https?://)?(?:www\.)?instagram\.com/[A-Za-z0-9._]+/?|https?://(?:www\.)?t\.me/(?:[A-Za-z0-9_]+|\+[A-Za-z0-9_-]+)/?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, REGEX_TIMEOUT);
-    // Penalty entries have exactly one extra character appended to their Instagram
-    // username. Keep that character in the match even when it is not ASCII; it is
-    // removed only when parsing the penalty section. Ordinary links are untouched.
+    // A penalty URL may contain a Cyrillic X suffix. Latin X is a valid Instagram
+    // character, so it must not be removed without further evidence.
     private static readonly Regex PENALTY_PROFILE_LINK = new(
-        @"(?:https?://)?(?:www\.)?instagram\.com/[A-Za-z0-9._]+[^\s<>\[\]()/\\]?/?|https?://(?:www\.)?t\.me/(?:[A-Za-z0-9_]+|\+[A-Za-z0-9_-]+)/?",
+        @"(?:https?://)?(?:www\.)?instagram\.com/[A-Za-z0-9._]+[Хх]?/?|https?://(?:www\.)?t\.me/(?:[A-Za-z0-9_]+|\+[A-Za-z0-9_-]+)/?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, REGEX_TIMEOUT);
     private static readonly Regex NUMBER = new(
         @"^\s*(\d{1,4})(?:\s+((?:SUPER\s+)?VIP\b.*))?$", RegexOptions.Compiled | RegexOptions.CultureInvariant, REGEX_TIMEOUT);
@@ -44,7 +43,8 @@ public static class ParticipantListParser
         catch (RegexMatchTimeoutException) { return false; }
     }
 
-    public static bool TryParse(string? text, out ParsedParticipantList? result)
+    public static bool TryParse(string? text, out ParsedParticipantList? result,
+        Func<string, bool?>? profileOpens = null)
     {
         result = null;
         if (string.IsNullOrWhiteSpace(text) || text.Length > 100_000) return false;
@@ -145,8 +145,7 @@ public static class ParticipantListParser
                     line.Contains("Актив даёт отсюда", StringComparison.OrdinalIgnoreCase))
                     nextIsActivity = true;
 
-                // Only penalty rows use the wider matcher: the suffix may be
-                // Cyrillic or any other character outside Instagram's alphabet.
+                // Only penalty rows may contain a Cyrillic X suffix.
                 var links = status == ParticipantStatus.PENALTY ? PENALTY_PROFILE_LINK : PROFILE_LINK;
                 foreach (Match match in links.Matches(line))
                 {
@@ -185,10 +184,9 @@ public static class ParticipantListParser
             // A list of two links or a numbered task is not necessarily a participant register.
             if (numberedCount < 3 || entries.Count < 3 ||
                 entries.Count(entry => entry.Position.HasValue) != numberedCount) return false;
-            // A penalty row repeats a participant from the main list with one
-            // extra symbol in the username. Merge it into that participant instead
-            // of sending two rows with the same identity to the registry.
-            if (!TryMergePenaltyEntries(entries, out var participants)) return false;
+            // Penalty rows may repeat a main-list entry, with or without an X suffix.
+            // Resolve duplicates without altering a valid Instagram username.
+            if (!TryMergePenaltyEntries(entries, out var participants, profileOpens)) return false;
             // Shared Telegram links may still represent different people: do not
             // merge ordinary entries. The registry resolves those identities.
             result = new ParsedParticipantList(participants);
@@ -198,21 +196,19 @@ public static class ParticipantListParser
     }
 
     private static bool TryMergePenaltyEntries(IReadOnlyList<ParsedParticipant> entries,
-        out IReadOnlyList<ParsedParticipant> participants)
+        out IReadOnlyList<ParsedParticipant> participants, Func<string, bool?>? profileOpens)
     {
         var merged = entries.Where(item => item.Status != ParticipantStatus.PENALTY).ToList();
         foreach (var penalty in entries.Where(item => item.Status == ParticipantStatus.PENALTY))
         {
-            var matches = merged.Select((item, index) => (item, index))
-                .Where(candidate =>
-                    candidate.item.SubscriptionProfileUrl.Equals(penalty.SubscriptionProfileUrl,
-                        StringComparison.OrdinalIgnoreCase) ||
-                    candidate.item.ActivityProfileUrl.Equals(penalty.SubscriptionProfileUrl,
-                        StringComparison.OrdinalIgnoreCase))
-                .Select(candidate => candidate.index).ToArray();
+            var exactMatches = FindMatches(merged, penalty.SubscriptionProfileUrl);
+            var shortened = TryWithoutLatinXSuffix(penalty.SubscriptionProfileUrl);
+            var shortenedMatches = shortened is null ? Array.Empty<int>() : FindMatches(merged, shortened);
+            var matches = exactMatches.Concat(shortenedMatches).Distinct().ToArray();
             if (matches.Length > 1)
             {
-                // A shared URL is not enough to identify which person is fined.
+                // If both names belong to different participants, neither the
+                // suffix convention nor the original URL identifies the right one.
                 participants = [];
                 return false;
             }
@@ -220,16 +216,53 @@ public static class ParticipantListParser
             {
                 var index = matches[0];
                 merged[index] = merged[index] with { Status = ParticipantStatus.PENALTY };
+                continue;
             }
-            else
+
+            var resolved = penalty.SubscriptionProfileUrl;
+            // Only an unmatched Latin X in the penalty section needs a browser
+            // check. Ordinary entries and penalty URLs without X are never probed.
+            if (shortened is not null && profileOpens is not null)
             {
-                // A participant appearing only in the penalty section still has
-                // a valid profile after removing the documented extra symbol.
-                merged.Add(penalty);
+                // A timeout, login redirect or restriction is inconclusive,
+                // not proof that either profile does not exist.
+                var original = profileOpens(resolved);
+                var alternative = profileOpens(shortened);
+                if (original == false && alternative == true) resolved = shortened;
+                else if (original != true || alternative != false)
+                {
+                    participants = [];
+                    return false;
+                }
             }
+            // Without a browser result, keep a Latin X literally: removing a
+            // legitimate final character would silently check someone else.
+            // A Cyrillic X has already been removed during normalization because
+            // it is not a legal character in an Instagram username.
+            merged.Add(penalty with
+            {
+                SubscriptionProfileUrl = resolved,
+                ActivityProfileUrl = resolved,
+                ProfileRequiresVerification = shortened is not null && profileOpens is null
+            });
         }
         participants = merged;
         return true;
+    }
+
+    private static int[] FindMatches(IReadOnlyList<ParsedParticipant> participants, string url)
+        => participants.Select((item, index) => (item, index))
+            .Where(candidate =>
+                candidate.item.SubscriptionProfileUrl.Equals(url, StringComparison.OrdinalIgnoreCase) ||
+                candidate.item.ActivityProfileUrl.Equals(url, StringComparison.OrdinalIgnoreCase))
+            .Select(candidate => candidate.index).ToArray();
+
+    private static string? TryWithoutLatinXSuffix(string url)
+    {
+        if (!url.StartsWith("https://www.instagram.com/", StringComparison.OrdinalIgnoreCase) ||
+            url.Length < "https://www.instagram.com/".Length + 2 || url[^1] is not ('x' or 'X'))
+            return null;
+        return url[..^1];
     }
 
     private static bool IsRegisterHeading(string line)
@@ -286,12 +319,14 @@ public static class ParticipantListParser
             // as supplied rather than silently rewritten as Instagram accounts.
             return $"https://t.me/{username}";
         }
-        if (penalty)
+        if (penalty && username[^1] is ('Х' or 'х'))
         {
-            var textElements = StringInfo.ParseCombiningCharacters(username);
-            if (textElements.Length < 2) return null;
-            username = username[..textElements[^1]];
+            if (username.Length < 2) return null;
+            username = username[..^1];
         }
+        // Any other non-ASCII ending is not an Instagram username.
+        if (username.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not ('.' or '_')))
+            return null;
         if (username is "p" or "reel" or "stories" or "tv") return null;
         return $"https://www.instagram.com/{username}";
     }

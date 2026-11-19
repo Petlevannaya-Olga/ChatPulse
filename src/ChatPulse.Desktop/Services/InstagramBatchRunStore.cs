@@ -94,8 +94,9 @@ public sealed class InstagramBatchRunStore(string databasePath)
         if (!InstagramCheckDirectionSelection.IsValid(summary.Directions) ||
             summary.Outcome != InstagramBatchOutcome.COMPLETED ||
             summary.CompletedSearches != summary.TotalSearches || summary.TotalSearches <= 0 ||
+            summary.Errors != 0 || summary.Found + summary.NotFound != summary.TotalSearches ||
             !summary.HasNotFoundBreakdown)
-            throw new InvalidOperationException("Неполную проверку нельзя публиковать.");
+            throw new InvalidOperationException("Нельзя публиковать проверку с ошибками или неполными результатами.");
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
         Execute(connection, transaction, CREATE_DRAFTS);
@@ -197,14 +198,14 @@ public sealed class InstagramBatchRunStore(string databasePath)
             count.CommandText = """
                 SELECT COUNT(*) FROM InstagramBatchCheckDrafts
                 WHERE RunId=$run AND TargetUserName=$target AND ParticipantUserName=$user
-                      AND Direction=$kind
+                      AND Direction=$kind AND SearchStatus IN ('FOUND','NOT_FOUND')
                 """;
             count.Parameters.AddWithValue("$run", runId);
             count.Parameters.AddWithValue("$target", targetUserName.Trim());
             count.Parameters.AddWithValue("$user", userName);
             count.Parameters.AddWithValue("$kind", kind);
             if (Convert.ToInt64(count.ExecuteScalar()) != 1)
-                throw new InvalidOperationException("Нет завершённого результата выборочной проверки.");
+                throw new InvalidOperationException("Нет успешного результата выборочной проверки.");
         }
         foreach (var (kind, userName) in selected)
         {

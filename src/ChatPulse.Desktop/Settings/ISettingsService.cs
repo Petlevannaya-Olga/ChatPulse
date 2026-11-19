@@ -7,6 +7,9 @@ public interface ISettingsService
     Task SaveInstagramAccountsAsync(string target, string browser,
         CancellationToken cancellationToken = default);
 
+    Task SaveSubscriptionColumnWidthsAsync(IReadOnlyDictionary<string, double> widths,
+        CancellationToken cancellationToken = default);
+
     Task SaveOnboardingStepAsync(
         OnboardingStep step, CancellationToken cancellationToken = default);
 
