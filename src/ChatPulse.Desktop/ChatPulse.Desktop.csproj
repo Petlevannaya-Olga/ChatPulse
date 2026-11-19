@@ -11,6 +11,9 @@
     <Resource Include="Resources\ChatPulseLogo.png" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Services\ChatParticipantHistorySchema.sql" LogicalName="ChatPulse.Desktop.Services.ChatParticipantHistorySchema.sql" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\ChatPulse.Application\ChatPulse.Application.csproj" />
     <ProjectReference Include="..\ChatPulse.Infrastructure\ChatPulse.Infrastructure.csproj" />
   </ItemGroup>

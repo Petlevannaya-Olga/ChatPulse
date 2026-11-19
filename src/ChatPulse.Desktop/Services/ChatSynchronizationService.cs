@@ -9,7 +9,8 @@ namespace ChatPulse.Desktop.Services;
 public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Applied,
     DateTime? SourceMessageSentAtUtc = null,
     ParticipantListApplyStatus Status = ParticipantListApplyStatus.NO_VALID_LIST,
-    ParticipantListSourceInfo? StoredSource = null)
+    ParticipantListSourceInfo? StoredSource = null,
+    string? ParseFailureReason = null)
 {
     public string OutcomeTitle => Status switch
     {
@@ -18,6 +19,7 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
         ParticipantListApplyStatus.OLDER_MESSAGE => "Найден более старый список",
         ParticipantListApplyStatus.AMBIGUOUS_MATCH => "Список не применён",
         ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE => "Профиль не подтверждён",
+        ParticipantListApplyStatus.UNPARSEABLE_MESSAGE => "Последний список не разобран",
         _ => "Список не найден"
     };
 
@@ -50,6 +52,12 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
                 ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE =>
                     found + " Список не применён: не удалось надёжно подтвердить страницу участницы " +
                     "из раздела «ШТРАФНЫЕ ДНИ». Предыдущий список сохранён." + saved,
+                ParticipantListApplyStatus.UNPARSEABLE_MESSAGE =>
+                    found + " Последнее сообщение со списком участниц не удалось разобрать. " +
+                    (string.IsNullOrWhiteSpace(ParseFailureReason)
+                        ? "Причина не определена; проверьте ссылки и формат записей. "
+                        : $"Причина: {ParseFailureReason} ") +
+                    "Предыдущий список сохранён." + saved,
                 _ => found + " Список не применён." + saved
             };
         }
@@ -291,20 +299,41 @@ public sealed class ChatSynchronizationService(
                 throw new InvalidOperationException("Поиск последнего списка не поддерживается Telegram-клиентом.");
 
             progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
-                "Ищем самый свежий корректный список участниц…"));
+                "Ищем самый свежий список участниц…"));
+            // Find the newest *candidate*, even if it is malformed. Searching for
+            // only valid parses silently hides errors behind older saved lists.
             var latest = await reader.FindLatestMatchingMessageAsync(chat,
-                text => ParticipantListParser.TryParse(text, out _), cancellationToken,
+                ParticipantListParser.LooksLikeParticipantList, cancellationToken,
                 (pages, messages) => progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
                     $"Просмотрено страниц: {pages} · сообщений: {messages}", pages, messages)));
             cancellationToken.ThrowIfCancellationRequested();
-            if (latest is null) return new ParticipantListRefreshResult(null, false);
+            var registry = new ChatParticipantRegistry(databasePath);
+            if (latest is null)
+            {
+                var missing = new ParticipantListRefreshResult(null, false);
+                await registry.SaveLastAttemptAsync(current, null, null, missing.Status,
+                    missing.OutcomeDescription, CancellationToken.None);
+                return missing;
+            }
+            var instagramOnly = current.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase);
+            if (!ParticipantListParser.TryParse(latest.Text, out _, out var parseFailureReason,
+                    instagramOnly: instagramOnly))
+            {
+                // Do not load an older register or write a partially parsed list.
+                var previous = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
+                var failed = new ParticipantListRefreshResult(latest.MessageId, false,
+                    latest.SentAtUtc, ParticipantListApplyStatus.UNPARSEABLE_MESSAGE,
+                    previous, parseFailureReason);
+                await registry.SaveLastAttemptAsync(current, latest.MessageId, latest.SentAtUtc,
+                    failed.Status, failed.OutcomeDescription, CancellationToken.None);
+                return failed;
+            }
 
             // A profile check can be cancelled before writing to SQLite. Once the
             // registry begins its transaction, the update runs to atomic completion.
             progress?.Invoke(new(ParticipantListSyncStage.SAVE,
                 $"Обновляем реестр по сообщению №{latest.MessageId}…",
                 SourceMessageSentAtUtc: latest.SentAtUtc));
-            var registry = new ChatParticipantRegistry(databasePath);
             var applied = profileOpens is null
                 ? await registry.UpdateDetailedAsync(current,
                     [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None)
@@ -312,8 +341,11 @@ public sealed class ChatSynchronizationService(
                     [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None,
                     profileOpens), CancellationToken.None);
             var stored = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
-            return new ParticipantListRefreshResult(latest.MessageId, applied.AppliedCount > 0,
+            var result = new ParticipantListRefreshResult(latest.MessageId, applied.AppliedCount > 0,
                 latest.SentAtUtc, applied.Status, stored);
+            await registry.SaveLastAttemptAsync(current, latest.MessageId, latest.SentAtUtc,
+                result.Status, result.OutcomeDescription, CancellationToken.None);
+            return result;
         }
         finally { _gate.Release(); }
     }
