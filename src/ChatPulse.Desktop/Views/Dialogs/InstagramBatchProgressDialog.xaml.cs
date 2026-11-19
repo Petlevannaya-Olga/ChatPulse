@@ -72,13 +72,13 @@ public partial class InstagramBatchProgressDialog : Window
     private void DirectionCheckBox_OnChanged(object sender, RoutedEventArgs args)
     {
         if (StartCheckButton is null || CheckMyFollowingBox is null || CheckFollowersBox is null) return;
-        StartCheckButton.IsEnabled = CheckMyFollowingBox.IsChecked == true || CheckFollowersBox.IsChecked == true;
+        StartCheckButton.IsEnabled = CheckMyFollowingBox.IsChecked.GetValueOrDefault() || CheckFollowersBox.IsChecked.GetValueOrDefault();
     }
 
     private void StartCheckButton_OnClick(object sender, RoutedEventArgs args)
     {
-        SelectedDirections = (CheckFollowersBox.IsChecked == true ? InstagramCheckDirections.FOLLOWERS : InstagramCheckDirections.NONE) |
-                             (CheckMyFollowingBox.IsChecked == true ? InstagramCheckDirections.FOLLOWING : InstagramCheckDirections.NONE);
+        SelectedDirections = (CheckFollowersBox.IsChecked.GetValueOrDefault() ? InstagramCheckDirections.FOLLOWERS : InstagramCheckDirections.NONE) |
+                             (CheckMyFollowingBox.IsChecked.GetValueOrDefault() ? InstagramCheckDirections.FOLLOWING : InstagramCheckDirections.NONE);
         BeginCheck();
     }
 
