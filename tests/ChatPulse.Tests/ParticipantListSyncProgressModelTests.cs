@@ -27,6 +27,37 @@ public sealed class ParticipantListSyncProgressModelTests
     }
 
     [Fact]
+    public void FoundTelegramMessageDateAppearsDuringSaveButNotAfterCompletion()
+    {
+        var model = new ParticipantListSyncProgressModel();
+        var timestamp = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
+        Assert.False(model.HasSourceMessageDate);
+        model.Report(new(ParticipantListSyncStage.SAVE, "Сохраняем список…",
+            SourceMessageSentAtUtc: timestamp));
+        Assert.True(model.HasSourceMessageDate);
+        Assert.Contains(timestamp.ToLocalTime().ToString("dd.MM.yyyy HH:mm"),
+            model.SourceMessageDateLabel);
+        model.Finish("Список обновлён", "Готово", ParticipantListSyncOutcome.COMPLETED);
+        Assert.False(model.HasSourceMessageDate);
+    }
+
+    [Fact]
+    public void FoundTelegramMessageDateIsHiddenAfterStoppedOrFailedSync()
+    {
+        foreach (var outcome in new[] { ParticipantListSyncOutcome.STOPPED, ParticipantListSyncOutcome.FAILED })
+        {
+            var model = new ParticipantListSyncProgressModel();
+            model.SetSourceMessageDate(new DateTime(2026, 11, 18, 14, 0, 0, DateTimeKind.Utc));
+            Assert.True(model.HasSourceMessageDate);
+
+            model.Finish("Синхронизация завершена", "Результат", outcome);
+
+            Assert.False(model.HasSourceMessageDate);
+            Assert.True(model.HasResult);
+        }
+    }
+
+    [Fact]
     public void SaveDisablesCancellationUntilAtomicUpdateFinishes()
     {
         var model = new ParticipantListSyncProgressModel();

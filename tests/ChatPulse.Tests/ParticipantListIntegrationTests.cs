@@ -124,6 +124,113 @@ public sealed class ParticipantListIntegrationTests
     }
 
     [Fact]
+    public void PenaltyRows_MergeWithOriginalAndPreserveActivityProfile()
+    {
+        const string register = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/_mar_g.o
+            Подписка сюда 👆🏼
+            Актив дает отсюда 👇🏼
+            https://www.instagram.com/mar_fozzz
+            2
+            https://www.instagram.com/accountX
+            3
+            https://www.instagram.com/third_user
+            ❌ ШТРАФНЫЕ ДНИ ❌
+            4
+            https://www.instagram.com/_mar_g.oХ
+            5
+            https://www.instagram.com/accountXq
+            """;
+
+        Assert.True(ParticipantListParser.TryParse(register, out var parsed));
+        Assert.NotNull(parsed);
+        Assert.Equal(3, parsed.Participants.Count);
+
+        var first = parsed.Participants.Single(item => item.SubscriptionProfileUrl.EndsWith("/_mar_g.o", StringComparison.Ordinal));
+        Assert.Equal(1, first.Position);
+        Assert.Equal("https://www.instagram.com/mar_fozzz", first.ActivityProfileUrl);
+        Assert.Equal(ParticipantStatus.PENALTY, first.Status);
+
+        var second = parsed.Participants.Single(item => item.SubscriptionProfileUrl.EndsWith("/accountX", StringComparison.Ordinal));
+        Assert.Equal(2, second.Position);
+        Assert.Equal(ParticipantStatus.PENALTY, second.Status);
+        Assert.Equal(ParticipantStatus.ACTIVE,
+            parsed.Participants.Single(item => item.Position == 3).Status);
+    }
+
+    [Fact]
+    public async Task Registry_UpdatesPenalizedExistingParticipantWithoutCreatingDuplicate()
+    {
+        const string original = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/_mar_g.o
+            Подписка сюда 👆🏼
+            Актив дает отсюда 👇🏼
+            https://www.instagram.com/mar_fozzz
+            2
+            https://www.instagram.com/accountX
+            3
+            https://www.instagram.com/third_user
+            """;
+        var withPenalty = original + "\n❌ ШТРАФНЫЕ ДНИ ❌\n4\nhttps://www.instagram.com/_mar_g.oХ";
+        using var temp = new TempDirectory();
+        var database = Path.Combine(temp.Path, "participants.db");
+        var registry = new ChatParticipantRegistry(database);
+        var chat = Chat(101);
+        var earlier = new DateTime(2026, 11, 17, 17, 01, 0, DateTimeKind.Utc);
+        var later = new DateTime(2026, 11, 18, 17, 00, 0, DateTimeKind.Utc);
+
+        Assert.Equal(ParticipantListApplyStatus.APPLIED,
+            (await registry.UpdateDetailedAsync(chat, [(1370L, original, (DateTime?)earlier)])).Status);
+        var initial = await ReadAsync(database, 101, "https://www.instagram.com/_mar_g.o");
+
+        Assert.Equal(ParticipantListApplyStatus.APPLIED,
+            (await registry.UpdateDetailedAsync(chat, [(1408L, withPenalty, (DateTime?)later)])).Status);
+        var current = await ReadAsync(database, 101, "https://www.instagram.com/_mar_g.o");
+        Assert.Equal(initial.Id, current.Id);
+        Assert.Equal(1L, current.Position);
+        Assert.Equal("https://www.instagram.com/mar_fozzz", current.Activity);
+
+        await using var connection = new SqliteConnection($"Data Source={database}");
+        await connection.OpenAsync();
+        var query = connection.CreateCommand();
+        query.CommandText = """
+            SELECT COUNT(*), MAX(Status) FROM ChatParticipants
+            WHERE TelegramUserId=123 AND PeerId=101 AND IsCurrent=1
+              AND SubscriptionProfileUrl='https://www.instagram.com/_mar_g.o'
+            """;
+        await using (var reader = await query.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal("PENALTY", reader.GetString(1));
+        }
+        var latest = await registry.ReadLatestSourceAsync(chat);
+        Assert.NotNull(latest);
+        Assert.Equal(1408L, latest.MessageId);
+        Assert.Equal(later, latest.SentAtUtc);
+    }
+
+    [Fact]
+    public void OrdinaryParticipantNames_AreNotTrimmed()
+    {
+        const string register = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/accountX
+            2
+            https://www.instagram.com/_mar_g.o
+            3
+            https://www.instagram.com/third_user
+            """;
+        Assert.True(ParticipantListParser.TryParse(register, out var parsed));
+        Assert.Contains(parsed!.Participants, item => item.SubscriptionProfileUrl.EndsWith("/accountX", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Parser_DoesNotConfuseTasksOrShortListsWithParticipantRegisters()
     {
         Assert.False(ParticipantListParser.TryParse("Лайки https://www.instagram.com/p/abc123", out _));

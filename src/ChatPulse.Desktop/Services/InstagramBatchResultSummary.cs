@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 
 namespace ChatPulse.Desktop.Services;
 
@@ -46,9 +46,27 @@ public sealed record InstagramBatchResultSummary(
     {
         InstagramCheckDirections.FOLLOWERS => "Проверены только подписки участниц на меня",
         InstagramCheckDirections.FOLLOWING => "Проверены только мои подписки на участниц",
-        _ => "Проверены оба направления подписок"
+        _ => "Проверены мои подписки на участниц и подписки участниц на меня"
     };
-    public string ProgressLabel => $"Выполнено {CompletedSearches} из {TotalSearches} поисковых проверок";
+    public string ProgressLabel
+    {
+        get
+        {
+            var lastTwoDigits = CompletedSearches % 100;
+            var lastDigit = CompletedSearches % 10;
+
+            var (verb, noun) = lastTwoDigits is >= 11 and <= 14
+                ? ("Выполнено", "проверок")
+                : lastDigit switch
+                {
+                    1 => ("Выполнена", "проверка"),
+                    2 or 3 or 4 => ("Выполнены", "проверки"),
+                    _ => ("Выполнено", "проверок")
+                };
+
+            return $"{verb} {CompletedSearches} {noun} подписок";
+        }
+    }
     public string FinishedAtLabel => $"Последняя успешная проверка: {FinishedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm", CultureInfo.GetCultureInfo("ru-RU"))}";
     public bool HasNotFoundBreakdown => NotFoundFollowers.HasValue && NotFoundFollowing.HasValue;
     public bool HasLegacyBreakdown => !HasNotFoundBreakdown;

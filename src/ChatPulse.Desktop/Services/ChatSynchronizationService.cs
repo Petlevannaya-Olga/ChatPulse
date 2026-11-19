@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Settings;
@@ -6,7 +6,51 @@ using Microsoft.Data.Sqlite;
 
 namespace ChatPulse.Desktop.Services;
 
-public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Applied);
+public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Applied,
+    DateTime? SourceMessageSentAtUtc = null,
+    ParticipantListApplyStatus Status = ParticipantListApplyStatus.NO_VALID_LIST,
+    ParticipantListSourceInfo? StoredSource = null)
+{
+    public string OutcomeTitle => Status switch
+    {
+        ParticipantListApplyStatus.APPLIED => "Список обновлён",
+        ParticipantListApplyStatus.ALREADY_CURRENT => "Список уже актуален",
+        ParticipantListApplyStatus.OLDER_MESSAGE => "Найден более старый список",
+        ParticipantListApplyStatus.AMBIGUOUS_MATCH => "Список не применён",
+        _ => "Список не найден"
+    };
+
+    public string OutcomeDescription
+    {
+        get
+        {
+            if (SourceMessageId is null)
+                return "Список участниц в истории не найден. Предыдущий список сохранён.";
+            var date = SourceMessageSentAtUtc is { } timestamp
+                ? new ParticipantListSourceInfo(SourceMessageId.Value, timestamp).DateLabel
+                : "дата неизвестна";
+            var found = $"Найдено сообщение Telegram №{SourceMessageId} от {date}.";
+            var saved = StoredSource is { } source
+                ? $" Применённый список: сообщение №{source.MessageId}, {source.DateLabel}."
+                : " Ранее применённого списка нет.";
+            return Status switch
+            {
+                ParticipantListApplyStatus.APPLIED =>
+                    found + " Список применён к реестру, дата на кнопке обновлена.",
+                ParticipantListApplyStatus.ALREADY_CURRENT =>
+                    SourceMessageSentAtUtc.HasValue
+                        ? $"Список от {date} уже сохранён. Изменений нет."
+                        : "Список уже сохранён. Изменений нет.",
+                ParticipantListApplyStatus.OLDER_MESSAGE =>
+                    found + " Сообщение старее сохранённого, поэтому список не заменён." + saved,
+                ParticipantListApplyStatus.AMBIGUOUS_MATCH =>
+                    found + " Список не применён: несколько участниц нельзя однозначно сопоставить по Instagram-профилям. " +
+                    "Предыдущий список сохранён." + saved,
+                _ => found + " Список не применён." + saved
+            };
+        }
+    }
+}
 
 public enum ParticipantListSyncStage
 {
@@ -19,7 +63,7 @@ public enum ParticipantListSyncStage
 
 public sealed record ParticipantListSyncProgress(
     ParticipantListSyncStage Stage, string Description,
-    int PagesScanned = 0, int MessagesScanned = 0);
+    int PagesScanned = 0, int MessagesScanned = 0, DateTime? SourceMessageSentAtUtc = null);
 
 /// <summary>
 /// Primary message history import with separate safe own-reaction reconciliation.
@@ -254,9 +298,14 @@ public sealed class ChatSynchronizationService(
             // Stop requests are accepted during search. Once saving starts we finish the
             // registry's atomic update so a cancelled UI cannot leave partial changes.
             progress?.Invoke(new(ParticipantListSyncStage.SAVE,
-                $"Обновляем реестр по сообщению №{latest.MessageId}…"));
-            var applied = await SaveParticipantsAsync(current, [latest], CancellationToken.None);
-            return new ParticipantListRefreshResult(latest.MessageId, applied > 0);
+                $"Обновляем реестр по сообщению №{latest.MessageId}…",
+                SourceMessageSentAtUtc: latest.SentAtUtc));
+            var registry = new ChatParticipantRegistry(databasePath);
+            var applied = await registry.UpdateDetailedAsync(current,
+                [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None);
+            var stored = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
+            return new ParticipantListRefreshResult(latest.MessageId, applied.AppliedCount > 0,
+                latest.SentAtUtc, applied.Status, stored);
         }
         finally { _gate.Release(); }
     }
@@ -653,7 +702,8 @@ public sealed class ChatSynchronizationService(
     private Task<int> SaveParticipantsAsync(ConfiguredChat chat,
         IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
         => new ChatParticipantRegistry(databasePath).UpdateAsync(chat,
-            messages.Select(message => (message.MessageId, message.Text)), cancellationToken);
+            messages.Select(message => (message.MessageId, message.Text, message.SentAtUtc)),
+            cancellationToken);
 
     private static ConfiguredChat FindConfigured(AppSettings appSettings, ConfiguredChat expected)
     {

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
@@ -67,6 +67,79 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
         Assert.Equal(beforeCursor, (await settings.LoadAsync()).Chats.Single().LastProcessedMessageId);
         Assert.Null(telegram.NewMessagesImpl);
+    }
+
+    [Fact]
+    public async Task LatestTelegramListDateIsStoredAndReturnedAfterRefresh()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var timestamp = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(31, UPDATED_REGISTER, SentAtUtc: timestamp));
+        var progress = new List<ParticipantListSyncProgress>();
+
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat, progress.Add);
+
+        Assert.Equal(timestamp, result.SourceMessageSentAtUtc);
+        Assert.Contains(progress, item => item.Stage == ParticipantListSyncStage.SAVE &&
+            item.SourceMessageSentAtUtc == timestamp);
+        var stored = await new ChatParticipantRegistry(database).ReadLatestSourceAsync(chat);
+        Assert.NotNull(stored);
+        Assert.Equal(31L, stored.MessageId);
+        Assert.Equal(timestamp, stored.SentAtUtc);
+        Assert.Equal(timestamp.ToLocalTime().ToString("dd.MM.yyyy HH:mm"), stored.DateLabel);
+    }
+
+    [Fact]
+    public async Task OlderMessageDoesNotReplaceLatestListDate()
+    {
+        using var temp = new TestDirectory();
+        var chat = Chat();
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var newerDate = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
+        var olderDate = newerDate.AddDays(-1);
+        Assert.Equal(1, await registry.UpdateAsync(chat,
+            [(30L, UPDATED_REGISTER, (DateTime?)newerDate)]));
+        Assert.Equal(0, await registry.UpdateAsync(chat,
+            [(10L, ORIGINAL_REGISTER, (DateTime?)olderDate)]));
+        var result = await registry.ReadLatestSourceAsync(chat);
+        Assert.NotNull(result);
+        Assert.Equal(30L, result.MessageId);
+        Assert.Equal(newerDate, result.SentAtUtc);
+    }
+
+    [Fact]
+    public async Task ExistingDatabaseWithoutTimestampColumnIsUpgraded()
+    {
+        using var temp = new TestDirectory();
+        var chat = Chat();
+        var database = Path.Combine(temp.Path, "history.db");
+        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        {
+            await connection.OpenAsync();
+            var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE ChatParticipantRegistryVersions (
+                    TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL, PeerId INTEGER NOT NULL,
+                    SourceMessageId INTEGER NOT NULL,
+                    PRIMARY KEY (TelegramUserId, PeerType, PeerId)
+                );
+                INSERT INTO ChatParticipantRegistryVersions VALUES (123, 'Channel', 101, 10);
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+        var registry = new ChatParticipantRegistry(database);
+        Assert.Equal("Дата списка неизвестна", (await registry.ReadLatestSourceAsync(chat))?.DateLabel);
+        var timestamp = new DateTime(2026, 11, 18, 12, 35, 0, DateTimeKind.Utc);
+        await registry.UpdateAsync(chat, [(20L, UPDATED_REGISTER, (DateTime?)timestamp)]);
+        Assert.Equal(timestamp, (await registry.ReadLatestSourceAsync(chat))?.SentAtUtc);
     }
 
     [Fact]
@@ -217,6 +290,123 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.True(result.Applied);
         Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
         Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
+    }
+
+    [Fact]
+    public async Task RefreshLatestParticipantList_ExplainsWhyNewerListWasNotApplied()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var savedDate = new DateTime(2026, 11, 17, 14, 1, 0, DateTimeKind.Utc);
+        var foundDate = savedDate.AddDays(1);
+        Assert.Equal(1, await registry.UpdateAsync(chat,
+            [(10L, ORIGINAL_REGISTER, (DateTime?)savedDate)]));
+
+        // Two saved participants now share one subscription profile. The incoming
+        // register cannot be matched to one person without guessing.
+        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        {
+            await connection.OpenAsync();
+            var update = connection.CreateCommand();
+            update.CommandText = """
+                UPDATE ChatParticipants
+                SET SubscriptionProfileUrl='https://www.instagram.com/first_check'
+                WHERE ActivityProfileUrl='https://www.instagram.com/second_check'
+                """;
+            Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        }
+
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(20, UPDATED_REGISTER, SentAtUtc: foundDate));
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+
+        Assert.False(result.Applied);
+        Assert.Equal(ParticipantListApplyStatus.AMBIGUOUS_MATCH, result.Status);
+        Assert.Contains("неоднозначно", result.OutcomeDescription, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("№20", result.OutcomeDescription);
+        Assert.Contains("№10", result.OutcomeDescription);
+        Assert.Equal(10L, result.StoredSource?.MessageId);
+        Assert.Equal(savedDate, result.StoredSource?.SentAtUtc);
+        Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
+        Assert.Equal(0L, await CountCurrentAsync(database, "fourth_check"));
+    }
+
+    [Fact]
+    public async Task SameUnchangedTelegramMessageDoesNotReapplyButCanBackfillDate()
+    {
+        using var temp = new TestDirectory();
+        var chat = Chat();
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var timestamp = new DateTime(2026, 11, 18, 15, 1, 0, DateTimeKind.Utc);
+        Assert.Equal(1, await registry.UpdateAsync(chat, [(30, ORIGINAL_REGISTER)]));
+
+        var repeated = await registry.UpdateDetailedAsync(chat,
+            [(30L, ORIGINAL_REGISTER, (DateTime?)timestamp)]);
+
+        Assert.Equal(0, repeated.AppliedCount);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, repeated.Status);
+        var saved = await registry.ReadLatestSourceAsync(chat);
+        Assert.Equal(30L, saved?.MessageId);
+        Assert.Equal(timestamp, saved?.SentAtUtc);
+    }
+
+    [Fact]
+    public async Task NewerValidTelegramMessageUpdatesSourceDateAndAppliedVersion()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var previous = new DateTime(2026, 11, 17, 17, 1, 0, DateTimeKind.Utc);
+        var latest = new DateTime(2026, 11, 18, 19, 2, 0, DateTimeKind.Utc);
+        await registry.UpdateAsync(chat, [(10L, ORIGINAL_REGISTER, (DateTime?)previous)]);
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(20, UPDATED_REGISTER, SentAtUtc: latest));
+
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+
+        Assert.True(result.Applied);
+        Assert.Equal(ParticipantListApplyStatus.APPLIED, result.Status);
+        Assert.Equal(20L, result.StoredSource?.MessageId);
+        Assert.Equal(latest, result.StoredSource?.SentAtUtc);
+        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
+    }
+
+    [Fact]
+    public async Task OlderFoundTelegramMessageExplainsWhySavedDateRemainsNewer()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        var saved = new DateTime(2026, 11, 18, 19, 2, 0, DateTimeKind.Utc);
+        await registry.UpdateAsync(chat, [(30L, UPDATED_REGISTER, (DateTime?)saved)]);
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, _, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(10, ORIGINAL_REGISTER,
+                SentAtUtc: saved.AddDays(-1)));
+
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+
+        Assert.Equal(ParticipantListApplyStatus.OLDER_MESSAGE, result.Status);
+        Assert.False(result.Applied);
+        Assert.Equal(saved, result.StoredSource?.SentAtUtc);
+        Assert.Contains("старее", result.OutcomeDescription);
+        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
     }
 
     private static async Task<long> CountCurrentAsync(string database, string username)

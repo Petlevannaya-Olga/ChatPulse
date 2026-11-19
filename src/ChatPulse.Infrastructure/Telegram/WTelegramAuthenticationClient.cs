@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using ChatPulse.Application.Services;
@@ -688,7 +688,8 @@ public sealed class WTelegramAuthenticationClient(
                     examined++;
                     if (item is not TL.Message message || !matches(message.message)) continue;
                     onPageScanned?.Invoke(page + 1, examined);
-                    return new TelegramChatMessage(message.ID, message.message);
+                    return new TelegramChatMessage(message.ID, message.message,
+                        SentAtUtc: message.date.ToUniversalTime());
                 }
                 onPageScanned?.Invoke(page + 1, examined);
 

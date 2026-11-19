@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -18,8 +18,6 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private enum WorkspacePage { Home, Chat, Settings }
 
     private enum ChatPage { Tasks, Subscriptions, MyActivity }
-
-    private enum SubscriptionFilter { All, Discrepancies, Unverified }
 
     private ISettingsService? _settings;
     private readonly InstagramBrowserService _instagramBrowser = new();
@@ -48,12 +46,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private TaskFilter _taskFilter;
     private bool _isRebuildingChatList;
     private readonly ICollectionView _subscriptionRowsView;
-    private SubscriptionFilter _subscriptionFilter = SubscriptionFilter.All;
+    private bool _showOnlySubscriptionDiscrepancies;
     private InstagramParticipantCategoryCounts? _subscriptionTileCounts;
     private int _subscriptionTileLoadVersion;
+    private int _subscriptionRowsLoadVersion;
     private string _subscriptionQuery = string.Empty;
     private string _subscriptionsSummary = "Выберите чат для просмотра участниц.";
     private string _subscriptionsSyncMessage = string.Empty;
+    private string _participantListMessageDateLabel = string.Empty;
     private string _subscriptionsCheckMessage = string.Empty;
     private InstagramBatchResultSummary? _latestSubscriptionBatch;
     private int _loadVersion;
@@ -86,6 +86,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         {
             if (ReferenceEquals(_selectedChat, value)) return;
             _selectedChat = value;
+            // A previously started load must never publish rows for another chat.
+            _subscriptionRowsLoadVersion++;
+            ParticipantListMessageDateLabel = string.Empty;
             Notify();
             Notify(nameof(SelectedChatTitle));
             Notify(nameof(SelectedChatNetwork));
@@ -220,6 +223,16 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    public string ParticipantListMessageDateLabel
+    {
+        get => _participantListMessageDateLabel;
+        private set
+        {
+            _participantListMessageDateLabel = value;
+            Notify();
+        }
+    }
+
     public string SubscriptionsSyncMessage
     {
         get => _subscriptionsSyncMessage;
@@ -253,6 +266,18 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     }
 
     public bool HasLatestSubscriptionBatch => LatestSubscriptionBatch is not null;
+
+    public bool ShowOnlySubscriptionDiscrepancies
+    {
+        get => _showOnlySubscriptionDiscrepancies;
+        set
+        {
+            if (_showOnlySubscriptionDiscrepancies == value) return;
+            _showOnlySubscriptionDiscrepancies = value;
+            Notify();
+            _subscriptionRowsView.Refresh();
+        }
+    }
 
     public string SubscriptionQuery
     {
@@ -325,67 +350,95 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private async Task LoadSubscriptionRowsAsync()
     {
         var currentChat = SelectedChat;
+        var request = ++_subscriptionRowsLoadVersion;
         _subscriptionTileLoadVersion++;
-        LatestSubscriptionBatch = null;
-        SubscriptionRows.Clear();
         if (_settings is null || _reader is null || currentChat is null)
         {
-            SubscriptionsSummary = "Выберите Instagram-чат для просмотра участниц.";
             LatestSubscriptionBatch = null;
+            ParticipantListMessageDateLabel = string.Empty;
+            SubscriptionRows.Clear();
+            _subscriptionRowsView.Refresh();
+            SubscriptionsSummary = "Выберите Instagram-чат для просмотра участниц.";
+            SubscriptionsSyncMessage = "Выберите чат для просмотра списка участниц.";
             SetSubscriptionTileCounts(null);
             return;
         }
 
-        var settings = await _settings.LoadAsync();
-        // Old following results were gathered from activity profiles and must not be reused.
-        new InstagramCheckProfileSemanticsMigration(_reader.DatabasePath).EnsureApplied();
-        if (!_instagramBusy && !string.IsNullOrWhiteSpace(settings.InstagramTargetUserName))
-            new InstagramBatchRunStore(_reader.DatabasePath)
-                .DiscardAbandonedDrafts(settings.InstagramTargetUserName);
-        var latestBatch = new InstagramBatchSummaryStore(_reader.DatabasePath)
-            .Read(settings.InstagramTargetUserName ?? string.Empty);
-        var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
-        var participants = await lookup.ReadAllCurrentAsync([currentChat.Chat]);
-        var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
-            .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
-        var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
-        // Eligibility is global: an account marked VIP/admin in any connected chat
-        // is exempt from the "subscribed to me" direction in every chat view.
-        var privilegedNames = (await lookup.ReadAllCurrentAsync(settings.Chats))
-            .Where(participant => InstagramBatchEligibility.IsExcluded(participant.Category) &&
-                                  !string.IsNullOrWhiteSpace(participant.UserName))
-            .Select(participant => participant.UserName)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var userNames = participants.SelectMany(participant => new[]
-            {
-                participant.UserName, InstagramActivityProfile.TryGetUserName(participant.SubscriptionProfileUrl)
-            })
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name!)
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        IReadOnlyList<InstagramSavedCheck> saved = string.IsNullOrWhiteSpace(settings.InstagramTargetUserName)
-            ? []
-            : new InstagramSubscriptionCheckStore(_reader.DatabasePath)
-                .Read(settings.InstagramTargetUserName, userNames);
-        if (!ReferenceEquals(currentChat, SelectedChat)) return;
-        LatestSubscriptionBatch = latestBatch;
-        foreach (var row in InstagramSubscriptionPresentation.Build(participants, saved,
-                     ownNames, privilegedNames))
-            SubscriptionRows.Add(row);
-        _subscriptionRowsView.Refresh();
-        SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromRows(SubscriptionRows));
-        var discrepancies = SubscriptionRows.Count(row => row.HasDiscrepancy);
-        SubscriptionsSummary = $"Участниц: {SubscriptionRows.Count}. Расхождений по результатам поиска: " +
-                               $"{discrepancies}. Для VIP и администрации проверяем только мои подписки.";
-        UpdateSubscriptionFilterVisuals();
+        try
+        {
+            // Read everything before changing the visible rows or last successful batch.
+            // A transient database error must not leave the screen empty.
+            var settings = await _settings.LoadAsync();
+            new InstagramCheckProfileSemanticsMigration(_reader.DatabasePath).EnsureApplied();
+            if (!_instagramBusy && !string.IsNullOrWhiteSpace(settings.InstagramTargetUserName))
+                new InstagramBatchRunStore(_reader.DatabasePath)
+                    .DiscardAbandonedDrafts(settings.InstagramTargetUserName);
+            var latestBatch = new InstagramBatchSummaryStore(_reader.DatabasePath)
+                .Read(settings.InstagramTargetUserName ?? string.Empty);
+            var source = await new ChatParticipantRegistry(_reader.DatabasePath)
+                .ReadLatestSourceAsync(currentChat.Chat);
+            var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
+            var participants = await lookup.ReadAllCurrentAsync([currentChat.Chat]);
+            var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
+            var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
+            // An account marked VIP/admin in any connected chat is exempt from
+            // the "subscribed to me" direction in every chat view.
+            var privilegedNames = (await lookup.ReadAllCurrentAsync(settings.Chats))
+                .Where(participant => InstagramBatchEligibility.IsExcluded(participant.Category) &&
+                                      !string.IsNullOrWhiteSpace(participant.UserName))
+                .Select(participant => participant.UserName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var userNames = participants.SelectMany(participant => new[]
+                {
+                    participant.UserName,
+                    InstagramActivityProfile.TryGetUserName(participant.SubscriptionProfileUrl)
+                })
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            IReadOnlyList<InstagramSavedCheck> saved = string.IsNullOrWhiteSpace(settings.InstagramTargetUserName)
+                ? []
+                : new InstagramSubscriptionCheckStore(_reader.DatabasePath)
+                    .Read(settings.InstagramTargetUserName, userNames);
+            var rows = InstagramSubscriptionPresentation.Build(participants, saved,
+                ownNames, privilegedNames).ToArray();
+
+            // Ignore stale loads when the user switches chats or another reload starts.
+            if (request != _subscriptionRowsLoadVersion || !ReferenceEquals(currentChat, SelectedChat))
+                return;
+
+            SubscriptionRows.Clear();
+            foreach (var row in rows)
+                SubscriptionRows.Add(row);
+            _subscriptionRowsView.Refresh();
+            LatestSubscriptionBatch = latestBatch;
+            ParticipantListMessageDateLabel = source is null
+                ? "Список ещё не загружен"
+                : source.SentAtUtc is null
+                    ? "Дата списка неизвестна"
+                    : $"Список от {source.DateLabel}";
+            SetSubscriptionTileCounts(InstagramParticipantCategoryCounts.FromRows(SubscriptionRows));
+            var discrepancies = SubscriptionRows.Count(row => row.HasDiscrepancy);
+            SubscriptionsSummary = $"Участниц: {SubscriptionRows.Count}. Расхождений по результатам поиска: " +
+                                   $"{discrepancies}. Для VIP и администрации проверяем только мои подписки.";
+            if (SubscriptionsSyncMessage.StartsWith("Не удалось загрузить список участниц:",
+                    StringComparison.Ordinal) ||
+                SubscriptionsSyncMessage == "Выберите чат для просмотра списка участниц.")
+                SubscriptionsSyncMessage = string.Empty;
+        }
+        catch (Exception exception)
+        {
+            if (request == _subscriptionRowsLoadVersion && ReferenceEquals(currentChat, SelectedChat))
+                SubscriptionsSyncMessage = $"Не удалось загрузить список участниц: {exception.Message}";
+            throw;
+        }
     }
 
     private bool FilterSubscriptionRow(object value)
     {
         if (value is not InstagramSubscriptionRow row) return false;
-        if (_subscriptionFilter == SubscriptionFilter.Discrepancies && !row.HasDiscrepancy)
-            return false;
-        if (_subscriptionFilter == SubscriptionFilter.Unverified && !row.IsUnverified)
+        if (ShowOnlySubscriptionDiscrepancies && !row.HasDiscrepancy)
             return false;
         var query = _subscriptionQuery.Trim();
         return query.Length == 0 || row.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
@@ -393,32 +446,6 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                row.ActivityUserName.Contains(query.TrimStart('@'), StringComparison.OrdinalIgnoreCase) ||
                row.SubscriptionUserName.Contains(query.TrimStart('@'), StringComparison.OrdinalIgnoreCase);
     }
-
-    private void SetSubscriptionFilter(SubscriptionFilter filter)
-    {
-        _subscriptionFilter = filter;
-        _subscriptionRowsView.Refresh();
-        UpdateSubscriptionFilterVisuals();
-    }
-
-    private void UpdateSubscriptionFilterVisuals()
-    {
-        if (AllSubscriptionFilterButton is null || DiscrepancySubscriptionFilterButton is null ||
-            UnverifiedSubscriptionFilterButton is null) return;
-        AllSubscriptionFilterButton.Opacity = _subscriptionFilter == SubscriptionFilter.All ? 1 : 0.55;
-        DiscrepancySubscriptionFilterButton.Opacity =
-            _subscriptionFilter == SubscriptionFilter.Discrepancies ? 1 : 0.55;
-        UnverifiedSubscriptionFilterButton.Opacity = _subscriptionFilter == SubscriptionFilter.Unverified ? 1 : 0.55;
-    }
-
-    private void AllSubscriptionFilterButton_OnClick(object sender, RoutedEventArgs args)
-        => SetSubscriptionFilter(SubscriptionFilter.All);
-
-    private void DiscrepancySubscriptionFilterButton_OnClick(object sender, RoutedEventArgs args)
-        => SetSubscriptionFilter(SubscriptionFilter.Discrepancies);
-
-    private void UnverifiedSubscriptionFilterButton_OnClick(object sender, RoutedEventArgs args)
-        => SetSubscriptionFilter(SubscriptionFilter.Unverified);
 
     private void OpenParticipantActivityProfileButton_OnClick(object sender, RoutedEventArgs args)
     {
@@ -1172,6 +1199,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private void ShowChat()
     {
         if (SelectedChat is null) return;
+        _subscriptionRowsLoadVersion++;
         _chatPage = ChatPage.Tasks;
         SubscriptionRows.Clear();
         LatestSubscriptionBatch = null;
@@ -1225,6 +1253,15 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private void LatestSubscriptionSummaryCard_OnPreviewMouseLeftButtonUp(object sender,
+        System.Windows.Input.MouseButtonEventArgs args)
+    {
+        if (!HasLatestSubscriptionBatch) return;
+
+        LatestSubscriptionSummaryExpander.IsExpanded = !LatestSubscriptionSummaryExpander.IsExpanded;
+        args.Handled = true;
+    }
+
     private void RefreshSubscriptionsButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (IsBusy || _synchronization is null || SelectedChat is null) return;
@@ -1237,7 +1274,6 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
         dialog.StartRequested += async (_, _) =>
         {
-            var updated = false;
             try
             {
                 var result = await _synchronization.RefreshLatestParticipantListAsync(selected.Chat,
@@ -1246,7 +1282,6 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                         if (dialog.Dispatcher.CheckAccess()) dialog.Model.Report(update);
                         else dialog.Dispatcher.Invoke(() => dialog.Model.Report(update));
                     }, cancellation.Token);
-                updated = result.Applied;
                 if (result.SourceMessageId is null)
                     dialog.Model.Skip(ParticipantListSyncStage.SAVE);
                 dialog.Model.Activate(ParticipantListSyncStage.DISPLAY,
@@ -1254,17 +1289,31 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 if (ReferenceEquals(selected, SelectedChat))
                     await LoadSubscriptionRowsAsync();
 
-                SubscriptionsSyncMessage = result.SourceMessageId is null
-                    ? "Список участниц в истории не найден. Предыдущий список сохранён."
-                    : result.Applied
-                        ? "Список участниц обновлён по последнему сообщению Telegram."
-                        : "Список найден, но он уже учтён или устарел.";
-                dialog.Model.Finish(result.SourceMessageId is null
-                        ? "Список не найден"
-                        : updated
-                            ? "Список обновлён"
-                            : "Список не изменён",
-                    SubscriptionsSyncMessage, ParticipantListSyncOutcome.COMPLETED);
+                if (result.SourceMessageSentAtUtc is { } sentAtUtc)
+                    dialog.Model.SetSourceMessageDate(sentAtUtc);
+                // Found does not mean applied: preserve the currently applied date
+                // and explain newer-but-ambiguous or older Telegram messages.
+                SubscriptionsSyncMessage = result.Status == ParticipantListApplyStatus.AMBIGUOUS_MATCH
+                    ? result.OutcomeDescription
+                    : string.Empty;
+                // Keep the "already current" outcome concise in the sync dialog even
+                // if a service implementation returns the older verbose diagnostics.
+                var resultDetail = result.OutcomeDescription;
+                if (result.Status == ParticipantListApplyStatus.ALREADY_CURRENT)
+                {
+                    var dateLabel = result.StoredSource is { SentAtUtc: not null } stored
+                        ? stored.DateLabel
+                        : result.SourceMessageId is { } messageId &&
+                          result.SourceMessageSentAtUtc is { } sentAt
+                            ? new ParticipantListSourceInfo(messageId, sentAt).DateLabel
+                            : null;
+                    resultDetail = dateLabel is null
+                        ? "Список уже сохранён. Изменений нет."
+                        : $"Список от {dateLabel} уже сохранён. Изменений нет.";
+                }
+
+                dialog.Model.Finish(result.OutcomeTitle, resultDetail,
+                    ParticipantListSyncOutcome.COMPLETED);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {

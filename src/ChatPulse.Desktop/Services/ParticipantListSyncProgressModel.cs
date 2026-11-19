@@ -79,6 +79,7 @@ public sealed class ParticipantListSyncProgressModel : INotifyPropertyChanged
     private ParticipantListSyncOutcome _outcome;
     private int _pagesScanned;
     private int _messagesScanned;
+    private string _sourceMessageDateLabel = string.Empty;
 
     public ParticipantListSyncProgressModel()
     {
@@ -103,6 +104,8 @@ public sealed class ParticipantListSyncProgressModel : INotifyPropertyChanged
     public string CurrentDetail => _detail;
     public int PagesScanned => _pagesScanned;
     public int MessagesScanned => _messagesScanned;
+    public string SourceMessageDateLabel => _sourceMessageDateLabel;
+    public bool HasSourceMessageDate => IsRunning && _sourceMessageDateLabel.Length > 0;
     public bool IsIndeterminate => IsRunning && _activeStage == ParticipantListSyncStage.SEARCH;
     public bool CanStop => IsRunning && !_stopRequested && _activeStage < ParticipantListSyncStage.SAVE;
     public bool CanAct => !IsRunning || CanStop;
@@ -118,6 +121,8 @@ public sealed class ParticipantListSyncProgressModel : INotifyPropertyChanged
     {
         if (!IsRunning) return;
         Activate(progress.Stage, progress.Description);
+        if (progress.SourceMessageSentAtUtc is { } timestamp)
+            SetSourceMessageDate(timestamp);
         if (progress.Stage != ParticipantListSyncStage.SEARCH) return;
         _pagesScanned = Math.Max(_pagesScanned, progress.PagesScanned);
         _messagesScanned = Math.Max(_messagesScanned, progress.MessagesScanned);
@@ -137,6 +142,13 @@ public sealed class ParticipantListSyncProgressModel : INotifyPropertyChanged
             Steps[(int)stage].State = ParticipantListSyncStepState.ACTIVE;
         _detail = detail;
         UpdateProgressProperties();
+    }
+
+    public void SetSourceMessageDate(DateTime dateUtc)
+    {
+        _sourceMessageDateLabel = $"Сообщение со списком от {new ParticipantListSourceInfo(0, dateUtc).DateLabel}";
+        Notify(nameof(SourceMessageDateLabel));
+        Notify(nameof(HasSourceMessageDate));
     }
 
     public void Skip(ParticipantListSyncStage stage)
@@ -167,6 +179,7 @@ public sealed class ParticipantListSyncProgressModel : INotifyPropertyChanged
         _resultDetail = detail;
         _isRunning = false;
         Notify(nameof(IsRunning));
+        Notify(nameof(HasSourceMessageDate));
         Notify(nameof(HasResult));
         Notify(nameof(IsStopped));
         Notify(nameof(ResultTitle));

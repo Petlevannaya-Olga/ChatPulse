@@ -1,22 +1,58 @@
 using System.IO;
+using System.Globalization;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
 
 namespace ChatPulse.Desktop.Services;
 
+public sealed record ParticipantListSourceInfo(long MessageId, DateTime? SentAtUtc)
+{
+    public string DateLabel => SentAtUtc is { } date
+        ? date.ToLocalTime().ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)
+        : "Дата списка неизвестна";
+}
+
+public enum ParticipantListApplyStatus
+{
+    NO_VALID_LIST,
+    APPLIED,
+    ALREADY_CURRENT,
+    OLDER_MESSAGE,
+    AMBIGUOUS_MATCH
+}
+
+public sealed record ParticipantListApplyResult(int AppliedCount, ParticipantListApplyStatus Status);
+
 /// <summary>Stores each recognized full participant register as a chat-local snapshot.</summary>
 public sealed class ChatParticipantRegistry(string databasePath)
 {
-    public async Task<int> UpdateAsync(ConfiguredChat chat,
+    public Task<int> UpdateAsync(ConfiguredChat chat,
         IEnumerable<(long MessageId, string? Text)> messages,
+        CancellationToken cancellationToken = default)
+        => UpdateAsync(chat, messages.Select(item =>
+            (item.MessageId, item.Text, SentAtUtc: (DateTime?)null)), cancellationToken);
+
+    public async Task<int> UpdateAsync(ConfiguredChat chat,
+        IEnumerable<(long MessageId, string? Text, DateTime? SentAtUtc)> messages,
+        CancellationToken cancellationToken = default)
+        => (await UpdateDetailedAsync(chat, messages, cancellationToken)).AppliedCount;
+
+    /// <summary>
+    /// Applies complete lists in ascending message order and explains why the last
+    /// recognized message was (or was not) accepted. Older/ambiguous snapshots never
+    /// replace the last successfully applied list.
+    /// </summary>
+    public async Task<ParticipantListApplyResult> UpdateDetailedAsync(ConfiguredChat chat,
+        IEnumerable<(long MessageId, string? Text, DateTime? SentAtUtc)> messages,
         CancellationToken cancellationToken = default)
     {
         var snapshots = messages.OrderBy(item => item.MessageId).Select(item =>
         {
             var valid = ParticipantListParser.TryParse(item.Text, out var parsed);
-            return (item.MessageId, Valid: valid, Parsed: parsed);
+            return (item.MessageId, item.SentAtUtc, Valid: valid, Parsed: parsed);
         }).Where(item => item.Valid && item.Parsed is not null).ToArray();
-        if (snapshots.Length == 0) return 0;
+        if (snapshots.Length == 0)
+            return new ParticipantListApplyResult(0, ParticipantListApplyStatus.NO_VALID_LIST);
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -28,6 +64,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
             CREATE TABLE IF NOT EXISTS ChatParticipantRegistryVersions (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL, PeerId INTEGER NOT NULL,
                 SourceMessageId INTEGER NOT NULL,
+                SourceSentAtUnixSeconds INTEGER,
                 PRIMARY KEY (TelegramUserId, PeerType, PeerId)
             );
             CREATE TABLE IF NOT EXISTS ChatParticipants (
@@ -42,7 +79,24 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 ON ChatParticipants(TelegramUserId, PeerType, PeerId);
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
+        // Existing installations have no timestamp column: migrate in place.
+        var schema = connection.CreateCommand();
+        schema.CommandText = "PRAGMA table_info(ChatParticipantRegistryVersions)";
+        var hasTimestamp = false;
+        await using (var columns = await schema.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await columns.ReadAsync(cancellationToken))
+                if (string.Equals(columns.GetString(1), "SourceSentAtUnixSeconds", StringComparison.Ordinal))
+                    hasTimestamp = true;
+        }
+        if (!hasTimestamp)
+        {
+            var migration = connection.CreateCommand();
+            migration.CommandText = "ALTER TABLE ChatParticipantRegistryVersions ADD COLUMN SourceSentAtUnixSeconds INTEGER";
+            await migration.ExecuteNonQueryAsync(cancellationToken);
+        }
         var applied = 0;
+        var status = ParticipantListApplyStatus.NO_VALID_LIST;
         foreach (var snapshot in snapshots)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -58,22 +112,51 @@ public sealed class ChatParticipantRegistry(string databasePath)
             if (prior is not null && Convert.ToInt64(prior) > snapshot.MessageId)
             {
                 await transaction.CommitAsync(cancellationToken);
+                status = ParticipantListApplyStatus.OLDER_MESSAGE;
                 continue;
             }
             var current = connection.CreateCommand();
             current.Transaction = transaction;
             current.CommandText = """
-                SELECT ParticipantId, SubscriptionProfileUrl, ActivityProfileUrl, DisplayName
+                SELECT ParticipantId, SubscriptionProfileUrl, ActivityProfileUrl, DisplayName,
+                       IsCurrent, Position, Category, Status
                 FROM ChatParticipants
                 WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
                 """;
             AddChatParameters(current, chat);
-            var known = new List<(long Id, string Subscription, string Activity, string? Name)>();
+            var known = new List<(long Id, string Subscription, string Activity, string? Name,
+                bool IsCurrent, int? Position, string Category, string Status)>();
             await using (var reader = await current.ExecuteReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
                     known.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
-                        reader.IsDBNull(3) ? null : reader.GetString(3)));
+                        reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4) == 1,
+                        reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                        reader.GetString(6), reader.GetString(7)));
+            }
+            // The same message can be returned again during a manual refresh.
+            // Avoid rewriting the register if its complete contents have not changed.
+            // An edited Telegram message with the same ID is still applied below.
+            if (prior is not null && Convert.ToInt64(prior) == snapshot.MessageId &&
+                SnapshotMatchesCurrent(snapshot.Parsed!.Participants, known))
+            {
+                if (snapshot.SentAtUtc is { } existingSentAt)
+                {
+                    var backfill = connection.CreateCommand();
+                    backfill.Transaction = transaction;
+                    backfill.CommandText = """
+                        UPDATE ChatParticipantRegistryVersions
+                        SET SourceSentAtUnixSeconds=$sentAt
+                        WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+                        """;
+                    AddChatParameters(backfill, chat);
+                    backfill.Parameters.AddWithValue("$sentAt",
+                        new DateTimeOffset(existingSentAt.ToUniversalTime()).ToUnixTimeSeconds());
+                    await backfill.ExecuteNonQueryAsync(cancellationToken);
+                }
+                await transaction.CommitAsync(cancellationToken);
+                status = ParticipantListApplyStatus.ALREADY_CURRENT;
+                continue;
             }
             var matches = new List<(ParsedParticipant Participant, long? Id)>();
             var used = new HashSet<long>();
@@ -102,6 +185,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
             if (ambiguous)
             {
                 await transaction.RollbackAsync(cancellationToken);
+                status = ParticipantListApplyStatus.AMBIGUOUS_MATCH;
                 continue;
             }
             var deactivate = connection.CreateCommand();
@@ -142,18 +226,88 @@ public sealed class ChatParticipantRegistry(string databasePath)
             saveVersion.Transaction = transaction;
             saveVersion.CommandText = """
                 INSERT INTO ChatParticipantRegistryVersions
-                    (TelegramUserId, PeerType, PeerId, SourceMessageId)
-                VALUES ($owner, $type, $peer, $source)
+                    (TelegramUserId, PeerType, PeerId, SourceMessageId, SourceSentAtUnixSeconds)
+                VALUES ($owner, $type, $peer, $source, $sentAt)
                 ON CONFLICT(TelegramUserId, PeerType, PeerId)
-                DO UPDATE SET SourceMessageId=excluded.SourceMessageId
+                DO UPDATE SET SourceMessageId=excluded.SourceMessageId,
+                    SourceSentAtUnixSeconds=CASE
+                        WHEN excluded.SourceSentAtUnixSeconds IS NOT NULL THEN excluded.SourceSentAtUnixSeconds
+                        WHEN ChatParticipantRegistryVersions.SourceMessageId=excluded.SourceMessageId
+                            THEN ChatParticipantRegistryVersions.SourceSentAtUnixSeconds
+                        ELSE NULL
+                    END
                 """;
             AddChatParameters(saveVersion, chat);
             saveVersion.Parameters.AddWithValue("$source", snapshot.MessageId);
+            saveVersion.Parameters.AddWithValue("$sentAt", snapshot.SentAtUtc is { } sentAt
+                ? (object)new DateTimeOffset(sentAt.ToUniversalTime()).ToUnixTimeSeconds()
+                : DBNull.Value);
             await saveVersion.ExecuteNonQueryAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             applied++;
+            status = ParticipantListApplyStatus.APPLIED;
         }
-        return applied;
+        return new ParticipantListApplyResult(applied, status);
+    }
+
+    private static bool SnapshotMatchesCurrent(IEnumerable<ParsedParticipant> participants,
+        IReadOnlyList<(long Id, string Subscription, string Activity, string? Name,
+            bool IsCurrent, int? Position, string Category, string Status)> stored)
+    {
+        var current = participants.ToArray();
+        if (stored.Count(item => item.IsCurrent) != current.Length) return false;
+        var used = new HashSet<long>();
+        foreach (var participant in current)
+        {
+            var matches = stored.Where(item => item.IsCurrent &&
+                item.Position == participant.Position &&
+                string.Equals(item.Name, participant.DisplayName, StringComparison.Ordinal) &&
+                string.Equals(item.Subscription, participant.SubscriptionProfileUrl,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Activity, participant.ActivityProfileUrl,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Category, participant.Category, StringComparison.Ordinal) &&
+                string.Equals(item.Status, participant.Status.ToString(), StringComparison.Ordinal))
+                .Select(item => item.Id).ToArray();
+            if (matches.Length != 1 || !used.Add(matches[0])) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Timestamp of the Telegram message whose list is currently applied to the chat.</summary>
+    public async Task<ParticipantListSourceInfo?> ReadLatestSourceAsync(ConfiguredChat chat,
+        CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(databasePath)) return null;
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var table = connection.CreateCommand();
+        table.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ChatParticipantRegistryVersions'";
+        if (await table.ExecuteScalarAsync(cancellationToken) is null) return null;
+        var schema = connection.CreateCommand();
+        schema.CommandText = "PRAGMA table_info(ChatParticipantRegistryVersions)";
+        var hasTimestamp = false;
+        await using (var columns = await schema.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await columns.ReadAsync(cancellationToken))
+                if (string.Equals(columns.GetString(1), "SourceSentAtUnixSeconds", StringComparison.Ordinal))
+                    hasTimestamp = true;
+        }
+        var query = connection.CreateCommand();
+        query.CommandText = $"""
+            SELECT SourceMessageId, {(hasTimestamp ? "SourceSentAtUnixSeconds" : "NULL")}
+            FROM ChatParticipantRegistryVersions
+            WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+            """;
+        AddChatParameters(query, chat);
+        await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        var time = reader.IsDBNull(1) ? (DateTime?)null
+            : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).UtcDateTime;
+        return new ParticipantListSourceInfo(reader.GetInt64(0), time);
     }
 
     private static void AddChatParameters(SqliteCommand command, ConfiguredChat chat)
