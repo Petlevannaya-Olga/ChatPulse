@@ -398,7 +398,8 @@ public sealed class ParticipantListIntegrationTests
             4
             https://www.instagram.com/new_personX
             """;
-        static bool? Opens(string url) => url.EndsWith("/new_person", StringComparison.Ordinal);
+        static bool? Opens(string url) => url.EndsWith("/new_person", StringComparison.Ordinal)
+            ? true : false;
         Assert.True(ParticipantListParser.TryParse(register, out var parsed, Opens));
         Assert.Contains(parsed!.Participants, item =>
             item.SubscriptionProfileUrl == "https://www.instagram.com/new_person" &&

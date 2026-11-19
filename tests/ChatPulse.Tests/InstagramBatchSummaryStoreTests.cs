@@ -41,7 +41,7 @@ public sealed class InstagramBatchSummaryStoreTests
             Assert.False(completed.HasDetails);
             Assert.True(interrupted.IsInterrupted);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public sealed class InstagramBatchSummaryStoreTests
             }
             Assert.Null(store.Read("main"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class InstagramBatchSummaryStoreTests
             store.Save("main", newer);
             Assert.True(store.Read("main")!.HasNotFoundBreakdown);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]

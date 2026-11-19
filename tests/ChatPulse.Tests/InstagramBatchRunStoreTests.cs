@@ -29,7 +29,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Equal("FOUND", current[0].Status);
             Assert.Equal(previous, summaryStore.Read("main"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Equal(summary, new InstagramBatchSummaryStore(path).Read("main"));
             Assert.Equal(0, CountRows(path, "InstagramBatchCheckDrafts"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Equal("FOUND", Assert.Single(resultStore.Read("main", ["member"])).Status);
             Assert.Equal(previous, new InstagramBatchSummaryStore(path).Read("main"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Equal(InstagramCheckDirections.FOLLOWING, savedSummary.Directions);
             Assert.Equal("—", savedSummary.NotFoundFollowersLabel);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Equal(previous, summaryStore.Read("main"));
             Assert.Equal(0, CountRows(path, "InstagramBatchCheckDrafts"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public sealed class InstagramBatchRunStoreTests
                 "member", InstagramCheckDirections.FOLLOWING));
             Assert.Equal("FOUND", Assert.Single(checks.Read("main", ["member"])).Status);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Equal("following", visible[0].Kind);
             Assert.Equal("FOUND", visible[0].Status);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Contains(latest, x => x.Kind == "following" && x.Status == "FOUND");
             Assert.Equal(summary, new InstagramBatchSummaryStore(path).Read("main"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -202,7 +202,7 @@ public sealed class InstagramBatchRunStoreTests
                 .PublishIndividual("missing", "main", "member", InstagramCheckDirections.FOLLOWERS));
             Assert.Equal("FOUND", Assert.Single(checks.Read("main", ["member"])).Status);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public sealed class InstagramBatchRunStoreTests
             Assert.Contains(checks, x => x.UserName == "member.subscribe" && x.Kind == "following");
             Assert.Equal(0, CountRows(path, "InstagramBatchCheckDrafts"));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     private static long CountRows(string path, string table)

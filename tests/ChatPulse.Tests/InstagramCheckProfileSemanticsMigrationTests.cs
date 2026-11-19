@@ -35,7 +35,7 @@ public sealed class InstagramCheckProfileSemanticsMigrationTests
             migration.EnsureApplied(); // must not invalidate a new-format result on subsequent starts
             Assert.Contains(checks.Read("main", ["member.subscribe"]), x => x.Kind == "following");
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     private static InstagramBatchProgress Progress(string user, string kind) =>

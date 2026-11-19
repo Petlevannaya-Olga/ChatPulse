@@ -112,7 +112,7 @@ public sealed class InstagramParticipantSearchTests
             Assert.Equal("active_anna", single.UserName);
             Assert.Equal("https://www.instagram.com/active_anna/", single.ActivityProfileUrl);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Theory]
@@ -213,7 +213,7 @@ public sealed class InstagramParticipantSearchTests
             Assert.Contains(saved, item => item.Kind == "following" && item.Status == "NOT_FOUND");
             Assert.Empty(store.Read("another.main", ["member.one"]));
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
 }

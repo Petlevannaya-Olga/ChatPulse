@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Settings;
@@ -45,7 +45,7 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
                 ParticipantListApplyStatus.OLDER_MESSAGE =>
                     found + " Сообщение старее сохранённого, поэтому список не заменён." + saved,
                 ParticipantListApplyStatus.AMBIGUOUS_MATCH =>
-                    found + " Список не применён: несколько участниц нельзя однозначно сопоставить по Instagram-профилям. " +
+                    found + " Список не применён: сопоставление участниц по Instagram-профилям неоднозначно. " +
                     "Предыдущий список сохранён." + saved,
                 ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE =>
                     found + " Список не применён: не удалось надёжно подтвердить страницу участницы " +

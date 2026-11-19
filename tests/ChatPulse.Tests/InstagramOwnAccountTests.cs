@@ -27,7 +27,7 @@ public sealed class InstagramOwnAccountTests
             command.CommandText = "SELECT COUNT(*) FROM InstagramOwnAccounts";
             Assert.Equal(1L, (long)(await command.ExecuteScalarAsync())!);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class InstagramOwnAccountTests
             Assert.Equal(new InstagramOwnAccounts("new.main", "backup.active"),
                 await new InstagramOwnAccountStore(path).ReadAsync());
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public sealed class InstagramOwnAccountTests
             await Assert.ThrowsAnyAsync<ArgumentException>(() => store.SaveAsync("main", "wrong/url"));
             Assert.Equal(new InstagramOwnAccounts("main", "backup"), await store.ReadAsync());
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally { SqliteTestDatabaseCleanup.DeleteFile(path); }
     }
 
     [Fact]
