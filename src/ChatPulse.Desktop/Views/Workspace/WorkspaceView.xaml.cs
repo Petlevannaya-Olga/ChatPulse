@@ -69,6 +69,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _subscriptionsCheckMessage = string.Empty;
     private InstagramBatchResultSummary? _latestSubscriptionBatch;
     private ParticipantListSourceInfo? _latestParticipantListSource;
+    private ParticipantListRefreshAttempt? _latestParticipantListAttempt;
     private int _loadVersion;
     private int _totalDetected;
 
@@ -414,6 +415,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         {
             LatestSubscriptionBatch = null;
             SetLatestParticipantListSource(null);
+            _latestParticipantListAttempt = null;
             SubscriptionRows.Clear();
             _subscriptionRowsView.Refresh();
             SubscriptionsSummary = "Выберите Instagram-чат для просмотра участниц.";
@@ -433,8 +435,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     .DiscardAbandonedDrafts(settings.InstagramTargetUserName);
             var latestBatch = new InstagramBatchSummaryStore(_reader.DatabasePath)
                 .Read(settings.InstagramTargetUserName ?? string.Empty);
-            var source = await new ChatParticipantRegistry(_reader.DatabasePath)
-                .ReadLatestSourceAsync(currentChat.Chat);
+            var registry = new ChatParticipantRegistry(_reader.DatabasePath);
+            var source = await registry.ReadLatestSourceAsync(currentChat.Chat);
+            var latestAttempt = await registry.ReadLastAttemptAsync(currentChat.Chat);
             var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
             var participants = await lookup.ReadAllCurrentAsync([currentChat.Chat]);
             var owned = await new InstagramOwnAccountStore(_reader.DatabasePath)
@@ -472,6 +475,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             _subscriptionRowsView.Refresh();
             LatestSubscriptionBatch = latestBatch;
             SetLatestParticipantListSource(source);
+            _latestParticipantListAttempt = latestAttempt;
             // The headline counts everyone in the source register; the rows/checks
             // intentionally omit the owner's Instagram identities.
             var registerCounts = InstagramParticipantCategoryCounts.FromRegister(participants);
@@ -1342,6 +1346,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         SubscriptionRows.Clear();
         LatestSubscriptionBatch = null;
         SetLatestParticipantListSource(null);
+        _latestParticipantListAttempt = null;
         SubscriptionsSyncMessage = string.Empty;
         SetSubscriptionTileCounts(null);
         _taskFilter = TaskFilter.Pending;
@@ -1399,7 +1404,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private void ShowParticipantListDetails_OnClick(object sender, RoutedEventArgs args)
         => ShowSubscriptionInfoDialog(new SubscriptionInfoDialog(_latestParticipantListSource,
-            _subscriptionTileCounts));
+            _subscriptionTileCounts, _latestParticipantListAttempt));
 
     private void ShowSubscriptionInfoDialog(SubscriptionInfoDialog dialog)
     {
@@ -1441,7 +1446,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                         return _instagramBrowser.ProfileOpensAsync(profileUrl, cancellation.Token)
                             .GetAwaiter().GetResult();
                     });
-                if (result.SourceMessageId is null)
+                if (result.SourceMessageId is null ||
+                    result.Status == ParticipantListApplyStatus.UNPARSEABLE_MESSAGE)
                     dialog.Model.Skip(ParticipantListSyncStage.SAVE);
                 dialog.Model.Activate(ParticipantListSyncStage.DISPLAY,
                     "Обновляем таблицу участниц…");
@@ -1454,7 +1460,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 // and explain newer-but-ambiguous or older Telegram messages.
                 SubscriptionsSyncMessage = result.Status is
                     ParticipantListApplyStatus.AMBIGUOUS_MATCH or
-                    ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE
+                    ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE or
+                    ParticipantListApplyStatus.UNPARSEABLE_MESSAGE
                     ? result.OutcomeDescription
                     : string.Empty;
                 // Keep the "already current" outcome concise in the sync dialog even
@@ -1473,8 +1480,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                         : $"Список от {dateLabel} уже сохранён. Изменений нет.";
                 }
 
+                var failed = result.Status is ParticipantListApplyStatus.UNPARSEABLE_MESSAGE or
+                    ParticipantListApplyStatus.AMBIGUOUS_MATCH or
+                    ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE;
                 dialog.Model.Finish(result.OutcomeTitle, resultDetail,
-                    ParticipantListSyncOutcome.COMPLETED);
+                    failed ? ParticipantListSyncOutcome.FAILED : ParticipantListSyncOutcome.COMPLETED);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {

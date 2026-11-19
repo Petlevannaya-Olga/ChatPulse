@@ -860,6 +860,7 @@ public sealed class ParticipantListIntegrationTests
         var database = Path.Combine(temp.Path, "history.db");
         var registry = new ChatParticipantRegistry(database);
         var chat = Chat(101);
+        chat.SocialNetwork = "Telegram";
         Assert.Equal(1, await registry.UpdateAsync(chat, [(30, TELEGRAM_REGISTER)]));
         Assert.Equal(1, await registry.UpdateAsync(chat, [(31, TELEGRAM_REGISTER)]));
         await using var connection = new SqliteConnection($"Data Source={database}");
@@ -878,6 +879,245 @@ public sealed class ParticipantListIntegrationTests
     {
         Assert.False(ParticipantListParser.TryParse("Актив https://t.me/mychannel/123", out _));
         Assert.False(ParticipantListParser.TryParse("1\nhttps://t.me/a\n2\nhttps://t.me/b", out _));
+    }
+
+    [Fact]
+    public void InstagramRegister_DuplicateRowsAreAcceptedWithoutExtraParticipant()
+    {
+        const string text = """
+            ВСЕ МЫ
+            1
+            https://instagram.com/_mar_g.o
+            Подписка сюда
+            Актив дает отсюда
+            https://instagram.com/mar_fozzz
+            2
+            https://instagram.com/second
+            3
+            https://instagram.com/third
+            4
+            https://instagram.com/_mar_g.o
+            Подписка сюда
+            Актив дает отсюда
+            https://instagram.com/mar_fozzz
+            ШТРАФНЫЕ ДНИ
+            5
+            https://instagram.com/_mar_g.oХ
+            """;
+
+        Assert.True(ParticipantListParser.LooksLikeParticipantList(text));
+        Assert.True(ParticipantListParser.TryParse(text, out var parsed, instagramOnly: true));
+        Assert.NotNull(parsed);
+        Assert.Equal(3, parsed.Participants.Count);
+        var duplicate = Assert.Single(parsed.Participants, participant =>
+            participant.SubscriptionProfileUrl == "https://www.instagram.com/_mar_g.o");
+        Assert.Equal(1, duplicate.Position);
+        Assert.Equal(ParticipantStatus.PENALTY, duplicate.Status);
+        Assert.Equal("https://www.instagram.com/mar_fozzz", duplicate.ActivityProfileUrl);
+    }
+
+    [Theory]
+    [InlineData("https://www.com/mariagorbunovarus")]
+    [InlineData("https://t.me/mariagorbunovarus")]
+    [InlineData("https://www.instagram.com/mariagorbunovarusХ")]
+    public void InstagramRegister_RejectsNonInstagramOrMalformedNormalProfile(string broken)
+    {
+        var text = $"""
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            https://www.instagram.com/second
+            3
+            {broken}
+            """;
+
+        Assert.True(ParticipantListParser.LooksLikeParticipantList(text));
+        Assert.False(ParticipantListParser.TryParse(text, out _, instagramOnly: true));
+    }
+
+    [Fact]
+    public void FourteenthChat_DuplicateWithMalformedPenaltyDomainIsNotSilentlyFixed()
+    {
+        const string list = """
+            14 ЧАТ
+            VIP УЧАСТНИКИ
+            1 VIP
+            https://www.instagram.com/first_vip
+            ВСЕ МЫ
+            1
+            https://instagram.com/_mar_g.o
+            Подписка сюда
+            Актив дает отсюда
+            https://instagram.com/mar_fozzz
+            2
+            https://instagram.com/another_account
+            3
+            https://instagram.com/_mar_g.o
+            Подписка сюда
+            Актив дает отсюда
+            https://instagram.com/mar_fozzz
+            ШТРАФНЫЕ ДНИ
+            4
+            https://www.com/mariagorbunovarus
+            """;
+        Assert.True(ParticipantListParser.LooksLikeParticipantList(list));
+        Assert.False(ParticipantListParser.TryParse(list, out _, instagramOnly: true));
+        var corrected = list.Replace("https://www.com/", "https://www.instagram.com/",
+            StringComparison.Ordinal);
+        Assert.True(ParticipantListParser.TryParse(corrected, out var parsed,
+            instagramOnly: true));
+        Assert.NotNull(parsed);
+        Assert.Equal(4, parsed.Participants.Count); // VIP, 2 unique ordinary, 1 penalty
+    }
+
+    [Fact]
+    public void InstagramRegister_PenaltySuffixMayBeLatinOrCyrillicX()
+    {
+        const string text = """
+            ВСЕ МЫ
+            1
+            https://instagram.com/first
+            2
+            https://instagram.com/second
+            3
+            https://instagram.com/third
+            ШТРАФНЫЕ ДНИ
+            4
+            https://instagram.com/firstХ
+            5
+            https://instagram.com/secondX
+            """;
+        Assert.True(ParticipantListParser.TryParse(text, out var parsed, instagramOnly: true));
+        Assert.NotNull(parsed);
+        Assert.Equal(3, parsed.Participants.Count);
+        Assert.Equal(2, parsed.Participants.Count(participant =>
+            participant.Status == ParticipantStatus.PENALTY));
+    }
+
+    [Fact]
+    public void ParseDiagnostics_IdentifiesIncorrectPenaltyDomainAndPosition()
+    {
+        const string text = """
+            14 ЧАТ
+            VIP УЧАСТНИКИ
+            1 VIP
+            https://www.instagram.com/first_vip
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            https://www.instagram.com/second
+            ШТРАФНЫЕ ДНИ
+            29
+            https://www.com/mariagorbunovarus
+            """;
+        Assert.False(ParticipantListParser.TryParse(text, out _, out var reason,
+            instagramOnly: true));
+        Assert.NotNull(reason);
+        Assert.Contains("ШТРАФНЫЕ ДНИ", reason);
+        Assert.Contains("№29", reason);
+        Assert.Contains("www.com", reason);
+        Assert.Contains("https://www.com/mariagorbunovarus", reason);
+        Assert.Contains("instagram.com", reason);
+    }
+
+    [Fact]
+    public void ParseDiagnostics_IdentifiesIncorrectDomainInRegularSection()
+    {
+        const string text = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            https://www.instagram.com/second
+            3
+            https://t.me/third
+            """;
+        Assert.False(ParticipantListParser.TryParse(text, out _, out var reason,
+            instagramOnly: true));
+        Assert.NotNull(reason);
+        Assert.Contains("ВСЕ МЫ", reason);
+        Assert.Contains("№3", reason);
+        Assert.Contains("t.me", reason);
+    }
+
+    [Fact]
+    public void ParseDiagnostics_IdentifiesMissingProfileInNumberedEntry()
+    {
+        const string text = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            3
+            https://www.instagram.com/third
+            """;
+        Assert.False(ParticipantListParser.TryParse(text, out _, out var reason,
+            instagramOnly: true));
+        Assert.NotNull(reason);
+        Assert.Contains("ВСЕ МЫ", reason);
+        Assert.Contains("№2", reason);
+        Assert.Contains("отсутствует", reason);
+    }
+
+    [Fact]
+    public void ParseDiagnostics_SuccessHasNoErrorAndAcceptsExactDuplicate()
+    {
+        const string text = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            https://www.instagram.com/second
+            3
+            https://www.instagram.com/first
+            """;
+        Assert.True(ParticipantListParser.TryParse(text, out var parsed,
+            out var reason, instagramOnly: true));
+        Assert.Null(reason);
+        Assert.NotNull(parsed);
+        Assert.Equal(2, parsed.Participants.Count);
+    }
+
+    [Fact]
+    public void ParseDiagnostics_IdentifiesAmbiguousPenaltySuffix()
+    {
+        const string text = """
+            ВСЕ МЫ
+            1
+            https://www.instagram.com/first
+            2
+            https://www.instagram.com/firstx
+            3
+            https://www.instagram.com/third
+            ШТРАФНЫЕ ДНИ
+            4
+            https://www.instagram.com/firstx
+            """;
+        Assert.False(ParticipantListParser.TryParse(text, out _, out var reason,
+            instagramOnly: true));
+        Assert.NotNull(reason);
+        Assert.Contains("ШТРАФНЫЕ ДНИ", reason);
+        Assert.Contains("№4", reason);
+        Assert.Contains("неоднозначно", reason);
+    }
+
+    [Fact]
+    public void TelegramRegister_StillPermitsTelegramLinksForNonInstagramChat()
+    {
+        const string text = """
+            СПИСОК УЧАСТНИЦ
+            1
+            https://t.me/first
+            2
+            https://t.me/second
+            3
+            https://t.me/third
+            """;
+        Assert.True(ParticipantListParser.TryParse(text, out var parsed));
+        Assert.Equal(3, parsed!.Participants.Count);
+        Assert.False(ParticipantListParser.TryParse(text, out _, instagramOnly: true));
     }
 
     private static ConfiguredChat Chat(long peer) => new()

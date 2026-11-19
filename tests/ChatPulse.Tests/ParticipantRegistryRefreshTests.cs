@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
@@ -496,6 +496,97 @@ public sealed class ParticipantRegistryRefreshTests
         Assert.Equal(saved, result.StoredSource?.SentAtUtc);
         Assert.Contains("старее", result.OutcomeDescription);
         Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
+    }
+
+    [Fact]
+    public async Task MalformedNewestRegisterIsReportedAndCannotBeHiddenByOlderValidRegister()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        Assert.Equal(1, await registry.UpdateAsync(chat, [(10, ORIGINAL_REGISTER)]));
+        const string malformed = """
+            СПИСОК УЧАСТНИЦ
+            1
+            https://www.instagram.com/first_check
+            2
+            https://www.instagram.com/second_check
+            3
+            https://www.com/third_check
+            """;
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, matches, _) =>
+        {
+            var messages = new[]
+            {
+                new TelegramChatMessage(30, "Актив https://instagram.com/p/post"),
+                new TelegramChatMessage(20, malformed),
+                new TelegramChatMessage(10, ORIGINAL_REGISTER)
+            };
+            return Task.FromResult<TelegramChatMessage?>(messages.FirstOrDefault(item =>
+                matches(item.Text)));
+        };
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+
+        Assert.Equal(ParticipantListApplyStatus.UNPARSEABLE_MESSAGE, result.Status);
+        Assert.Equal(20L, result.SourceMessageId);
+        Assert.False(result.Applied);
+        Assert.Contains("не удалось разобрать", result.OutcomeDescription);
+        Assert.Contains("№20", result.OutcomeDescription);
+        Assert.Contains("Причина:", result.OutcomeDescription);
+        Assert.Contains("№3", result.OutcomeDescription);
+        Assert.Contains("www.com", result.OutcomeDescription);
+        Assert.Equal(10L, (await registry.ReadLatestSourceAsync(chat))?.MessageId);
+        Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
+        var attempt = await new ChatParticipantRegistry(database).ReadLastAttemptAsync(chat);
+        Assert.NotNull(attempt);
+        Assert.Equal(ParticipantListApplyStatus.UNPARSEABLE_MESSAGE, attempt.Status);
+        Assert.Equal(20L, attempt.MessageId);
+        Assert.Contains("Предыдущий список сохранён", attempt.Description);
+        Assert.Contains("Причина:", attempt.Description);
+        Assert.Contains("www.com", attempt.Description);
+        // A new registry instance reads the same persisted report after restart.
+        Assert.Equal(attempt.Description, (await new ChatParticipantRegistry(database)
+            .ReadLastAttemptAsync(chat))?.Description);
+    }
+
+    [Fact]
+    public async Task CorrectedRegisterClearsLastParsingFailureAndAcceptsExactDuplicate()
+    {
+        using var temp = new TestDirectory();
+        using var settings = new JsonSettingsService(temp.Path);
+        var chat = Chat();
+        await settings.SaveChatAsync(chat);
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database);
+        await registry.UpdateAsync(chat, [(10, ORIGINAL_REGISTER)]);
+        await registry.SaveLastAttemptAsync(chat, 20, null,
+            ParticipantListApplyStatus.UNPARSEABLE_MESSAGE, "Невозможно разобрать");
+        const string corrected = """
+            СПИСОК УЧАСТНИЦ
+            1
+            https://www.instagram.com/first_check
+            2
+            https://www.instagram.com/second_check
+            3
+            https://www.instagram.com/fourth_check
+            4
+            https://www.instagram.com/fourth_check
+            """;
+        var telegram = Client();
+        telegram.LatestMatchingMessageImpl = (_, matches, _) =>
+            Task.FromResult<TelegramChatMessage?>(new(20, corrected));
+        var result = await new ChatSynchronizationService(settings, telegram, database)
+            .RefreshLatestParticipantListAsync(chat);
+        Assert.Equal(ParticipantListApplyStatus.APPLIED, result.Status);
+        Assert.Equal(20L, (await registry.ReadLatestSourceAsync(chat))?.MessageId);
+        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
+        Assert.Equal(ParticipantListApplyStatus.APPLIED,
+            (await registry.ReadLastAttemptAsync(chat))?.Status);
     }
 
     private static async Task<long> CountCurrentAsync(string database, string username)

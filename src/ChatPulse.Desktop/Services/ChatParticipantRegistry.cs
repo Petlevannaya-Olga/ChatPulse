@@ -24,10 +24,14 @@ public enum ParticipantListApplyStatus
     ALREADY_CURRENT,
     OLDER_MESSAGE,
     AMBIGUOUS_MATCH,
-    PROFILE_CHECK_INCONCLUSIVE
+    PROFILE_CHECK_INCONCLUSIVE,
+    UNPARSEABLE_MESSAGE
 }
 
 public sealed record ParticipantListApplyResult(int AppliedCount, ParticipantListApplyStatus Status);
+
+public sealed record ParticipantListRefreshAttempt(long? MessageId, DateTime? SentAtUtc,
+    DateTime AttemptedAtUtc, ParticipantListApplyStatus Status, string Description);
 
 /// <summary>Stores each recognized full participant register as a chat-local snapshot.</summary>
 public sealed class ChatParticipantRegistry(string databasePath)
@@ -55,14 +59,17 @@ public sealed class ChatParticipantRegistry(string databasePath)
         var profileCheckFailed = false;
         var snapshots = messages.OrderBy(item => item.MessageId).Select(item =>
         {
-            var valid = ParticipantListParser.TryParse(item.Text, out var parsed, profileOpens);
+            var instagramOnly = chat.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase);
+            var valid = ParticipantListParser.TryParse(item.Text, out var parsed, profileOpens,
+                instagramOnly);
             if (valid && parsed is not null && parsed.Participants.Any(participant =>
                     participant.ProfileRequiresVerification))
             {
                 profileCheckFailed = true;
                 valid = false;
             }
-            else if (!valid && profileOpens is not null && ParticipantListParser.TryParse(item.Text, out _))
+            else if (!valid && profileOpens is not null && ParticipantListParser.TryParse(item.Text, out _,
+                instagramOnly: chat.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase)))
                 profileCheckFailed = true;
             return (item.MessageId, item.SentAtUtc, Valid: valid, Parsed: parsed);
         }).Where(item => item.Valid && item.Parsed is not null).ToArray();
@@ -348,6 +355,84 @@ public sealed class ChatParticipantRegistry(string databasePath)
         var synced = reader.IsDBNull(2) ? (DateTime?)null
             : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(2)).UtcDateTime;
         return new ParticipantListSourceInfo(reader.GetInt64(0), time, synced);
+    }
+
+    /// <summary>
+    /// Persists the latest refresh outcome separately from the last successfully
+    /// applied list. Failed parsing must remain visible in the report after restart.
+    /// </summary>
+    public async Task SaveLastAttemptAsync(ConfiguredChat chat, long? messageId,
+        DateTime? sentAtUtc, ParticipantListApplyStatus status, string description,
+        CancellationToken cancellationToken = default)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS ChatParticipantRegistryRefreshAttempts (
+                TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL, PeerId INTEGER NOT NULL,
+                SourceMessageId INTEGER, SourceSentAtUnixSeconds INTEGER,
+                AttemptedAtUnixSeconds INTEGER NOT NULL,
+                Status TEXT NOT NULL, Description TEXT NOT NULL,
+                PRIMARY KEY (TelegramUserId, PeerType, PeerId)
+            );
+            INSERT INTO ChatParticipantRegistryRefreshAttempts (
+                TelegramUserId, PeerType, PeerId, SourceMessageId,
+                SourceSentAtUnixSeconds, AttemptedAtUnixSeconds, Status, Description)
+            VALUES ($owner, $type, $peer, $message, $sent, $attempt, $status, $description)
+            ON CONFLICT(TelegramUserId, PeerType, PeerId) DO UPDATE SET
+                SourceMessageId=excluded.SourceMessageId,
+                SourceSentAtUnixSeconds=excluded.SourceSentAtUnixSeconds,
+                AttemptedAtUnixSeconds=excluded.AttemptedAtUnixSeconds,
+                Status=excluded.Status, Description=excluded.Description;
+            """;
+        AddChatParameters(command, chat);
+        command.Parameters.AddWithValue("$message", messageId is { } id ? (object)id : DBNull.Value);
+        command.Parameters.AddWithValue("$sent", sentAtUtc is { } date
+            ? (object)new DateTimeOffset(date.ToUniversalTime()).ToUnixTimeSeconds() : DBNull.Value);
+        command.Parameters.AddWithValue("$attempt", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        command.Parameters.AddWithValue("$status", status.ToString());
+        command.Parameters.AddWithValue("$description", description);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<ParticipantListRefreshAttempt?> ReadLastAttemptAsync(ConfiguredChat chat,
+        CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(databasePath)) return null;
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        var table = connection.CreateCommand();
+        table.CommandText = """
+            SELECT 1 FROM sqlite_master
+            WHERE type='table' AND name='ChatParticipantRegistryRefreshAttempts'
+            """;
+        if (await table.ExecuteScalarAsync(cancellationToken) is null) return null;
+        var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT SourceMessageId, SourceSentAtUnixSeconds, AttemptedAtUnixSeconds,
+                   Status, Description
+            FROM ChatParticipantRegistryRefreshAttempts
+            WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+            """;
+        AddChatParameters(command, chat);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        if (!Enum.TryParse<ParticipantListApplyStatus>(reader.GetString(3), out var status))
+            return null;
+        return new ParticipantListRefreshAttempt(
+            reader.IsDBNull(0) ? null : reader.GetInt64(0),
+            reader.IsDBNull(1) ? null
+                : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(1)).UtcDateTime,
+            DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(2)).UtcDateTime,
+            status, reader.GetString(4));
     }
 
     private static void AddChatParameters(SqliteCommand command, ConfiguredChat chat)

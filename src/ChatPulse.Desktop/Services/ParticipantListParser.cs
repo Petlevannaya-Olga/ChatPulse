@@ -43,11 +43,50 @@ public static class ParticipantListParser
         catch (RegexMatchTimeoutException) { return false; }
     }
 
+    /// <summary>
+    /// Identifies candidate participant registers without requiring them to parse successfully.
+    /// A malformed newest register must not be silently skipped in favor of an older one.
+    /// </summary>
+    public static bool LooksLikeParticipantList(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 100_000) return false;
+        try
+        {
+            var lines = text.Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n');
+            var numbered = lines.Count(line => NUMBER.IsMatch(line.Trim()));
+            if (numbered == 0) return false;
+            return lines.Any(IsRegisterHeading) ||
+                   lines.Count(IsAdministratorHeading) >= 2 ||
+                   lines.Any(line => line.Contains("ШТРАФНЫЕ ДНИ", StringComparison.OrdinalIgnoreCase)) ||
+                   numbered >= 5 && lines.Count(HasAnyLink) >= numbered / 2;
+        }
+        catch (RegexMatchTimeoutException) { return false; }
+    }
+
     public static bool TryParse(string? text, out ParsedParticipantList? result,
-        Func<string, bool?>? profileOpens = null)
+        Func<string, bool?>? profileOpens = null, bool instagramOnly = false)
+        => TryParse(text, out result, out _, profileOpens, instagramOnly);
+
+    /// <summary>
+    /// Returns the first verified parsing error for display in the synchronization
+    /// report. Successful parsing follows exactly the same rules as TryParse above.
+    /// </summary>
+    public static bool TryParse(string? text, out ParsedParticipantList? result,
+        out string? failureReason, Func<string, bool?>? profileOpens = null,
+        bool instagramOnly = false)
     {
         result = null;
-        if (string.IsNullOrWhiteSpace(text) || text.Length > 100_000) return false;
+        failureReason = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            failureReason = "Сообщение пустое.";
+            return false;
+        }
+        if (text.Length > 100_000)
+        {
+            failureReason = "Текст списка превышает допустимый размер.";
+            return false;
+        }
         try
         {
             var lines = text.Replace("\r", string.Empty, StringComparison.Ordinal).Split('\n');
@@ -58,7 +97,12 @@ public static class ParticipantListParser
             // A Telegram participant register may have no explicit register heading.
             // Its numbered profile rows provide independent evidence of the format.
             if (!hasRegisterHeading && administrativeHeadings < 2 &&
-                !HasNumberedProfileRows(lines)) return false;
+                !HasNumberedProfileRows(lines))
+            {
+                failureReason = "Не удалось распознать структуру списка участниц: отсутствуют " +
+                                "заголовки разделов и достаточное число записей с профилями.";
+                return false;
+            }
 
             var entries = new List<ParsedParticipant>();
             var category = "Обычный";
@@ -73,11 +117,20 @@ public static class ParticipantListParser
             string? participantName = null;
             var numberedCount = 0;
             var weekendIsIndividual = false;
+            string? firstIncompleteEntry = null;
 
             void Complete()
             {
-                if (string.IsNullOrEmpty(subscription) ||
-                    (!position.HasValue && administratorRole is null)) return;
+                if (string.IsNullOrEmpty(subscription))
+                {
+                    // Missing profile was already a parsing failure for numbered
+                    // rows. Preserve its position rather than reporting only a count mismatch.
+                    if (position.HasValue)
+                        firstIncompleteEntry ??= $"{DescribeEntry(position, administratorRole, category, status)}: " +
+                                                "отсутствует корректная ссылка на Instagram-профиль.";
+                    return;
+                }
+                if (!position.HasValue && administratorRole is null) return;
                 entries.Add(new ParsedParticipant(position, subscription,
                     activity ?? subscription, administratorRole ?? entryCategory ?? category, status,
                     administratorName ?? participantName));
@@ -145,13 +198,36 @@ public static class ParticipantListParser
                     line.Contains("Актив даёт отсюда", StringComparison.OrdinalIgnoreCase))
                     nextIsActivity = true;
 
-                // Only penalty rows may contain a Cyrillic X suffix.
+                // Every link in an Instagram register must have an Instagram domain.
+                // Only the penalty section tolerates the Cyrillic X suffix.
+                if (instagramOnly && (position.HasValue || administratorRole is not null))
+                {
+                    foreach (Match rawLink in ANY_LINK.Matches(line))
+                    {
+                        var normalized = NormalizeProfile(rawLink.Value,
+                            status == ParticipantStatus.PENALTY);
+                        if (normalized is null ||
+                            !normalized.StartsWith("https://www.instagram.com/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            failureReason = DescribeInvalidLink(rawLink.Value,
+                                position, administratorRole, category, status);
+                            return false;
+                        }
+                    }
+                }
                 var links = status == ParticipantStatus.PENALTY ? PENALTY_PROFILE_LINK : PROFILE_LINK;
                 foreach (Match match in links.Matches(line))
                 {
                     if (!position.HasValue && administratorRole is null) continue;
                     var url = NormalizeProfile(match.Value, status == ParticipantStatus.PENALTY);
                     if (url is null) continue;
+                    if (instagramOnly &&
+                        !url.StartsWith("https://www.instagram.com/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        failureReason = DescribeInvalidLink(match.Value,
+                            position, administratorRole, category, status);
+                        return false;
+                    }
                     if (nextIsActivity && subscription is not null) activity = url;
                     else if (subscription is null) subscription = url;
                     else if (activity is null) activity = url;
@@ -182,22 +258,96 @@ public static class ParticipantListParser
             }
             Complete();
             // A list of two links or a numbered task is not necessarily a participant register.
+            if (firstIncompleteEntry is not null)
+            {
+                failureReason = firstIncompleteEntry;
+                return false;
+            }
             if (numberedCount < 3 || entries.Count < 3 ||
-                entries.Count(entry => entry.Position.HasValue) != numberedCount) return false;
-            // Penalty rows may repeat a main-list entry, with or without an X suffix.
-            // Resolve duplicates without altering a valid Instagram username.
-            if (!TryMergePenaltyEntries(entries, out var participants, profileOpens)) return false;
-            // Shared Telegram links may still represent different people: do not
-            // merge ordinary entries. The registry resolves those identities.
+                entries.Count(entry => entry.Position.HasValue) != numberedCount)
+            {
+                failureReason = "Не удалось выделить полный список: " +
+                                $"пронумерованных записей — {numberedCount}, распознано — " +
+                                $"{entries.Count(entry => entry.Position.HasValue)}. " +
+                                "Проверьте наличие Instagram-ссылки у каждой записи.";
+                return false;
+            }
+            // A repeated Instagram profile with the same activity profile is one
+            // participant, even when it appears under two different list numbers.
+            // Telegram profiles can be shared by different people, so do not collapse
+            // those records (or conflicting Instagram activity profiles).
+            var prepared = instagramOnly ? MergeDuplicateInstagramEntries(entries) : entries;
+            if (!TryMergePenaltyEntries(prepared, out var participants,
+                    out failureReason, profileOpens)) return false;
             result = new ParsedParticipantList(participants);
             return true;
         }
-        catch (RegexMatchTimeoutException) { return false; }
+        catch (RegexMatchTimeoutException)
+        {
+            failureReason = "Превышено время анализа текста списка участниц.";
+            return false;
+        }
+    }
+
+    private static string DescribeEntry(int? position, string? administratorRole,
+        string category, ParticipantStatus status)
+    {
+        if (administratorRole is not null)
+            return $"Раздел «Администрация», {administratorRole.Trim()}";
+        var section = status switch
+        {
+            ParticipantStatus.PENALTY => "ШТРАФНЫЕ ДНИ",
+            ParticipantStatus.WEEKEND => "ВЫХОДНЫЕ",
+            _ when category == "VIP" => "VIP УЧАСТНИКИ",
+            _ => "ВСЕ МЫ"
+        };
+        return position.HasValue ? $"Раздел «{section}», запись №{position.Value}"
+            : $"Раздел «{section}»";
+    }
+
+    private static string DescribeInvalidLink(string raw, int? position,
+        string? administratorRole, string category, ParticipantStatus status)
+    {
+        var location = DescribeEntry(position, administratorRole, category, status);
+        var value = raw.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? raw : "https://" + raw;
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            return $"{location}: некорректная ссылка «{raw}».";
+        if (!uri.Host.Equals("instagram.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("www.instagram.com", StringComparison.OrdinalIgnoreCase))
+            return $"{location}: недопустимый домен «{uri.Host}» в ссылке «{raw}». " +
+                   "Ожидается instagram.com.";
+        return $"{location}: некорректное имя Instagram в ссылке «{raw}». " +
+               "Завершающая кириллическая Х допускается только в штрафном разделе.";
+    }
+
+    private static IReadOnlyList<ParsedParticipant> MergeDuplicateInstagramEntries(
+        IEnumerable<ParsedParticipant> entries)
+    {
+        var distinct = new List<ParsedParticipant>();
+        foreach (var item in entries)
+        {
+            if (item.Status == ParticipantStatus.PENALTY)
+            {
+                distinct.Add(item);
+                continue;
+            }
+            if (distinct.Any(existing => existing.Status != ParticipantStatus.PENALTY &&
+                existing.SubscriptionProfileUrl.Equals(item.SubscriptionProfileUrl,
+                    StringComparison.OrdinalIgnoreCase) &&
+                existing.ActivityProfileUrl.Equals(item.ActivityProfileUrl,
+                    StringComparison.OrdinalIgnoreCase)))
+                continue;
+            distinct.Add(item);
+        }
+        return distinct;
     }
 
     private static bool TryMergePenaltyEntries(IReadOnlyList<ParsedParticipant> entries,
-        out IReadOnlyList<ParsedParticipant> participants, Func<string, bool?>? profileOpens)
+        out IReadOnlyList<ParsedParticipant> participants, out string? failureReason,
+        Func<string, bool?>? profileOpens)
     {
+        failureReason = null;
         var merged = entries.Where(item => item.Status != ParticipantStatus.PENALTY).ToList();
         foreach (var penalty in entries.Where(item => item.Status == ParticipantStatus.PENALTY))
         {
@@ -210,6 +360,9 @@ public static class ParticipantListParser
                 // If both names belong to different participants, neither the
                 // suffix convention nor the original URL identifies the right one.
                 participants = [];
+                failureReason = $"{DescribeEntry(penalty.Position, null, penalty.Category, penalty.Status)}: " +
+                                $"профиль «{penalty.SubscriptionProfileUrl}» неоднозначно совпадает " +
+                                "с несколькими участницами (с учётом возможного суффикса X).";
                 return false;
             }
             if (matches.Length == 1)
@@ -232,6 +385,9 @@ public static class ParticipantListParser
                 else if (original != true || alternative != false)
                 {
                     participants = [];
+                    failureReason = $"{DescribeEntry(penalty.Position, null, penalty.Category, penalty.Status)}: " +
+                                    $"не удалось однозначно подтвердить Instagram-профили " +
+                                    $"«{resolved}» и «{shortened}».";
                     return false;
                 }
             }
@@ -319,6 +475,11 @@ public static class ParticipantListParser
             // as supplied rather than silently rewritten as Instagram accounts.
             return $"https://t.me/{username}";
         }
+        // Never silently rewrite arbitrary domains (for example www.com) into
+        // Instagram URLs. Their author must correct the source message.
+        if (!uri.Host.Equals("instagram.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("www.instagram.com", StringComparison.OrdinalIgnoreCase))
+            return null;
         if (penalty && username[^1] is ('Х' or 'х'))
         {
             if (username.Length < 2) return null;

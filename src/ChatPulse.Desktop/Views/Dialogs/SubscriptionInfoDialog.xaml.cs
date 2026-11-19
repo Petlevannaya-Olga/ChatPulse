@@ -40,11 +40,19 @@ public partial class SubscriptionInfoDialog : Window
     }
 
     public SubscriptionInfoDialog(ParticipantListSourceInfo? source,
-        InstagramParticipantCategoryCounts? counts)
+        InstagramParticipantCategoryCounts? counts,
+        ParticipantListRefreshAttempt? lastAttempt = null)
     {
         InitializeComponent();
         TitleText.Text = "Список участниц";
         SubtitleText.Text = "Сведения об актуальном списке Telegram";
+        if (lastAttempt is { Status: not ParticipantListApplyStatus.APPLIED
+            and not ParticipantListApplyStatus.ALREADY_CURRENT })
+        {
+            ListAttemptPanel.Visibility = Visibility.Visible;
+            ListAttemptDateText.Text = $"Последняя попытка: {lastAttempt.AttemptedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm}";
+            ListAttemptDescriptionText.Text = lastAttempt.Description;
+        }
         if (source is null)
         {
             UnavailableText.Text = "Список участниц ещё не загружен.";
