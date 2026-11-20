@@ -429,7 +429,7 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
         if (!File.Exists(databasePath)) return [];
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
-        var command = NewCommand(connection, null, """
+        using var command = NewCommand(connection, null, """
             SELECT i.InstagramUsername, s.SourceMessageId,
                    h.IsPresent, h.Category, h.IsWeekend, h.IsPenalty,
                    h.ActivityProfileUrl, h.WeekendFromDate, h.WeekendToDate
@@ -468,7 +468,7 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
         if (!File.Exists(databasePath)) return [];
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
-        var command = NewCommand(connection, null, """
+        using var command = NewCommand(connection, null, """
             SELECT SourceMessageId, ParseStatus, ParseErrorDescription
             FROM ChatParticipantListSnapshots
             WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
@@ -579,7 +579,7 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
         try
         {
             await connection.OpenAsync(cancellationToken);
-            var pragma = connection.CreateCommand();
+            using var pragma = connection.CreateCommand();
             pragma.CommandText = "PRAGMA foreign_keys=ON";
             await pragma.ExecuteNonQueryAsync(cancellationToken);
             return connection;

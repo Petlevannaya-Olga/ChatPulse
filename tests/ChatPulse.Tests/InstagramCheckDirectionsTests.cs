@@ -56,7 +56,7 @@ public sealed class InstagramCheckDirectionsTests
 
         Assert.Equal(isStopped, result.IsStopped);
         Assert.Equal(showDetailedResult, result.ShowDetailedResult);
-        Assert.Equal("Выполнено 0 из 81 поисковых проверок", result.ProgressLabel);
+        Assert.Equal("Выполнено 0 проверок подписок", result.ProgressLabel);
         Assert.Contains("последней успешной проверки", result.StoppedNotice);
     }
 }

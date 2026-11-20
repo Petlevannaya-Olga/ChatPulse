@@ -4,9 +4,9 @@ using Microsoft.Data.Sqlite;
 namespace ChatPulse.Tests;
 
 /// <summary>
-/// Deletes an isolated SQLite test database after releasing the connection pools
-/// used by ChatSynchronizationService, test assertions and WorkspaceTaskReader.
-/// This helper must only be called after the test has disposed all open connections.
+/// Releases pooled handles for the test's own SQLite files before deleting them.
+/// Never clear all pools here: xUnit runs other tests with live connections in parallel.
+/// Every connection/reader/command belonging to the deleted database must already be disposed.
 /// </summary>
 internal static class SqliteTestDatabaseCleanup
 {
@@ -14,10 +14,12 @@ internal static class SqliteTestDatabaseCleanup
     {
         if (!Directory.Exists(directory)) return;
 
-        var database = Path.Combine(directory, "history.db");
-        if (File.Exists(database)) ClearDatabasePools(database);
+        // A test directory may contain both history.db and chatpulse.db.
+        // Clear their pools, not the pools of unrelated tests.
+        foreach (var databasePath in Directory.EnumerateFiles(directory, "*.db", SearchOption.AllDirectories))
+            ClearDatabasePools(databasePath);
 
-        // An IOException here indicates an undisposed live connection: do not mask it.
+        // Do not hide IOExceptions caused by live connections or external file owners.
         Directory.Delete(directory, recursive: true);
     }
 
@@ -26,15 +28,14 @@ internal static class SqliteTestDatabaseCleanup
         if (!File.Exists(databasePath)) return;
 
         ClearDatabasePools(databasePath);
-        // Do not suppress IOException: it indicates a still-open connection or another file owner.
         File.Delete(databasePath);
     }
 
     private static void ClearDatabasePools(string databasePath)
     {
+        // The application and tests use both the implicit default mode and explicit
+        // modes. These are distinct connection strings and may have separate pools.
         ClearPool(new SqliteConnectionStringBuilder { DataSource = databasePath });
-        // InstagramOwnAccountStore sets Mode explicitly, creating a separate pool
-        // from connections that rely on the default ReadWriteCreate mode.
         ClearPool(new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
@@ -47,9 +48,9 @@ internal static class SqliteTestDatabaseCleanup
         });
     }
 
-    private static void ClearPool(SqliteConnectionStringBuilder builder)
+    private static void ClearPool(SqliteConnectionStringBuilder connectionString)
     {
-        using var connection = new SqliteConnection(builder.ToString());
+        using var connection = new SqliteConnection(connectionString.ToString());
         SqliteConnection.ClearPool(connection);
     }
 }

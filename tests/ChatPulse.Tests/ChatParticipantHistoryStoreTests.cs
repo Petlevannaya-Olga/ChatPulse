@@ -75,11 +75,11 @@ public sealed class ChatParticipantHistoryStoreTests
         // Exact duplicates are preserved as source occurrences, but not identities.
         await using var connection = new SqliteConnection($"Data Source={directory.Database};Pooling=False");
         await connection.OpenAsync();
-        var raw = connection.CreateCommand();
+        using var raw = connection.CreateCommand();
         raw.CommandText = "SELECT COUNT(*) FROM ChatParticipantListEntries WHERE SnapshotId = " +
                           "(SELECT SnapshotId FROM ChatParticipantListSnapshots WHERE SourceMessageId=10)";
         Assert.Equal(3L, Convert.ToInt64(await raw.ExecuteScalarAsync()));
-        var unique = connection.CreateCommand();
+        using var unique = connection.CreateCommand();
         unique.CommandText = "SELECT COUNT(*) FROM ChatParticipantHistoryIdentities";
         Assert.Equal(3L, Convert.ToInt64(await unique.ExecuteScalarAsync()));
     }
@@ -116,7 +116,7 @@ public sealed class ChatParticipantHistoryStoreTests
 
         await using var connection = new SqliteConnection($"Data Source={directory.Database};Pooling=False");
         await connection.OpenAsync();
-        var live = connection.CreateCommand();
+        using var live = connection.CreateCommand();
         live.CommandText = "SELECT Value FROM ChatParticipants";
         Assert.Equal("keep", await live.ExecuteScalarAsync());
     }
@@ -220,7 +220,7 @@ public sealed class ChatParticipantHistoryStoreTests
 
         public void Dispose()
         {
-            if (Directory.Exists(_path)) Directory.Delete(_path, recursive: true);
+            SqliteTestDatabaseCleanup.DeleteDirectory(_path);
         }
     }
 }

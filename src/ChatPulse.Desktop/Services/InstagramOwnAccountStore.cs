@@ -46,7 +46,7 @@ public sealed class InstagramOwnAccountStore(string databasePath)
     public async Task<InstagramOwnAccounts?> ReadAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken);
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         command.CommandText = "SELECT AccountKind, UserName FROM InstagramOwnAccounts";
         string? receiving = null;
         string? giving = null;
@@ -81,14 +81,14 @@ public sealed class InstagramOwnAccountStore(string databasePath)
 
         await using var connection = await OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var remove = connection.CreateCommand();
+        using var remove = connection.CreateCommand();
         remove.Transaction = (SqliteTransaction)transaction;
         remove.CommandText = "DELETE FROM InstagramOwnAccounts";
         await remove.ExecuteNonQueryAsync(cancellationToken);
         foreach (var (kind, name) in new[] { (RECEIVING, receivingName), (GIVING, givingName) })
         {
             if (name is null) continue;
-            var insert = connection.CreateCommand();
+            using var insert = connection.CreateCommand();
             insert.Transaction = (SqliteTransaction)transaction;
             insert.CommandText = """
                 INSERT INTO InstagramOwnAccounts (AccountKind, UserName, UpdatedAtUtc)
@@ -112,7 +112,7 @@ public sealed class InstagramOwnAccountStore(string databasePath)
         await connection.OpenAsync(cancellationToken);
         try
         {
-            var create = connection.CreateCommand();
+            using var create = connection.CreateCommand();
             create.CommandText = """
                 CREATE TABLE IF NOT EXISTS InstagramOwnAccounts (
                     AccountKind TEXT PRIMARY KEY CHECK (AccountKind IN ('RECEIVING','GIVING')),
