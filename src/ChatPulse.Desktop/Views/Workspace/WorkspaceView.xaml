@@ -974,6 +974,11 @@
                                                 <TextBlock Text="{Binding LatestCheckCountsLabel, Mode=OneWay}"
                                                            Foreground="#827393" FontSize="11" TextWrapping="Wrap"
                                                            Margin="0,4,0,0" />
+                                                <TextBlock Text="Требуется проверка подписок"
+                                                           Foreground="#9B6118" FontWeight="SemiBold"
+                                                           FontSize="11" Margin="0,6,0,0"
+                                                           ToolTip="Состав участниц или проверяемые профили изменились после последней успешной массовой проверки."
+                                                           Visibility="{Binding IsSubscriptionReviewRequired, Mode=OneWay, Converter={StaticResource BoolVisible}}" />
                                             </StackPanel>
                                         </Button>
                                         <StackPanel Grid.Row="1" Orientation="Horizontal"

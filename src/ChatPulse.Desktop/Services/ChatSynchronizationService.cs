@@ -281,7 +281,8 @@ public sealed class ChatSynchronizationService(
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var current = FindConfigured(await settings.LoadAsync(cancellationToken), configured);
+            var syncSettings = await settings.LoadAsync(cancellationToken);
+            var current = FindConfigured(syncSettings, configured);
             if (current.SynchronizationState != ChatSynchronizationState.COMPLETED)
                 throw new InvalidOperationException("Сначала завершите первоначальную синхронизацию чата.");
             progress?.Invoke(new(ParticipantListSyncStage.TELEGRAM,
@@ -384,7 +385,9 @@ public sealed class ChatSynchronizationService(
                 newest.SentAtUtc, ParticipantListApplyStatus.APPLIED,
                 ProcessedListCount: verified.Count);
             await dailyStore.CommitAsync(current, verified, parser.Rule,
-                previous?.MessageId, successful.OutcomeDescription, cancellationToken);
+                previous?.MessageId, successful.OutcomeDescription, cancellationToken,
+                syncSettings.Chats, syncSettings.InstagramTargetUserName,
+                syncSettings.InstagramBrowserUserName);
             var stored = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
             return successful with { StoredSource = stored };
         }

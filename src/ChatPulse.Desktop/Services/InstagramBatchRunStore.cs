@@ -89,7 +89,8 @@ public sealed class InstagramBatchRunStore(string databasePath)
         command.ExecuteNonQuery();
     }
 
-    public void PublishCompleted(string runId, string targetUserName, InstagramBatchResultSummary summary)
+    public void PublishCompleted(string runId, string targetUserName, InstagramBatchResultSummary summary,
+        IReadOnlyList<InstagramReviewFingerprint>? reviewedFingerprints = null)
     {
         if (!InstagramCheckDirectionSelection.IsValid(summary.Directions) ||
             summary.Outcome != InstagramBatchOutcome.COMPLETED ||
@@ -157,6 +158,9 @@ public sealed class InstagramBatchRunStore(string databasePath)
             promote.ExecuteNonQuery();
         }
         InstagramBatchSummaryStore.SaveCompleted(connection, transaction, targetUserName, summary);
+        if (reviewedFingerprints is not null)
+            InstagramSubscriptionReviewStateStore.PublishBaselines(connection, transaction,
+                targetUserName, summary.Directions, reviewedFingerprints);
         using (var cleanup = connection.CreateCommand())
         {
             cleanup.Transaction = transaction;

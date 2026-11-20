@@ -42,7 +42,9 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
     public async Task CommitAsync(ConfiguredChat chat,
         IReadOnlyList<ParticipantHistoryCandidate> verifiedLists,
         ParticipantHistoryRule rule, long? expectedLiveMessageId,
-        string outcomeDescription, CancellationToken cancellationToken = default)
+        string outcomeDescription, CancellationToken cancellationToken = default,
+        IReadOnlyList<ConfiguredChat>? configuredChats = null,
+        string? instagramTarget = null, string? browserAccount = null)
     {
         if (verifiedLists.Count == 0) return;
         if (verifiedLists.Any(item => item.Entries is null ||
@@ -65,6 +67,11 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            var reviewChats = configuredChats ?? new[] { chat };
+            var ownNames = InstagramSubscriptionReviewStateStore.ReadOwnNames(connection,
+                transaction, instagramTarget, browserAccount);
+            var reviewBefore = InstagramSubscriptionReviewStateStore.Capture(connection,
+                transaction, reviewChats, ownNames);
             using (var source = Command(connection, transaction, """
                 SELECT SourceMessageId FROM ChatParticipantRegistryVersions
                 WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
@@ -180,6 +187,10 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
                 attempt.Parameters.AddWithValue("$description", outcomeDescription);
                 await attempt.ExecuteNonQueryAsync(cancellationToken);
             }
+            var reviewAfter = InstagramSubscriptionReviewStateStore.Capture(connection,
+                transaction, reviewChats, ownNames);
+            InstagramSubscriptionReviewStateStore.RecordChanges(connection, transaction,
+                instagramTarget, reviewBefore, reviewAfter);
             cancellationToken.ThrowIfCancellationRequested();
             await transaction.CommitAsync(CancellationToken.None);
         }

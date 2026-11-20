@@ -57,7 +57,7 @@ public sealed class ParticipantDailyAtomicSyncTests
         using (settings)
         {
             telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
-                [new(30, THIRD), new(10, FIRST), new(20, SECOND)]
+                new TelegramChatMessage[] { new(30, THIRD), new(10, FIRST), new(20, SECOND) }
                     .Where(message => matches(message.Text)).ToArray());
             var result = await new ChatSynchronizationService(settings, telegram, database)
                 .RefreshLatestParticipantListAsync(chat);
@@ -96,7 +96,7 @@ public sealed class ParticipantDailyAtomicSyncTests
             var rule = new StandardParticipantHistoryParser(true).Rule;
             await history.RebuildAsync(chat, [initial], rule);
             telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
-                [new TelegramChatMessage(20, SECOND)].Where(item => matches(item.Text)).ToArray());
+                new[] { new TelegramChatMessage(20, SECOND) }.Where(item => matches(item.Text)).ToArray());
 
             var result = await new ChatSynchronizationService(settings, telegram, database)
                 .RefreshLatestParticipantListAsync(chat);
@@ -119,7 +119,7 @@ public sealed class ParticipantDailyAtomicSyncTests
         using (settings)
         {
             telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
-                [new(30, THIRD), new(25, BROKEN), new(20, SECOND)]
+                new TelegramChatMessage[] { new(30, THIRD), new(25, BROKEN), new(20, SECOND) }
                     .Where(message => matches(message.Text)).ToArray());
             var result = await new ChatSynchronizationService(settings, telegram, database)
                 .RefreshLatestParticipantListAsync(chat);
@@ -170,6 +170,60 @@ public sealed class ParticipantDailyAtomicSyncTests
     }
 
     [Fact]
+    public async Task DailySyncFlagsChangedCheckableRosterButNotIdenticalRepublication()
+    {
+        using var temp = new TestDirectory();
+        var (chat, settings, database, telegram) = await PrepareAsync(temp, withPrevious: true);
+        using (settings)
+        {
+            await settings.SaveInstagramAccountsAsync("main", "checker");
+            var review = new InstagramSubscriptionReviewStateStore(database);
+            var own = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "main", "checker" };
+            var original = await review.CaptureAsync([chat], own);
+            var check = new InstagramBatchRunStore(database);
+            check.Stage("baseline", "main", "checker", new InstagramBatchProgress(
+                "alpha_test", "following", new InstagramSearchResult(InstagramSearchStatus.FOUND, "ok"), 1, 1));
+            var summary = new InstagramBatchResultSummary(DateTimeOffset.UtcNow,
+                InstagramBatchOutcome.COMPLETED, 1, 1, 1, 0, 0, 0, 0,
+                NotFoundFollowers: 0, NotFoundFollowing: 0,
+                Directions: InstagramCheckDirections.FOLLOWING);
+            check.PublishCompleted("baseline", "main", summary, original);
+            Assert.False(await review.NeedsReviewAsync("main", chat, [chat], own));
+
+            telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+                new[] { new TelegramChatMessage(20, FIRST) }.Where(item => matches(item.Text)).ToArray());
+            Assert.True((await new ChatSynchronizationService(settings, telegram, database)
+                .RefreshLatestParticipantListAsync(chat)).Applied);
+            Assert.False(await review.NeedsReviewAsync("main", chat, [chat], own));
+
+            telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+                new[] { new TelegramChatMessage(30, SECOND) }.Where(item => matches(item.Text)).ToArray());
+            Assert.True((await new ChatSynchronizationService(settings, telegram, database)
+                .RefreshLatestParticipantListAsync(chat)).Applied);
+            Assert.True(await review.NeedsReviewAsync("main", chat, [chat], own));
+        }
+    }
+
+    [Fact]
+    public async Task RejectedListDoesNotChangeReviewWarning()
+    {
+        using var temp = new TestDirectory();
+        var (chat, settings, database, telegram) = await PrepareAsync(temp, withPrevious: true);
+        using (settings)
+        {
+            await settings.SaveInstagramAccountsAsync("main", "checker");
+            telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+                new[] { new TelegramChatMessage(25, BROKEN) }.Where(item => matches(item.Text)).ToArray());
+            var result = await new ChatSynchronizationService(settings, telegram, database)
+                .RefreshLatestParticipantListAsync(chat);
+            Assert.False(result.Applied);
+            var review = new InstagramSubscriptionReviewStateStore(database);
+            Assert.False(await review.NeedsReviewAsync("main", chat, [chat],
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "main", "checker" }));
+        }
+    }
+
+    [Fact]
     public async Task SqliteFailureAfterHistoryChangesRollsBackAllNewSnapshotsAndLiveRows()
     {
         using var temp = new TestDirectory();
@@ -193,7 +247,7 @@ public sealed class ParticipantDailyAtomicSyncTests
                 await command.ExecuteNonQueryAsync();
             }
             telegram.AllMatchingMessagesImpl = (_, matches, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
-                [new TelegramChatMessage(20, SECOND)].Where(item => matches(item.Text)).ToArray());
+                new[] { new TelegramChatMessage(20, SECOND) }.Where(item => matches(item.Text)).ToArray());
             await Assert.ThrowsAsync<SqliteException>(() =>
                 new ChatSynchronizationService(settings, telegram, database)
                     .RefreshLatestParticipantListAsync(chat));

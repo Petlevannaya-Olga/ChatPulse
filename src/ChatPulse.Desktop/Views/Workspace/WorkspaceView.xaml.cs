@@ -74,6 +74,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _participantListMessageDateLabel = string.Empty;
     private string _subscriptionsCheckMessage = string.Empty;
     private InstagramBatchResultSummary? _latestSubscriptionBatch;
+    private bool _isSubscriptionReviewRequired;
     private ParticipantListSourceInfo? _latestParticipantListSource;
     private ParticipantListRefreshAttempt? _latestParticipantListAttempt;
     private int _loadVersion;
@@ -341,6 +342,17 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     public bool HasLatestSubscriptionBatch => LatestSubscriptionBatch is not null;
 
+    public bool IsSubscriptionReviewRequired
+    {
+        get => _isSubscriptionReviewRequired;
+        private set
+        {
+            if (_isSubscriptionReviewRequired == value) return;
+            _isSubscriptionReviewRequired = value;
+            Notify();
+        }
+    }
+
     public string LatestCheckDateLabel => LatestSubscriptionBatch is { } summary
         ? $"Последняя успешная: {summary.FinishedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm}"
         : "Успешных проверок ещё нет";
@@ -453,6 +465,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         if (_settings is null || _reader is null || currentChat is null)
         {
             LatestSubscriptionBatch = null;
+            IsSubscriptionReviewRequired = false;
             SetLatestParticipantListSource(null);
             _latestParticipantListAttempt = null;
             SubscriptionRows.Clear();
@@ -503,6 +516,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     .Read(settings.InstagramTargetUserName, userNames);
             var rows = InstagramSubscriptionPresentation.Build(participants, saved,
                 ownNames, privilegedNames).ToArray();
+            var reviewRequired = await new InstagramSubscriptionReviewStateStore(_reader.DatabasePath)
+                .NeedsReviewAsync(settings.InstagramTargetUserName, currentChat.Chat,
+                    settings.Chats, ownNames);
 
             // Ignore stale loads when the user switches chats or another reload starts.
             if (request != _subscriptionRowsLoadVersion || !ReferenceEquals(currentChat, SelectedChat))
@@ -513,6 +529,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 SubscriptionRows.Add(row);
             _subscriptionRowsView.Refresh();
             LatestSubscriptionBatch = latestBatch;
+            IsSubscriptionReviewRequired = reviewRequired;
             SetLatestParticipantListSource(source);
             _latestParticipantListAttempt = latestAttempt;
             // The headline counts everyone in the source register; the rows/checks
@@ -637,6 +654,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var privileged = 0;
         var missingActivity = 0;
         var success = false;
+        IReadOnlyList<InstagramReviewFingerprint> reviewedFingerprints = [];
         var runOutcome = InstagramBatchOutcome.FAILED;
         var failureReason = string.Empty;
         var runId = Guid.NewGuid().ToString("N");
@@ -669,6 +687,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     .EnsureFromLegacyAsync(settings.InstagramTargetUserName, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 var ownNames = InstagramOwnAccountFilter.GetUserNames(owned, settings.InstagramBrowserUserName);
+                // Capture the roster actually being checked, before Selenium starts.
+                // If Telegram changes it during the run, the baseline will remain stale.
+                if (individual is null)
+                    reviewedFingerprints = await new InstagramSubscriptionReviewStateStore(_reader.DatabasePath)
+                        .CaptureAsync(settings.Chats, ownNames, cancellationToken);
                 var plan = InstagramBatchEligibility.Prepare(allCurrent, ownNames);
                 privileged = plan.ExcludedCount;
                 missingActivity = plan.MissingActivityProfileCount;
@@ -864,7 +887,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     {
                         if (individual is null)
                         {
-                            runStore.PublishCompleted(runId, targetUserName, snapshot);
+                            runStore.PublishCompleted(runId, targetUserName, snapshot,
+                                reviewedFingerprints);
                             LatestSubscriptionBatch = snapshot;
                         }
                         else
