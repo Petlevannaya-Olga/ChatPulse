@@ -795,6 +795,71 @@ public sealed class WTelegramAuthenticationClient(
         finally { _gate.Release(); }
     }
 
+    public async Task<IReadOnlyList<TelegramChatMessage>> FindMatchingMessagesAfterAsync(
+        TelegramChatOption chat, long afterMessageId,
+        Func<string?, bool> looksLikeParticipantList,
+        CancellationToken cancellationToken, Action<int, int, int>? onPageScanned = null)
+    {
+        if (afterMessageId < 0) throw new ArgumentOutOfRangeException(nameof(afterMessageId));
+        ArgumentNullException.ThrowIfNull(chat);
+        ArgumentNullException.ThrowIfNull(looksLikeParticipantList);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            GetVerifiedUserId();
+            var dialogs = await AwaitRemoteAsync(_client!.Messages_GetAllDialogs(), cancellationToken);
+            var target = dialogs.dialogs.Select(dialog => dialogs.UserOrChat(dialog))
+                .OfType<TL.ChatBase>()
+                .FirstOrDefault(item => item.IsActive && item.ID == chat.PeerId &&
+                    (item is TL.Chat ? "Chat" : "Channel") == chat.PeerType);
+            if (target is null)
+                throw new TelegramAuthenticationException("telegram.chat_not_found",
+                    "Выбранный чат недоступен в текущем Telegram-аккаунте.");
+
+            TL.InputPeer peer = target;
+            const int PAGE_LIMIT = 100;
+            return await TelegramParticipantHistoryTraversal.CollectAfterAsync(
+                async (offsetId, token) =>
+                {
+                    var history = await AwaitRemoteAsync(
+                        _client.Messages_GetHistory(peer, offsetId, limit: PAGE_LIMIT), token);
+                    return history.Messages.Select(item => item is TL.Message message
+                        ? new TelegramChatMessage(message.ID, message.message,
+                            SentAtUtc: message.date.ToUniversalTime())
+                        : new TelegramChatMessage(item.ID, null)).ToArray();
+                },
+                looksLikeParticipantList, afterMessageId, cancellationToken, onPageScanned);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (TelegramAuthenticationException) { throw; }
+        catch (TL.RpcException exception) when (IsAuthorizationLost(exception))
+        {
+            await DetachClientAsync();
+            _authorizationEvents.ReportAuthorizationLost();
+            throw new TelegramAuthenticationException("telegram.session_revoked",
+                "Telegram завершил авторизацию. Выполните повторный вход.");
+        }
+        catch (TL.RpcException exception)
+        {
+            Debug.WriteLine($"[ChatPulse][ParticipantHistory] RPC error code={exception.Code}");
+            throw new TelegramAuthenticationException("telegram.history_load_failed",
+                "Не удалось прочитать всю историю Telegram. Ранее сохранённые данные не изменены.");
+        }
+        catch (InvalidOperationException exception)
+        {
+            Debug.WriteLine($"[ChatPulse][ParticipantHistory] Invalid page: {exception.Message}");
+            throw new TelegramAuthenticationException("telegram.history_incomplete", exception.Message);
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"[ChatPulse][ParticipantHistory] Error type={exception.GetType().Name}");
+            throw new TelegramAuthenticationException("telegram.history_load_failed",
+                "Не удалось полностью загрузить историю Telegram. Ранее сохранённые данные не изменены.");
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task<IReadOnlyList<TelegramChatMessage>> ReadChatHistoryAsync(
         TelegramChatOption chat, int? days, int minMessageId, CancellationToken cancellationToken)
     {

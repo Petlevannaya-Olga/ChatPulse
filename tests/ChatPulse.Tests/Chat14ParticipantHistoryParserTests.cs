@@ -5,6 +5,13 @@ namespace ChatPulse.Tests;
 
 public sealed class Chat14ParticipantHistoryParserTests
 {
+    [Fact]
+    public void RecognizesBrokenFullListAsCandidateInsteadOfSilentlySkippingIt()
+    {
+        var parser = new Chat14ParticipantHistoryParser();
+        Assert.True(parser.IsCandidate("VIP УЧАСТНИКИ\nВСЕ МЫ\nссылка повреждена"));
+    }
+
     private static readonly DateTime POST_DATE =
         new(2026, 11, 19, 15, 0, 0, DateTimeKind.Utc);
     private static readonly IReadOnlySet<string> EMPTY_KNOWN =

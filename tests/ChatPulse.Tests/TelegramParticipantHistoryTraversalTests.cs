@@ -8,6 +8,39 @@ namespace ChatPulse.Tests;
 public sealed class TelegramParticipantHistoryTraversalTests
 {
     [Fact]
+    public async Task IncrementalTraversalKeepsEveryNewListButStopsAtCommittedCursor()
+    {
+        var offsets = new List<int>();
+        var result = await TelegramParticipantHistoryTraversal.CollectAfterAsync(
+            (offset, _) =>
+            {
+                offsets.Add(offset);
+                IReadOnlyList<TelegramChatMessage> page = offset switch
+                {
+                    0 => [new(60, "LIST newest"), new(55, "task"), new(50, "LIST middle")],
+                    50 => [new(45, "LIST oldest new"), new(40, "LIST already stored")],
+                    _ => throw new InvalidOperationException("Cursor should stop traversal")
+                };
+                return Task.FromResult(page);
+            },
+            text => text?.StartsWith("LIST", StringComparison.Ordinal) == true,
+            40, CancellationToken.None);
+
+        Assert.Equal(new long[] { 45, 50, 60 }, result.Select(item => item.MessageId));
+        Assert.Equal(new[] { 0, 50 }, offsets);
+    }
+
+    [Fact]
+    public async Task IncrementalTraversalRejectsRepeatingPageWithoutReturningPartialData()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            TelegramParticipantHistoryTraversal.CollectAfterAsync(
+                (offset, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
+                    offset == 0 ? [new(40, "LIST")] : [new(40, "LIST")]),
+                text => text == "LIST", 10, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ReadsAllAvailablePagesInPublicationOrder_AndKeepsOnlyCandidateLists()
     {
         var requestedOffsets = new List<int>();

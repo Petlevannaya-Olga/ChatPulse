@@ -288,7 +288,7 @@ public sealed class ParticipantRegistryRefreshTests
     }
 
     [Fact]
-    public async Task NormalSynchronization_PicksNewestRegisterEvenIfRecentHistoryContainsOlderOne()
+    public async Task TaskSynchronization_DoesNotAdvanceIndependentParticipantRegister()
     {
         using var temp = new TestDirectory();
         using var settings = new JsonSettingsService(temp.Path);
@@ -306,8 +306,8 @@ public sealed class ParticipantRegistryRefreshTests
         await new ChatSynchronizationService(settings, telegram, database)
             .SynchronizeLatestAsync(chat);
 
-        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
-        Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
+        Assert.Equal(0L, await CountCurrentAsync(database, "fourth_check"));
+        Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
     }
 
     [Fact]
@@ -330,7 +330,8 @@ public sealed class ParticipantRegistryRefreshTests
         var result = await new ChatSynchronizationService(settings, telegram, database)
             .RefreshLatestParticipantListAsync(chat);
 
-        Assert.Null(result.SourceMessageId);
+        Assert.Equal(10L, result.SourceMessageId);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, result.Status);
         Assert.False(result.Applied);
         Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
     }
@@ -352,14 +353,15 @@ public sealed class ParticipantRegistryRefreshTests
         var result = await new ChatSynchronizationService(settings, telegram, database)
             .RefreshLatestParticipantListAsync(chat);
 
-        Assert.Equal(10L, result.SourceMessageId);
+        Assert.Equal(30L, result.SourceMessageId);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, result.Status);
         Assert.False(result.Applied);
         Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
         Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
     }
 
     [Fact]
-    public async Task RefreshLatestParticipantList_EditedMessageWithSameIdUpdatesRegister()
+    public async Task RefreshLatestParticipantList_DoesNotReapplyAnAlreadyCommittedMessageId()
     {
         using var temp = new TestDirectory();
         using var settings = new JsonSettingsService(temp.Path);
@@ -376,13 +378,14 @@ public sealed class ParticipantRegistryRefreshTests
             .RefreshLatestParticipantListAsync(chat);
 
         Assert.Equal(30L, result.SourceMessageId);
-        Assert.True(result.Applied);
-        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
-        Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
+        Assert.False(result.Applied);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, result.Status);
+        Assert.Equal(0L, await CountCurrentAsync(database, "fourth_check"));
+        Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
     }
 
     [Fact]
-    public async Task RefreshLatestParticipantList_ExplainsWhyNewerListWasNotApplied()
+    public async Task RefreshLatestParticipantList_ConsolidatesLegacyDuplicateUsernames()
     {
         using var temp = new TestDirectory();
         using var settings = new JsonSettingsService(temp.Path);
@@ -415,15 +418,13 @@ public sealed class ParticipantRegistryRefreshTests
         var result = await new ChatSynchronizationService(settings, telegram, database)
             .RefreshLatestParticipantListAsync(chat);
 
-        Assert.False(result.Applied);
-        Assert.Equal(ParticipantListApplyStatus.AMBIGUOUS_MATCH, result.Status);
-        Assert.Contains("неоднозначно", result.OutcomeDescription, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("№20", result.OutcomeDescription);
-        Assert.Contains("№10", result.OutcomeDescription);
-        Assert.Equal(10L, result.StoredSource?.MessageId);
-        Assert.Equal(savedDate, result.StoredSource?.SentAtUtc);
-        Assert.Equal(1L, await CountCurrentAsync(database, "third_check"));
-        Assert.Equal(0L, await CountCurrentAsync(database, "fourth_check"));
+        Assert.True(result.Applied);
+        Assert.Equal(ParticipantListApplyStatus.APPLIED, result.Status);
+        var stored = await registry.ReadLatestSourceAsync(chat);
+        Assert.Equal(20L, stored?.MessageId);
+        Assert.Equal(foundDate, stored?.SentAtUtc);
+        Assert.Equal(0L, await CountCurrentAsync(database, "third_check"));
+        Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
     }
 
     [Fact]
@@ -491,10 +492,10 @@ public sealed class ParticipantRegistryRefreshTests
         var result = await new ChatSynchronizationService(settings, telegram, database)
             .RefreshLatestParticipantListAsync(chat);
 
-        Assert.Equal(ParticipantListApplyStatus.OLDER_MESSAGE, result.Status);
+        Assert.Equal(ParticipantListApplyStatus.ALREADY_CURRENT, result.Status);
         Assert.False(result.Applied);
         Assert.Equal(saved, result.StoredSource?.SentAtUtc);
-        Assert.Contains("старее", result.OutcomeDescription);
+        Assert.Contains("уже сохранён", result.OutcomeDescription);
         Assert.Equal(1L, await CountCurrentAsync(database, "fourth_check"));
     }
 

@@ -15,4 +15,21 @@ public interface ITelegramParticipantListHistoryReader
         Func<string?, bool> looksLikeParticipantList,
         CancellationToken cancellationToken,
         Action<int, int, int>? onPageScanned = null);
+
+    /// <summary>
+    /// Reads every candidate newer than the last committed list. A transport may
+    /// stop pagination at the boundary; default fallback performs a full scan.
+    /// Never return a partial result when Telegram reading fails.
+    /// </summary>
+    async Task<IReadOnlyList<TelegramChatMessage>> FindMatchingMessagesAfterAsync(
+        TelegramChatOption chat, long afterMessageId,
+        Func<string?, bool> looksLikeParticipantList,
+        CancellationToken cancellationToken, Action<int, int, int>? onPageScanned = null)
+    {
+        if (afterMessageId < 0) throw new ArgumentOutOfRangeException(nameof(afterMessageId));
+        var found = await FindAllMatchingMessagesAsync(chat, looksLikeParticipantList,
+            cancellationToken, onPageScanned);
+        return found.Where(item => item.MessageId > afterMessageId)
+            .OrderBy(item => item.MessageId).ToArray();
+    }
 }

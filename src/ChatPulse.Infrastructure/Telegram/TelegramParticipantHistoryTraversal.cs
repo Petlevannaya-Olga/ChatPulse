@@ -9,6 +9,48 @@ namespace ChatPulse.Infrastructure.Telegram;
 /// </summary>
 internal static class TelegramParticipantHistoryTraversal
 {
+    public static async Task<IReadOnlyList<TelegramChatMessage>> CollectAfterAsync(
+        Func<int, CancellationToken, Task<IReadOnlyList<TelegramChatMessage>>> loadPage,
+        Func<string?, bool> matches, long afterMessageId,
+        CancellationToken cancellationToken, Action<int, int, int>? onPageScanned = null)
+    {
+        ArgumentNullException.ThrowIfNull(loadPage);
+        ArgumentNullException.ThrowIfNull(matches);
+        if (afterMessageId < 0) throw new ArgumentOutOfRangeException(nameof(afterMessageId));
+        var found = new List<TelegramChatMessage>();
+        var offset = 0;
+        var pages = 0;
+        var scanned = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var messages = await loadPage(offset, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (messages.Count == 0) return found.OrderBy(item => item.MessageId).ToArray();
+            long previous = offset == 0 ? long.MaxValue : offset;
+            foreach (var message in messages)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (message.MessageId <= 0 || message.MessageId >= previous)
+                    throw new InvalidOperationException(
+                        "Telegram вернул повторяющуюся или неправильно отсортированную историю. " +
+                        "Синхронизация участниц не выполнена.");
+                previous = message.MessageId;
+                scanned++;
+                if (message.MessageId <= afterMessageId)
+                {
+                    onPageScanned?.Invoke(++pages, scanned, found.Count);
+                    return found.OrderBy(item => item.MessageId).ToArray();
+                }
+                if (matches(message.Text)) found.Add(message);
+            }
+            if (previous > int.MaxValue)
+                throw new InvalidOperationException("Telegram message_id превышает допустимый диапазон.");
+            offset = checked((int)previous);
+            onPageScanned?.Invoke(++pages, scanned, found.Count);
+        }
+    }
+
     public static async Task<IReadOnlyList<TelegramChatMessage>> CollectAsync(
         Func<int, CancellationToken, Task<IReadOnlyList<TelegramChatMessage>>> loadPage,
         Func<string?, bool> matches,

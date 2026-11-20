@@ -1,4 +1,4 @@
-﻿using ChatPulse.Application.Services;
+using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
 
 namespace ChatPulse.Tests;
@@ -46,7 +46,7 @@ internal sealed class FakeCredentialsStore : ITelegramApiCredentialsStore
     }
 }
 
-internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITelegramTaskReactionSender, ITelegramIncrementalMessageReader, ITelegramLatestMatchingMessageReader
+internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITelegramTaskReactionSender, ITelegramIncrementalMessageReader, ITelegramLatestMatchingMessageReader, ITelegramParticipantListHistoryReader
 {
     public int ResetCalls { get; private set; }
     public int CancelCalls { get; private set; }
@@ -169,6 +169,24 @@ internal sealed class FakeTelegramClient : ITelegramAuthenticationClient, ITeleg
         if (onPageScanned is not null) ReportLatestMatchingPage?.Invoke(onPageScanned);
         return LatestMatchingMessageImpl?.Invoke(chat, matches, cancellationToken)
             ?? Task.FromResult<TelegramChatMessage?>(null);
+    }
+
+
+    public Func<TelegramChatOption, Func<string?, bool>, CancellationToken,
+        Task<IReadOnlyList<TelegramChatMessage>>>? AllMatchingMessagesImpl { get; set; }
+
+    public async Task<IReadOnlyList<TelegramChatMessage>> FindAllMatchingMessagesAsync(
+        TelegramChatOption chat, Func<string?, bool> matches,
+        CancellationToken cancellationToken, Action<int, int, int>? onPageScanned = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (AllMatchingMessagesImpl is not null)
+            return await AllMatchingMessagesImpl(chat, matches, cancellationToken);
+        // Backward-compatible stub for tests that supplied only a latest-message reader.
+        // Production reads EVERY matching message using WTelegram's paged history API.
+        var item = await FindLatestMatchingMessageAsync(chat, matches, cancellationToken,
+            (pages, scanned) => onPageScanned?.Invoke(pages, scanned, 1));
+        return item is null ? [] : [item];
     }
 
     public Task<long> GetAuthorizedUserIdAsync(CancellationToken cancellationToken)

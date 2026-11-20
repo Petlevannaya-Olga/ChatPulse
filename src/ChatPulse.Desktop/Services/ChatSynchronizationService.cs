@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using ChatPulse.Application.Services;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Settings;
@@ -10,7 +10,8 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
     DateTime? SourceMessageSentAtUtc = null,
     ParticipantListApplyStatus Status = ParticipantListApplyStatus.NO_VALID_LIST,
     ParticipantListSourceInfo? StoredSource = null,
-    string? ParseFailureReason = null)
+    string? ParseFailureReason = null,
+    int ProcessedListCount = 0)
 {
     public string OutcomeTitle => Status switch
     {
@@ -39,7 +40,9 @@ public sealed record ParticipantListRefreshResult(long? SourceMessageId, bool Ap
             return Status switch
             {
                 ParticipantListApplyStatus.APPLIED =>
-                    found + " Список применён к реестру, дата на кнопке обновлена.",
+                    found + (ProcessedListCount > 1
+                        ? $" Применено {ProcessedListCount} новых списков в порядке публикации. История и реестр обновлены."
+                        : " Список применён к реестру и истории участниц."),
                 ParticipantListApplyStatus.ALREADY_CURRENT =>
                     SourceMessageSentAtUtc.HasValue
                         ? $"Список от {date} уже сохранён. Изменений нет."
@@ -178,7 +181,6 @@ public sealed class ChatSynchronizationService(
             await SaveMessageDatesAsync(current, messages, cancellationToken);
                 await SaveCustomEmojiAsync(current, messages, cancellationToken);
                 await SaveReactionStatesAsync(current, messages, cancellationToken);
-                await SaveParticipantsAsync(current, messages, cancellationToken);
                 // SQLite is committed before the success flag. Crash/retry is safe because
                 // UNIQUE (account, peer type, peer id, message id) removes duplicates.
                 count = messages.Count;
@@ -244,7 +246,6 @@ public sealed class ChatSynchronizationService(
             await SaveMessageDatesAsync(current, fetched, cancellationToken);
             await SaveCustomEmojiAsync(current, fetched, cancellationToken);
             await SaveReactionStatesAsync(current, fetched, cancellationToken);
-            await SaveParticipantsAsync(current, fetched, cancellationToken);
 
             // Recheck recent older tasks too: their reaction may have changed after import.
             // The recent window is metadata-only; it must never replace original texts.
@@ -254,7 +255,6 @@ public sealed class ChatSynchronizationService(
             await SaveMessageDatesAsync(current, recent, cancellationToken);
             await SaveCustomEmojiAsync(current, recent, cancellationToken);
             await SaveReactionStatesAsync(current, recent, cancellationToken);
-            await SaveParticipantsAsync(current, recent, cancellationToken);
 
             var total = await CountImportedMessagesAsync(current, cancellationToken);
             var lastId = fetched.Count == 0 ? current.LastProcessedMessageId :
@@ -268,9 +268,9 @@ public sealed class ChatSynchronizationService(
     }
 
     /// <summary>
-    /// Independently refreshes only the selected chat's participant register.
-    /// Search starts with newest Telegram messages, without a 1–30-day cutoff.
-    /// The task import cursor, message history and Instagram checks are not modified.
+    /// Atomically refreshes the selected chat's participant register and history.
+    /// Every list after the last committed message ID is checked in publication
+    /// order. The task import cursor and Instagram checks are not modified.
     /// </summary>
     public async Task<ParticipantListRefreshResult> RefreshLatestParticipantListAsync(
         ConfiguredChat configured, Action<ParticipantListSyncProgress>? progress = null,
@@ -295,59 +295,98 @@ public sealed class ChatSynchronizationService(
             if (chats.TelegramUserId != owner || chat is null ||
                 !ChatTitlePolicy.IsEligible(chat.Title))
                 throw new InvalidOperationException("Чат недоступен для синхронизации списка.");
-            if (telegram is not ITelegramLatestMatchingMessageReader reader)
-                throw new InvalidOperationException("Поиск последнего списка не поддерживается Telegram-клиентом.");
+            if (telegram is not ITelegramParticipantListHistoryReader reader)
+                throw new InvalidOperationException(
+                    "Telegram-клиент не поддерживает чтение всех новых списков участниц.");
 
-            progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
-                "Ищем самый свежий список участниц…"));
-            // Find the newest *candidate*, even if it is malformed. Searching for
-            // only valid parses silently hides errors behind older saved lists.
-            var latest = await reader.FindLatestMatchingMessageAsync(chat,
-                ParticipantListParser.LooksLikeParticipantList, cancellationToken,
-                (pages, messages) => progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
-                    $"Просмотрено страниц: {pages} · сообщений: {messages}", pages, messages)));
-            cancellationToken.ThrowIfCancellationRequested();
             var registry = new ChatParticipantRegistry(databasePath);
-            if (latest is null)
+            var previous = await registry.ReadLatestSourceAsync(current, cancellationToken);
+            var parser = ChatParticipantHistoryRuleSelection.SupportsChat14(current)
+                ? (IChatParticipantHistoryParser)new Chat14ParticipantHistoryParser()
+                : new StandardParticipantHistoryParser(
+                    current.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase));
+            var telegramChat = new TelegramChatOption(current.PeerId, current.PeerType,
+                current.TelegramTitle, current.PeerType == "Chat" ? "Группа" : "Канал");
+            progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
+                "Получаем все списки участниц, опубликованные после предыдущей синхронизации…"));
+            // The reader guarantees complete traversal (throws instead of returning
+            // an incomplete result). The task-import cursor is not consulted.
+            var found = await reader.FindMatchingMessagesAfterAsync(telegramChat,
+                previous?.MessageId ?? 0, parser.IsCandidate, cancellationToken,
+                (pages, messages, count) => progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
+                    $"Просмотрено страниц: {pages} · сообщений: {messages} · списков: {count}",
+                    pages, messages)));
+            cancellationToken.ThrowIfCancellationRequested();
+            var candidates = found.OrderBy(item => item.MessageId).ToArray();
+            if (candidates.Length == 0)
             {
-                var missing = new ParticipantListRefreshResult(null, false);
-                await registry.SaveLastAttemptAsync(current, null, null, missing.Status,
-                    missing.OutcomeDescription, CancellationToken.None);
-                return missing;
+                var noChange = previous is not null;
+                var result = new ParticipantListRefreshResult(previous?.MessageId, false,
+                    previous?.SentAtUtc, noChange ? ParticipantListApplyStatus.ALREADY_CURRENT
+                        : ParticipantListApplyStatus.NO_VALID_LIST, previous);
+                await registry.SaveLastAttemptAsync(current, previous?.MessageId,
+                    previous?.SentAtUtc, result.Status, result.OutcomeDescription,
+                    CancellationToken.None);
+                return result;
             }
-            var instagramOnly = current.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase);
-            var allowDamagedPenaltyDomains = ChatParticipantHistoryRuleSelection.SupportsChat14(current);
-            if (!ParticipantListParser.TryParse(latest.Text, out _, out var parseFailureReason,
-                    instagramOnly: instagramOnly,
-                    allowDamagedPenaltyDomains: allowDamagedPenaltyDomains))
-            {
-                // Do not load an older register or write a partially parsed list.
-                var previous = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
-                var failed = new ParticipantListRefreshResult(latest.MessageId, false,
-                    latest.SentAtUtc, ParticipantListApplyStatus.UNPARSEABLE_MESSAGE,
-                    previous, parseFailureReason);
-                await registry.SaveLastAttemptAsync(current, latest.MessageId, latest.SentAtUtc,
-                    failed.Status, failed.OutcomeDescription, CancellationToken.None);
-                return failed;
-            }
+            var newest = candidates[^1];
+            var pending = candidates;
 
-            // A profile check can be cancelled before writing to SQLite. Once the
-            // registry begins its transaction, the update runs to atomic completion.
+            var dailyStore = new ChatParticipantDailySyncStore(databasePath);
+            var known = new HashSet<string>(
+                await dailyStore.ReadKnownUsernamesAsync(current, cancellationToken),
+                StringComparer.OrdinalIgnoreCase);
+            var verified = new List<ParticipantHistoryCandidate>(pending.Length);
+            foreach (var item in pending)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
+                    $"Проверяем список Telegram №{item.MessageId}…",
+                    SourceMessageSentAtUtc: item.SentAtUtc));
+                Func<string, CancellationToken, Task<bool?>>? browserCheck = profileOpens is null
+                    ? null : (url, _) => Task.FromResult(profileOpens(url));
+                var parsed = profileOpens is null
+                    ? await parser.ParseAsync(item.Text, item.SentAtUtc, known,
+                        browserCheck, cancellationToken)
+                    : await Task.Run(() => parser.ParseAsync(item.Text, item.SentAtUtc,
+                        known, browserCheck, cancellationToken), cancellationToken);
+                var candidate = new ParticipantHistoryCandidate(item.MessageId, item.SentAtUtc,
+                    item.Text ?? string.Empty, parsed.Entries, parsed.Error);
+                string? reason = parsed.Error;
+                if (parsed.IsSuccess)
+                {
+                    try { ChatParticipantHistoryStore.VerifiedUniqueEntries(candidate); }
+                    catch (InvalidOperationException exception) { reason = exception.Message; }
+                }
+                if (!parsed.IsSuccess || reason is not null)
+                {
+                    var failed = new ParticipantListRefreshResult(item.MessageId, false,
+                        item.SentAtUtc, ParticipantListApplyStatus.UNPARSEABLE_MESSAGE,
+                        previous, $"Сообщение №{item.MessageId}: {reason ?? "не удалось разобрать список"}. " +
+                        $"Все {pending.Length} новых списков оставлены без изменений.");
+                    await registry.SaveLastAttemptAsync(current, item.MessageId,
+                        item.SentAtUtc, failed.Status, failed.OutcomeDescription,
+                        CancellationToken.None);
+                    return failed;
+                }
+                verified.Add(candidate);
+                foreach (var entry in parsed.Entries!)
+                {
+                    var username = new Uri(entry.SubscriptionProfileUrl).AbsolutePath.Trim('/');
+                    known.Add(username);
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
             progress?.Invoke(new(ParticipantListSyncStage.SAVE,
-                $"Обновляем реестр по сообщению №{latest.MessageId}…",
-                SourceMessageSentAtUtc: latest.SentAtUtc));
-            var applied = profileOpens is null
-                ? await registry.UpdateDetailedAsync(current,
-                    [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None)
-                : await Task.Run(() => registry.UpdateDetailedAsync(current,
-                    [(latest.MessageId, latest.Text, latest.SentAtUtc)], CancellationToken.None,
-                    profileOpens), CancellationToken.None);
+                $"Сохраняем {verified.Count} новых списков одной транзакцией…",
+                SourceMessageSentAtUtc: newest.SentAtUtc));
+            var successful = new ParticipantListRefreshResult(newest.MessageId, true,
+                newest.SentAtUtc, ParticipantListApplyStatus.APPLIED,
+                ProcessedListCount: verified.Count);
+            await dailyStore.CommitAsync(current, verified, parser.Rule,
+                previous?.MessageId, successful.OutcomeDescription, cancellationToken);
             var stored = await registry.ReadLatestSourceAsync(current, CancellationToken.None);
-            var result = new ParticipantListRefreshResult(latest.MessageId, applied.AppliedCount > 0,
-                latest.SentAtUtc, applied.Status, stored);
-            await registry.SaveLastAttemptAsync(current, latest.MessageId, latest.SentAtUtc,
-                result.Status, result.OutcomeDescription, CancellationToken.None);
-            return result;
+            return successful with { StoredSource = stored };
         }
         finally { _gate.Release(); }
     }
@@ -431,7 +470,6 @@ public sealed class ChatSynchronizationService(
             await SaveMessageDatesAsync(current, messages, cancellationToken);
                 await SaveCustomEmojiAsync(current, messages, cancellationToken);
             await SaveReactionStatesAsync(current, messages, cancellationToken);
-            await SaveParticipantsAsync(current, messages, cancellationToken);
             var lastId = messages.Count == 0 ? current.LastProcessedMessageId :
                 Math.Max(current.LastProcessedMessageId ?? 0, messages.Max(message => message.MessageId));
             await settings.ConfirmChatHistoryReloadAsync(current.TelegramUserId, current.PeerId,
@@ -470,7 +508,6 @@ public sealed class ChatSynchronizationService(
             await SaveAuthorsAsync(current, messages, cancellationToken);
             await SaveMessageDatesAsync(current, messages, cancellationToken);
             await SaveCustomEmojiAsync(current, messages, cancellationToken);
-            await SaveParticipantsAsync(current, messages, cancellationToken);
             return await SaveReactionStatesAsync(current, messages, cancellationToken);
         }
         finally { _gate.Release(); }
@@ -740,12 +777,6 @@ public sealed class ChatSynchronizationService(
         }
         await transaction.CommitAsync(cancellationToken);
     }
-
-    private Task<int> SaveParticipantsAsync(ConfiguredChat chat,
-        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
-        => new ChatParticipantRegistry(databasePath).UpdateAsync(chat,
-            messages.Select(message => (message.MessageId, message.Text, message.SentAtUtc)),
-            cancellationToken);
 
     private static ConfiguredChat FindConfigured(AppSettings appSettings, ConfiguredChat expected)
     {

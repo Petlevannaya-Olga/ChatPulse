@@ -215,6 +215,170 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
             rejectedCount, outcome, sources[0].MessageId, sources[^1].MessageId);
     }
 
+    // Used by the incremental subscriptions operation. Validation and parsing happen
+    // before a transaction starts. This method changes only the supplied transaction;
+    // its caller commits the history, live register and version cursor together.
+    internal static async Task EnsureHistorySchemaAsync(SqliteConnection connection,
+        CancellationToken cancellationToken) => await EnsureSchemaAsync(connection, cancellationToken);
+
+    internal static IReadOnlyList<ParticipantHistoryEntry> VerifiedUniqueEntries(
+        ParticipantHistoryCandidate candidate)
+    {
+        var preparation = Prepare(candidate);
+        if (!preparation.IsParsed)
+            throw new InvalidOperationException(preparation.Error);
+        return preparation.UniqueEntries.Select(item => item.Raw).ToArray();
+    }
+
+    public async Task<IReadOnlySet<string>> ReadKnownUsernamesAsync(
+        ConfiguredChat chat, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(databasePath)) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        using var command = NewCommand(connection, null, """
+            SELECT InstagramUsername FROM ChatParticipantHistoryIdentities
+            WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+            """);
+        AddChatParameters(command, chat);
+        var usernames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) usernames.Add(reader.GetString(0));
+        return usernames;
+    }
+
+    internal static async Task AppendVerifiedBatchAsync(SqliteConnection connection,
+        SqliteTransaction transaction, ConfiguredChat chat,
+        IReadOnlyList<ParticipantHistoryCandidate> candidates,
+        ParticipantHistoryRule rule, CancellationToken cancellationToken)
+    {
+        if (candidates.Count == 0) return;
+        var prepared = candidates.Select(Prepare).OrderBy(item => item.Source.MessageId).ToArray();
+        if (prepared.Any(item => !item.IsParsed))
+            throw new InvalidOperationException("Все списки должны быть проверены до сохранения истории.");
+        if (prepared.Select(item => item.Source.MessageId).Distinct().Count() != prepared.Length)
+            throw new InvalidOperationException("Найдены повторные Telegram message_id.");
+
+        var ruleId = await EnsureRuleAsync(connection, transaction, chat, rule, cancellationToken);
+        var identities = new Dictionary<string, Identity>(StringComparer.OrdinalIgnoreCase);
+        using (var read = NewCommand(connection, transaction, """
+            SELECT i.HistoryParticipantId, i.InstagramUsername,
+                   h.IsPresent, h.Category, h.IsWeekend, h.IsPenalty,
+                   h.SubscriptionProfileUrl, h.ActivityProfileUrl,
+                   h.WeekendFromDate, h.WeekendToDate, h.WeekendSourceText
+            FROM ChatParticipantHistoryIdentities i
+            JOIN ChatParticipantHistoryStates h ON h.StateId = (
+                SELECT state.StateId FROM ChatParticipantHistoryStates state
+                JOIN ChatParticipantListSnapshots snap ON snap.SnapshotId=state.SnapshotId
+                WHERE state.HistoryParticipantId=i.HistoryParticipantId
+                ORDER BY snap.SourceMessageId DESC LIMIT 1)
+            WHERE i.TelegramUserId=$owner AND i.PeerType=$type AND i.PeerId=$peer
+            """))
+        {
+            AddChatParameters(read, chat);
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                string? Nullable(int index) => reader.IsDBNull(index) ? null : reader.GetString(index);
+                identities.Add(reader.GetString(1), new Identity(reader.GetInt64(0),
+                    new StateValue(reader.GetInt64(2) != 0, Nullable(3), reader.GetInt64(4) != 0,
+                        reader.GetInt64(5) != 0, Nullable(6), Nullable(7), Nullable(8),
+                        Nullable(9), Nullable(10))));
+            }
+        }
+
+        long lastSnapshotId = 0;
+        using (var latest = NewCommand(connection, transaction, """
+            SELECT COALESCE(MAX(SourceMessageId), 0) FROM ChatParticipantListSnapshots
+            WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+            """))
+        {
+            AddChatParameters(latest, chat);
+            lastSnapshotId = Convert.ToInt64(await latest.ExecuteScalarAsync(cancellationToken),
+                CultureInfo.InvariantCulture);
+        }
+        foreach (var snapshot in prepared)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var messageId = snapshot.Source.MessageId;
+            var sha = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(snapshot.Source.SourceText)));
+            using (var existing = NewCommand(connection, transaction, """
+                SELECT SourceTextSha256, ParseStatus FROM ChatParticipantListSnapshots
+                WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
+                  AND SourceMessageId=$message
+                """))
+            {
+                AddChatParameters(existing, chat);
+                existing.Parameters.AddWithValue("$message", messageId);
+                await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    if (!string.Equals(reader.GetString(0), sha, StringComparison.Ordinal) ||
+                        reader.GetString(1) != "PARSED")
+                        throw new InvalidOperationException(
+                            $"Telegram-сообщение №{messageId} изменено. Выполните полное обновление истории в настройках.");
+                    continue; // Already archived, do not duplicate its transitions.
+                }
+            }
+            if (messageId <= lastSnapshotId)
+                throw new InvalidOperationException(
+                    $"В истории отсутствует промежуточный список №{messageId}. Выполните полное обновление истории.");
+
+            var snapshotId = await InsertSnapshotAsync(connection, transaction, chat, ruleId,
+                snapshot, cancellationToken);
+            for (var i = 0; i < snapshot.RawEntries.Count; i++)
+                await InsertEntryAsync(connection, transaction, snapshotId, i,
+                    snapshot.RawEntries[i], cancellationToken);
+            var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in snapshot.UniqueEntries)
+            {
+                present.Add(entry.Username);
+                var state = StateFromEntry(entry);
+                if (!identities.TryGetValue(entry.Username, out var identity))
+                {
+                    var id = await InsertIdentityAsync(connection, transaction, chat,
+                        entry.Username, snapshotId, cancellationToken);
+                    identities.Add(entry.Username, new Identity(id, state));
+                    await InsertStateAsync(connection, transaction, id, snapshotId, state,
+                        cancellationToken);
+                    continue;
+                }
+                await UpdateLastSeenAsync(connection, transaction, identity.Id,
+                    snapshotId, cancellationToken);
+                if (identity.LastState == state) continue;
+                identity.LastState = state;
+                await InsertStateAsync(connection, transaction, identity.Id,
+                    snapshotId, state, cancellationToken);
+            }
+            foreach (var (username, identity) in identities)
+            {
+                if (present.Contains(username) || !identity.LastState.IsPresent) continue;
+                var absent = new StateValue(false, null, false, false,
+                    null, null, null, null, null);
+                identity.LastState = absent;
+                await InsertStateAsync(connection, transaction, identity.Id,
+                    snapshotId, absent, cancellationToken);
+            }
+            lastSnapshotId = messageId;
+        }
+        // A successful incremental sync is a single operation, not a partial FULL rebuild.
+        using var run = NewCommand(connection, transaction, """
+            INSERT INTO ChatParticipantHistoryRuns
+                (TelegramUserId, PeerType, PeerId, Mode, Outcome, StartedAtUnixSeconds,
+                 CompletedAtUnixSeconds, OldestFoundMessageId, NewestFoundMessageId,
+                 CandidateCount, AcceptedCount, RejectedCount)
+            VALUES ($owner, $type, $peer, 'LATEST', 'COMPLETED', $now, $now,
+                    $old, $new, $count, $count, 0)
+            """);
+        AddChatParameters(run, chat);
+        run.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        run.Parameters.AddWithValue("$old", prepared[0].Source.MessageId);
+        run.Parameters.AddWithValue("$new", prepared[^1].Source.MessageId);
+        run.Parameters.AddWithValue("$count", prepared.Length);
+        await run.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static async Task InsertRunAsync(SqliteConnection connection, SqliteTransaction transaction,
         ConfiguredChat chat, IReadOnlyList<SnapshotPreparation> prepared, string outcome,
         CancellationToken cancellationToken)

@@ -107,6 +107,12 @@ public sealed class WorkspaceTaskReader(string databasePath)
         command.Parameters.AddWithValue("$peerType", chat.PeerType);
         command.Parameters.AddWithValue("$peerId", chat.PeerId);
 
+        // Use the same candidate detection as participant synchronization. A damaged
+        // register is not a task just because its full parsing fails.
+        IChatParticipantHistoryParser listRecognizer = ChatParticipantHistoryRuleSelection.SupportsChat14(chat)
+            ? new Chat14ParticipantHistoryParser()
+            : new StandardParticipantHistoryParser(
+                string.Equals(chat.SocialNetwork, "Instagram", StringComparison.OrdinalIgnoreCase));
         var tasks = new List<WorkspaceDetectedTask>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -115,7 +121,7 @@ public sealed class WorkspaceTaskReader(string databasePath)
             var messageText = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
             // URL-less messages, participant registers and post-chat rules are not task cards.
             if (!ParticipantListParser.HasAnyLink(messageText) ||
-                ParticipantListParser.TryParse(messageText, out _) ||
+                listRecognizer.IsCandidate(messageText) ||
                 ChatRulesMessageClassifier.IsChatRules(messageText)) continue;
             var evidence = ChatActivityAnalyzer.AnalyzeMessage(new ChatActivityMessage(messageId, messageText));
             var postUrl = evidence.PostLinks.FirstOrDefault() ?? string.Empty;

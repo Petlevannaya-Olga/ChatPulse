@@ -62,7 +62,16 @@ public sealed class Chat14ParticipantHistoryParser : IChatParticipantHistoryPars
 
     public ParticipantHistoryRule Rule { get; } = new(1, "Chat14Rules", "{}");
 
-    public bool IsCandidate(string? text) => ParticipantListParser.LooksLikeParticipantList(text);
+    public bool IsCandidate(string? text)
+    {
+        if (ParticipantListParser.LooksLikeParticipantList(text)) return true;
+        // An intermediate full list may have broken numbering or links. Do not
+        // silently skip it when its two section headings identify a register.
+        return !string.IsNullOrWhiteSpace(text) && text.Length <= 100_000 &&
+               text.Contains("ВСЕ МЫ", StringComparison.OrdinalIgnoreCase) &&
+               (text.Contains("VIP УЧАСТНИКИ", StringComparison.OrdinalIgnoreCase) ||
+                text.Contains("ШТРАФНЫЕ ДНИ", StringComparison.OrdinalIgnoreCase));
+    }
 
     public async Task<ChatParticipantHistoryParseResult> ParseAsync(string? text, DateTime? sentAtUtc,
         IReadOnlySet<string> previouslySeenUsernames,

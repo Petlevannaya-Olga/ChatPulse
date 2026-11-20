@@ -729,7 +729,7 @@ public sealed class ParticipantListIntegrationTests
     }
 
     [Fact]
-    public async Task Synchronization_StoresRegisterAndHidesItFromTasks_RefreshUpdatesRegister()
+    public async Task TaskSynchronization_DoesNotApplyParticipantListsOrOverrideTheirCursor()
     {
         using var temp = new TempDirectory();
         using var settings = new JsonSettingsService(temp.Path);
@@ -748,13 +748,17 @@ public sealed class ParticipantListIntegrationTests
         var chat = Assert.Single((await settings.LoadAsync()).Chats);
         await sync.SynchronizeAsync(chat);
         Assert.Equal(22L, Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat)).MessageId);
+        var registry = new ChatParticipantRegistry(database);
+        Assert.Null(await registry.ReadLatestSourceAsync(chat));
+        await registry.UpdateAsync(chat, [(20L, REGISTER)]);
         Assert.Equal(1L, (await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_")).Position);
 
         var revised = REGISTER.Replace("1\nhttps://www.instagram.com/q.r1s_", "77\nhttps://www.instagram.com/q.r1s_", StringComparison.Ordinal);
         telegram.ChatMessagesImpl = (_, _, _) => Task.FromResult<IReadOnlyList<TelegramChatMessage>>(
             [new(25, revised), new(22, "Актив https://www.instagram.com/p/abc123/")]);
         await sync.RefreshReactionsAsync(chat);
-        Assert.Equal(77L, (await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_")).Position);
+        Assert.Equal(1L, (await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_")).Position);
+        Assert.Equal(20L, (await registry.ReadLatestSourceAsync(chat))?.MessageId);
         Assert.Equal(22L, Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat)).MessageId);
     }
 
