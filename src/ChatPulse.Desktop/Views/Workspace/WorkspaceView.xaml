@@ -451,29 +451,39 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <StackPanel Grid.Row="4" Margin="0,9,0,4">
-                    <Button Click="CheckReactionsButton_OnClick"
-                            Style="{StaticResource NavigationButton}" ToolTip="Синхронизировать все чаты"
-                            IsEnabled="{Binding IsNotBusy}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="⟳" FontSize="23" Width="34" TextAlignment="Center"
-                                       VerticalAlignment="Center" />
-                            <TextBlock Text="Синхронизировать все" FontWeight="SemiBold"
-                                       VerticalAlignment="Center"
-                                       Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
+                <!-- Синхронизация вынесена в самостоятельную компактную карточку в подвале навигации. -->
+                <Border Grid.Row="4" Margin="0,10,0,3" CornerRadius="12"
+                        Background="#342157" BorderBrush="#594078" BorderThickness="1"
+                        Padding="5,6,5,7">
+                    <StackPanel>
+                        <Button Click="CheckReactionsButton_OnClick"
+                                Style="{StaticResource NavigationButton}"
+                                ToolTip="Синхронизировать все подключённые чаты"
+                                IsEnabled="{Binding IsNotBusy}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="⟳" FontSize="22" Width="34"
+                                           TextAlignment="Center" VerticalAlignment="Center" />
+                                <TextBlock Text="Синхронизировать все" FontWeight="SemiBold"
+                                           FontSize="12" VerticalAlignment="Center"
+                                           Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
+                            </StackPanel>
+                        </Button>
+                        <StackPanel Margin="12,5,9,3"
+                                    Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}">
+                            <Border Height="1" Background="#664E81" Margin="0,0,0,8" />
+                            <TextBlock Text="{Binding LastAllChatsSyncLabel, Mode=OneWay}"
+                                       Foreground="#F4EAFE" FontSize="11"
+                                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding LastAllChatsSyncLabel, Mode=OneWay}" />
+                            <TextBlock Text="{Binding LastAllChatsSyncNewMessagesLabel, Mode=OneWay}"
+                                       Foreground="#D8C5EC" FontSize="11"
+                                       TextWrapping="NoWrap" Margin="0,4,0,0" />
                         </StackPanel>
-                    </Button>
-                    <TextBlock Text="{Binding LastAllChatsSyncLabel, Mode=OneWay}" FontSize="10"
-                               Foreground="#D7C5E8" TextWrapping="Wrap" Margin="13,3,0,1"
-                               Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
-                    <TextBlock Text="{Binding ReactionRefreshMessage}" FontSize="10"
-                               Foreground="#EACAF0" TextWrapping="Wrap" Margin="13,4,0,0"
-                               MaxHeight="52" TextTrimming="CharacterEllipsis"
-                               Visibility="{Binding IsSidebarExpanded, Converter={StaticResource BoolVisible}}" />
-                </StackPanel>
+                    </StackPanel>
+                </Border>
 
                 <Button x:Name="SettingsButton" Grid.Row="5" Click="SettingsButton_OnClick"
-                        Style="{StaticResource NavigationButton}" ToolTip="Настройки" Margin="0,14,0,8">
+                        Style="{StaticResource NavigationButton}" ToolTip="Настройки" Margin="0,6,0,8">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="⚙" FontSize="21" Width="34" TextAlignment="Center" VerticalAlignment="Center" />
                         <TextBlock Text="Настройки" VerticalAlignment="Center"
@@ -865,14 +875,48 @@
                                         </ItemsControl.GroupStyle>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border BorderBrush="#ECE4F5" BorderThickness="1" Background="#FCFAFF"
+                                                <Border BorderBrush="{Binding CardBorderBrush, Mode=OneWay}" BorderThickness="1"
+                                                        Background="{Binding CardBackground, Mode=OneWay}"
                                                         CornerRadius="12" Margin="0,0,0,10" Padding="15,13">
                                                     <Grid>
                                                         <Grid.RowDefinitions>
                                                             <RowDefinition Height="Auto" />
                                                             <RowDefinition Height="Auto" />
                                                         </Grid.RowDefinitions>
-                                                        <Grid Grid.Row="0">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <!-- Подписка и отписка: метка и ссылки слева, действия справа, одна строка. -->
+                                                        <WrapPanel Grid.Row="0" Grid.Column="0" Margin="7,0,12,0"
+                                                                   VerticalAlignment="Center"
+                                                                   Visibility="{Binding IsSubscriptionAction, Converter={StaticResource BoolVisible}}">
+                                                            <Border Background="{Binding KindBackground, Mode=OneWay}"
+                                                                    CornerRadius="8" Padding="10,5"
+                                                                    Margin="0,0,12,0" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding KindLabel, Mode=OneWay}"
+                                                                           Foreground="{Binding KindForeground, Mode=OneWay}"
+                                                                           FontSize="12" FontWeight="SemiBold" />
+                                                            </Border>
+                                                            <ItemsControl ItemsSource="{Binding ActionLinks, Mode=OneWay}"
+                                                                          VerticalAlignment="Center">
+                                                                <ItemsControl.ItemsPanel>
+                                                                    <ItemsPanelTemplate>
+                                                                        <WrapPanel Orientation="Horizontal" />
+                                                                    </ItemsPanelTemplate>
+                                                                </ItemsControl.ItemsPanel>
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <Button Content="{Binding Text}" Tag="{Binding Url}"
+                                                                                Margin="0,0,6,0"
+                                                                                Click="OpenPostButton_OnClick"
+                                                                                Style="{StaticResource WorkspaceActionButton}" />
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </WrapPanel>
+                                                        <Grid Grid.Row="0" Grid.ColumnSpan="2"
+                                                              Visibility="{Binding IsRegularTask, Converter={StaticResource BoolVisible}}">
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="42" />
                                                                 <ColumnDefinition Width="*" />
@@ -919,7 +963,18 @@
                                                                            FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0" />
                                                             </StackPanel>
                                                         </Grid>
-                                                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                                                                    VerticalAlignment="Center">
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Grid.Row" Value="1" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsSubscriptionAction}" Value="True">
+                                                                            <Setter Property="Grid.Row" Value="0" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
                                                             <Button Content="↗  Задание" Tag="{Binding SourceUrl}"
                                                                     IsEnabled="{Binding HasSourceUrl}"
                                                                     Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"

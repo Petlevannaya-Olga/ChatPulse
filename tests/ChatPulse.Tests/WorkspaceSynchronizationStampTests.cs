@@ -58,4 +58,49 @@ public sealed class WorkspaceSynchronizationStampTests
         }
         finally { SqliteTestDatabaseCleanup.DeleteDirectory(directory); }
     }
+
+    [Fact]
+    public async Task GlobalSuccessPersistsMessageCountWithoutChangingChatStamps()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"chatpulse-sync-count-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "chatpulse.db");
+        try
+        {
+            var store = new WorkspaceSynchronizationStampStore(path);
+            var chat = Chat(14);
+            var oldChatStamp = new DateTimeOffset(2026, 11, 20, 10, 0, 0, TimeSpan.Zero);
+            var completed = new DateTimeOffset(2026, 11, 21, 14, 47, 0, TimeSpan.Zero);
+            await store.RecordChatSuccessAsync(chat, oldChatStamp);
+            await store.RecordAllSuccessAsync(91, completed, 0);
+            var reopened = new WorkspaceSynchronizationStampStore(path);
+            var summary = await reopened.ReadAllSummaryAsync(91);
+            Assert.Equal(completed, summary.CompletedAt);
+            Assert.Equal(0, summary.NewMessages);
+            Assert.Equal(oldChatStamp, await reopened.ReadChatAsync(chat));
+            Assert.Null((await reopened.ReadAllSummaryAsync(92)).CompletedAt);
+        }
+        finally { SqliteTestDatabaseCleanup.DeleteDirectory(directory); }
+    }
+
+    [Fact]
+    public async Task OldGlobalStampHasUnknownCountUntilNextCompletedSync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"chatpulse-sync-old-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "chatpulse.db");
+        try
+        {
+            var store = new WorkspaceSynchronizationStampStore(path);
+            var previous = new DateTimeOffset(2026, 11, 20, 12, 0, 0, TimeSpan.Zero);
+            await store.RecordAllSuccessAsync(91, previous);
+            Assert.Null((await store.ReadAllSummaryAsync(91)).NewMessages);
+            var next = previous.AddDays(1);
+            await store.RecordAllSuccessAsync(91, next, 15);
+            var summary = await store.ReadAllSummaryAsync(91);
+            Assert.Equal(next, summary.CompletedAt);
+            Assert.Equal(15, summary.NewMessages);
+        }
+        finally { SqliteTestDatabaseCleanup.DeleteDirectory(directory); }
+    }
 }

@@ -48,7 +48,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _taskSummary = string.Empty;
     private string _loadMessage = string.Empty;
     private string _reactionRefreshMessage = string.Empty;
-    private string _lastAllChatsSyncLabel = "Последняя: ещё не выполнялась";
+    private string _lastAllChatsSyncLabel = "Последнее обновление: —";
+    private string _lastAllChatsSyncNewMessagesLabel = "Новых сообщений: —";
     private string _lastSelectedChatSyncLabel = "Последняя: ещё не выполнялась";
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
@@ -156,6 +157,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         get => _lastAllChatsSyncLabel;
         private set { _lastAllChatsSyncLabel = value; Notify(); }
     }
+    public string LastAllChatsSyncNewMessagesLabel
+    {
+        get => _lastAllChatsSyncNewMessagesLabel;
+        private set { _lastAllChatsSyncNewMessagesLabel = value; Notify(); }
+    }
     public string LastSelectedChatSyncLabel
     {
         get => _lastSelectedChatSyncLabel;
@@ -175,10 +181,17 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var store = new WorkspaceSynchronizationStampStore(_reader.DatabasePath);
         try
         {
-            var all = owner.HasValue ? await store.ReadAllAsync(owner.Value) : null;
+            var all = owner.HasValue ? await store.ReadAllSummaryAsync(owner.Value) : (CompletedAt: (DateTimeOffset?)null, NewMessages: (int?)null);
             var chatStamp = selected is not null ? await store.ReadChatAsync(selected.Chat) : null;
             if (owner == Chats.FirstOrDefault()?.Chat.TelegramUserId)
-                LastAllChatsSyncLabel = FormatSyncStamp(all);
+            {
+                LastAllChatsSyncLabel = all.CompletedAt is { } completed
+                    ? $"Последнее обновление: {completed.ToLocalTime():dd.MM.yyyy}"
+                    : "Последнее обновление: —";
+                LastAllChatsSyncNewMessagesLabel = all.NewMessages is { } count
+                    ? $"Новых сообщений: {count}"
+                    : "Новых сообщений: —";
+            }
             if (ReferenceEquals(selected, SelectedChat))
                 LastSelectedChatSyncLabel = FormatSyncStamp(chatStamp);
         }
@@ -1979,7 +1992,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                         }
                     }
                     if (onlyChat is null && !stopped && errors.Count == 0)
-                        await stamps.RecordAllSuccessAsync(chats[0].TelegramUserId, DateTimeOffset.UtcNow);
+                        await stamps.RecordAllSuccessAsync(chats[0].TelegramUserId, DateTimeOffset.UtcNow, updated);
 
                     await ReloadAsync();
                     ReactionRefreshMessage = stopped
@@ -2137,16 +2150,39 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     };
     public string KindBackground => WorkspaceTaskKindDetector.Detect(task.Text) switch
     {
-        WorkspaceTaskKind.SUBSCRIBE => "#EDE3FF",
-        WorkspaceTaskKind.UNSUBSCRIBE => "#FCE7E8",
+        WorkspaceTaskKind.SUBSCRIBE => "#D9F1E0",
+        WorkspaceTaskKind.UNSUBSCRIBE => "#FFE5CC",
         _ => "#EBEBF2"
     };
     public string KindForeground => WorkspaceTaskKindDetector.Detect(task.Text) switch
     {
-        WorkspaceTaskKind.SUBSCRIBE => "#6C36A8",
-        WorkspaceTaskKind.UNSUBSCRIBE => "#A03748",
+        WorkspaceTaskKind.SUBSCRIBE => "#246F43",
+        WorkspaceTaskKind.UNSUBSCRIBE => "#965219",
         _ => "#54516E"
     };
+
+    // Subscription and unsubscription cards deliberately show only clickable targets.
+    // The original Telegram text remains available in SQLite and in the source message.
+    public bool IsSubscriptionAction => WorkspaceTaskKindDetector.Detect(task.Text) is
+        WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE;
+    public bool IsRegularTask => !IsSubscriptionAction;
+    public string CardBackground => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    {
+        WorkspaceTaskKind.SUBSCRIBE => "#F2FBF5",
+        WorkspaceTaskKind.UNSUBSCRIBE => "#FFF6EC",
+        _ => "#FCFAFF"
+    };
+    public string CardBorderBrush => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    {
+        WorkspaceTaskKind.SUBSCRIBE => "#CBE9D5",
+        WorkspaceTaskKind.UNSUBSCRIBE => "#F3D9B9",
+        _ => "#ECE4F5"
+    };
+    public IReadOnlyList<WorkspaceTaskTextPart> ActionLinks => WorkspaceTaskLinks.Split(task.Text)
+        .Where(part => part.Url is not null)
+        .Concat(WorkspaceTaskLinks.Split(task.PostUrl).Where(part => part.Url is not null))
+        .DistinctBy(part => part.Url, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
     public string CustomEmojiJson => _presentation.CustomEmojiJson;
     public string ReelUrl => _presentation.ReelUrl;

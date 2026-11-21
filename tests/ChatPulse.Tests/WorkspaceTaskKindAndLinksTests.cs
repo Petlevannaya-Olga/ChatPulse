@@ -1,4 +1,4 @@
-using ChatPulse.Desktop.Services;
+﻿using ChatPulse.Desktop.Services;
 using Xunit;
 
 namespace ChatPulse.Tests;
@@ -31,6 +31,53 @@ public sealed class WorkspaceTaskKindAndLinksTests
             part.Url == "https://t.me/example");
         Assert.Contains(parts, part => part.Text == "; чат " && part.Url is null);
         Assert.EndsWith(".", parts[^1].Text);
+    }
+
+    [Theory]
+    [InlineData("☑️ПОДПИСКА☑️\nВНИМАНИЕ\nhttps://www.instagram.com/user_one/", true, "#F2FBF5")]
+    [InlineData("О💔Т💔П💔И💔С💔К💔А https://www.instagram.com/user_two/", true, "#FFF6EC")]
+    [InlineData("Лайк https://www.instagram.com/p/example/", false, "#FCFAFF")]
+    public void SubscriptionCardsOnlyExposeLinksAndUseDistinctBackgrounds(
+        string text, bool subscriptionAction, string background)
+    {
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new ChatPulse.Desktop.Services.WorkspaceDetectedTask(10, text, ""));
+        Assert.Equal(subscriptionAction, card.IsSubscriptionAction);
+        Assert.Equal(!subscriptionAction, card.IsRegularTask);
+        Assert.Equal(background, card.CardBackground);
+        if (subscriptionAction)
+        {
+            var link = Assert.Single(card.ActionLinks);
+            Assert.StartsWith("Открыть Instagram", link.Text);
+            Assert.StartsWith("https://www.instagram.com/", link.Url);
+        }
+    }
+
+    [Fact]
+    public void SubscriptionCardKeepsEveryDistinctLinkAndNeverIncludesInstructionText()
+    {
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new ChatPulse.Desktop.Services.WorkspaceDetectedTask(10,
+                "ПОДПИСКА\nhttps://instagram.com/first/\nhttps://instagram.com/second/", ""));
+        Assert.True(card.IsSubscriptionAction);
+        Assert.Equal(2, card.ActionLinks.Count);
+        Assert.All(card.ActionLinks, part => Assert.NotNull(part.Url));
+        Assert.DoesNotContain(card.ActionLinks, part => part.Text.Contains("ПОДПИСКА"));
+    }
+
+    [Theory]
+    [InlineData("ПОДПИСКА https://instagram.com/a", "Подписка", "#D9F1E0", "#246F43")]
+    [InlineData("О💔Т💔П💔И💔С💔К💔А https://instagram.com/b", "Отписка", "#FFE5CC", "#965219")]
+    public void SubscriptionCardsKeepVisibleKindLabelAndMatchingBadgeColors(
+        string text, string expectedLabel, string expectedBackground, string expectedForeground)
+    {
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new ChatPulse.Desktop.Services.WorkspaceDetectedTask(10, text, ""));
+        Assert.True(card.IsSubscriptionAction);
+        Assert.Equal(expectedLabel, card.KindLabel);
+        Assert.Equal(expectedBackground, card.KindBackground);
+        Assert.Equal(expectedForeground, card.KindForeground);
+        Assert.Single(card.ActionLinks);
     }
 
     [Fact]

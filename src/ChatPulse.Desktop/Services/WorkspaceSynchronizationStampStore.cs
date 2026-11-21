@@ -13,6 +13,7 @@ public sealed class WorkspaceSynchronizationStampStore(string databasePath)
             PeerType TEXT NOT NULL,
             PeerId INTEGER NOT NULL,
             CompletedAtUtc TEXT NOT NULL,
+            NewMessages INTEGER NULL,
             PRIMARY KEY (Scope, TelegramUserId, PeerType, PeerId)
         )
         """;
@@ -25,6 +26,44 @@ public sealed class WorkspaceSynchronizationStampStore(string databasePath)
         CancellationToken cancellationToken = default)
         => await WriteAsync("all", owner, string.Empty, 0, timestamp, cancellationToken);
 
+    public async Task RecordAllSuccessAsync(long owner, DateTimeOffset timestamp, int newMessages,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(newMessages);
+        await WriteAsync("all", owner, string.Empty, 0, timestamp, cancellationToken, newMessages);
+    }
+
+    public async Task<(DateTimeOffset? CompletedAt, int? NewMessages)> ReadAllSummaryAsync(long owner,
+        CancellationToken cancellationToken = default)
+    {
+        var timestamp = await ReadAllAsync(owner, cancellationToken);
+        if (timestamp is null) return (null, null);
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var check = connection.CreateCommand();
+        check.CommandText = "PRAGMA table_info(WorkspaceSynchronizationStamps)";
+        var hasCountColumn = false;
+        await using (var reader = await check.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (!string.Equals(reader.GetString(1), "NewMessages", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                hasCountColumn = true;
+                break;
+            }
+        }
+        if (!hasCountColumn) return (timestamp, null);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT NewMessages FROM WorkspaceSynchronizationStamps
+            WHERE Scope='all' AND TelegramUserId=$owner AND PeerType='' AND PeerId=0
+            """;
+        command.Parameters.AddWithValue("$owner", owner);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return (timestamp, value is long count ? checked((int)count) : null);
+    }
+
     public Task<DateTimeOffset?> ReadChatAsync(ConfiguredChat chat,
         CancellationToken cancellationToken = default)
         => ReadAsync("chat", chat.TelegramUserId, chat.PeerType, chat.PeerId, cancellationToken);
@@ -33,7 +72,7 @@ public sealed class WorkspaceSynchronizationStampStore(string databasePath)
         => ReadAsync("all", owner, string.Empty, 0, cancellationToken);
 
     private async Task WriteAsync(string scope, long owner, string peerType, long peerId,
-        DateTimeOffset timestamp, CancellationToken cancellationToken)
+        DateTimeOffset timestamp, CancellationToken cancellationToken, int? newMessages = null)
     {
         await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
@@ -42,15 +81,38 @@ public sealed class WorkspaceSynchronizationStampStore(string databasePath)
             create.CommandText = TABLE_SQL;
             await create.ExecuteNonQueryAsync(cancellationToken);
         }
+        // Databases created before NewMessages was introduced need a one-time migration.
+        await using (var columns = connection.CreateCommand())
+        {
+            columns.CommandText = "PRAGMA table_info(WorkspaceSynchronizationStamps)";
+            var exists = false;
+            await using (var reader = await columns.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (!string.Equals(reader.GetString(1), "NewMessages", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists)
+            {
+                await using var migrate = connection.CreateCommand();
+                migrate.CommandText = "ALTER TABLE WorkspaceSynchronizationStamps ADD COLUMN NewMessages INTEGER NULL";
+                await migrate.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO WorkspaceSynchronizationStamps(Scope, TelegramUserId, PeerType, PeerId, CompletedAtUtc)
-            VALUES ($scope, $owner, $peerType, $peerId, $timestamp)
+            INSERT INTO WorkspaceSynchronizationStamps(Scope, TelegramUserId, PeerType, PeerId, CompletedAtUtc, NewMessages)
+            VALUES ($scope, $owner, $peerType, $peerId, $timestamp, $newMessages)
             ON CONFLICT(Scope, TelegramUserId, PeerType, PeerId)
-            DO UPDATE SET CompletedAtUtc=excluded.CompletedAtUtc
+            DO UPDATE SET CompletedAtUtc=excluded.CompletedAtUtc, NewMessages=excluded.NewMessages
             """;
         SetParameters(command, scope, owner, peerType, peerId);
         command.Parameters.AddWithValue("$timestamp", timestamp.ToUniversalTime().ToString("O"));
+        command.Parameters.AddWithValue("$newMessages", newMessages is { } count ? count : DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
