@@ -1,4 +1,4 @@
-﻿using ChatPulse.Application.Services;
+using ChatPulse.Application.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -33,6 +33,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _instagramStatus = "Аккаунт не подключён";
     private WorkspaceTaskReader? _reader;
     private ChatSynchronizationService? _synchronization;
+    private InstagramChatConnectionService? _instagramChatConnection;
     private ITelegramParticipantListHistoryReader? _participantHistoryReader;
     private CancellationTokenSource? _historyImportCancellation;
     private bool _historyImportRunning;
@@ -47,6 +48,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private string _taskSummary = string.Empty;
     private string _loadMessage = string.Empty;
     private string _reactionRefreshMessage = string.Empty;
+    private string _lastAllChatsSyncLabel = "Последняя: ещё не выполнялась";
+    private string _lastSelectedChatSyncLabel = "Последняя: ещё не выполнялась";
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
     private bool _isSubscriptionTableExpanded;
@@ -137,6 +140,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify(nameof(SelectedChatTitle));
             Notify(nameof(SelectedChatNetwork));
             Notify(nameof(SelectedChatTaskCount));
+            Notify(nameof(LastSelectedChatSyncLabel));
         }
     }
 
@@ -145,6 +149,46 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public string SelectedChatTaskCount => SelectedChat is null ? "—" : SelectedChat.DetectedCount.ToString();
     public string TotalDetected => _totalDetected.ToString();
     public string ConnectedChatCount => Chats.Count.ToString();
+
+
+    public string LastAllChatsSyncLabel
+    {
+        get => _lastAllChatsSyncLabel;
+        private set { _lastAllChatsSyncLabel = value; Notify(); }
+    }
+    public string LastSelectedChatSyncLabel
+    {
+        get => _lastSelectedChatSyncLabel;
+        private set { _lastSelectedChatSyncLabel = value; Notify(); }
+    }
+
+    private static string FormatSyncStamp(DateTimeOffset? timestamp)
+        => timestamp is { } value
+            ? $"Последняя: {value.ToLocalTime():dd.MM.yyyy HH:mm}"
+            : "Последняя: ещё не выполнялась";
+
+    private async Task LoadSynchronizationStampsAsync()
+    {
+        if (_reader is null) return;
+        var owner = Chats.FirstOrDefault()?.Chat.TelegramUserId;
+        var selected = SelectedChat;
+        var store = new WorkspaceSynchronizationStampStore(_reader.DatabasePath);
+        try
+        {
+            var all = owner.HasValue ? await store.ReadAllAsync(owner.Value) : null;
+            var chatStamp = selected is not null ? await store.ReadChatAsync(selected.Chat) : null;
+            if (owner == Chats.FirstOrDefault()?.Chat.TelegramUserId)
+                LastAllChatsSyncLabel = FormatSyncStamp(all);
+            if (ReferenceEquals(selected, SelectedChat))
+                LastSelectedChatSyncLabel = FormatSyncStamp(chatStamp);
+        }
+        catch (Exception)
+        {
+            // An optional timestamp must never block task browsing or change sync state.
+            if (ReferenceEquals(selected, SelectedChat))
+                LastSelectedChatSyncLabel = "Последняя: не удалось прочитать";
+        }
+    }
 
     public string TaskSummary
     {
@@ -1271,11 +1315,13 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     public void Initialize(ISettingsService settings, WorkspaceTaskReader reader,
         ChatSynchronizationService synchronization,
-        ITelegramParticipantListHistoryReader participantHistoryReader)
+        ITelegramParticipantListHistoryReader participantHistoryReader,
+        ITelegramAuthenticationClient telegram)
     {
         _settings = settings;
         _reader = reader;
         _synchronization = synchronization;
+        _instagramChatConnection = new InstagramChatConnectionService(telegram, settings, synchronization);
         _participantHistoryReader = participantHistoryReader;
         Notify(nameof(CanRebuildParticipantHistory));
         _skipStore = new WorkspaceTaskSkipStore(reader.DatabasePath);
@@ -1343,6 +1389,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             }
 
             UpdateSelectedTasks();
+            await LoadSynchronizationStampsAsync();
             if (_page == WorkspacePage.Chat && _chatPage == ChatPage.Subscriptions)
                 await LoadSubscriptionRowsAsync();
             else if (_page == WorkspacePage.Chat)
@@ -1391,15 +1438,16 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         Notify(nameof(EmptyTasksMessage));
     }
 
-    private void ChatList_OnSelectionChanged(object sender, SelectionChangedEventArgs args)
+    private async void ChatList_OnSelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         if (_isRebuildingChatList || ChatList.SelectedItem is not WorkspaceChatRow row) return;
         SelectedChat = row;
         UpdateSelectedTasks();
         ShowChat();
+        await LoadSynchronizationStampsAsync();
     }
 
-    private void OpenChatButton_OnClick(object sender, RoutedEventArgs args)
+    private async void OpenChatButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (sender is not Button { Tag: WorkspaceChatRow row }) return;
         SelectedChat = row;
@@ -1409,6 +1457,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
         UpdateSelectedTasks();
         ShowChat();
+        await LoadSynchronizationStampsAsync();
     }
 
     private void ShowChat()
@@ -1850,38 +1899,112 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
-    private async void CheckReactionsButton_OnClick(object sender, RoutedEventArgs args)
+    private async void ConnectInstagramChatButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (IsBusy || _settings is null || _synchronization is null) return;
+        if (IsBusy || _instagramBusy || _historyImportRunning || _instagramChatConnection is null)
+            return;
+        var dialog = new ConnectInstagramChatDialog(_instagramChatConnection)
+        {
+            Owner = Window.GetWindow(this)
+        };
+        if (dialog.ShowDialog() != true) return;
+        await ReloadAsync();
+    }
+
+    private async void CheckReactionsButton_OnClick(object sender, RoutedEventArgs args)
+        => await SynchronizeTasksAsync(null);
+
+    private async void SyncSelectedChatButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (SelectedChat is { } selected)
+            await SynchronizeTasksAsync(selected.Chat);
+    }
+
+    private async Task SynchronizeTasksAsync(ConfiguredChat? onlyChat)
+    {
+        if (IsBusy || _settings is null || _synchronization is null || _reader is null) return;
         IsBusy = true;
-        ReactionRefreshMessage = "Синхронизируем новые сообщения и реакции…";
         try
         {
             var state = await _settings.LoadAsync();
-            var chats = state.Chats.Where(chat =>
-                chat.SynchronizationState == ChatSynchronizationState.COMPLETED).ToArray();
-            var updated = 0;
-            var errors = new List<string>();
-            foreach (var chat in chats)
+            var chats = WorkspaceSynchronizationSelection.Select(state.Chats, onlyChat);
+            if (chats.Count == 0)
             {
+                ReactionRefreshMessage = "Нет подключённых чатов для синхронизации.";
+                return;
+            }
+
+            using var cancellation = new CancellationTokenSource();
+            var dialog = new TaskSyncProgressDialog(
+                onlyChat is null ? "Все подключённые чаты" : "Только выбранный чат",
+                chats.Select(chat => chat.TelegramTitle), cancellation);
+            var owner = Window.GetWindow(this);
+            if (owner is { IsVisible: true }) dialog.Owner = owner;
+            dialog.StartRequested += async (_, _) =>
+            {
+                var updated = 0;
+                var errors = new List<string>();
+                var stopped = false;
                 try
                 {
-                    updated += await _synchronization.SynchronizeLatestAsync(chat);
+                    var stamps = new WorkspaceSynchronizationStampStore(_reader.DatabasePath);
+                    for (var index = 0; index < chats.Count; index++)
+                    {
+                        if (cancellation.IsCancellationRequested) { stopped = true; break; }
+                        var chat = chats[index];
+                        var rowIndex = index;
+                        dialog.BeginChat(rowIndex);
+                        try
+                        {
+                            var added = await _synchronization.SynchronizeLatestAsync(chat,
+                                stage =>
+                                {
+                                    if (dialog.Dispatcher.CheckAccess()) dialog.ReportStage(rowIndex, stage);
+                                    else dialog.Dispatcher.Invoke(() => dialog.ReportStage(rowIndex, stage));
+                                }, cancellation.Token);
+                            updated += added;
+                            await stamps.RecordChatSuccessAsync(chat, DateTimeOffset.UtcNow, cancellation.Token);
+                            dialog.CompleteChat(rowIndex, added);
+                        }
+                        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                        {
+                            dialog.StopChat(rowIndex);
+                            stopped = true;
+                            break;
+                        }
+                        catch (Exception exception)
+                        {
+                            errors.Add($"{chat.TelegramTitle}: {exception.Message}");
+                            dialog.FailChat(rowIndex, exception.Message);
+                        }
+                    }
+                    if (onlyChat is null && !stopped && errors.Count == 0)
+                        await stamps.RecordAllSuccessAsync(chats[0].TelegramUserId, DateTimeOffset.UtcNow);
+
+                    await ReloadAsync();
+                    ReactionRefreshMessage = stopped
+                        ? $"Синхронизация остановлена. Новых сообщений: {updated}."
+                        : errors.Count == 0
+                            ? $"Синхронизация завершена. Новых сообщений: {updated}."
+                            : $"Часть чатов не синхронизирована: {string.Join("; ", errors)}";
+                    dialog.Finish(ReactionRefreshMessage);
                 }
                 catch (Exception exception)
                 {
-                    errors.Add($"{chat.TelegramTitle}: {exception.Message}");
+                    ReactionRefreshMessage = $"Не удалось синхронизировать: {exception.Message}";
+                    dialog.Finish(ReactionRefreshMessage);
                 }
-            }
+                finally { IsBusy = false; }
+            };
 
-            await ReloadAsync();
-            ReactionRefreshMessage = errors.Count == 0
-                ? $"Синхронизация завершена. Новых сообщений: {updated}."
-                : $"Не удалось синхронизировать часть чатов: {string.Join("; ", errors)}";
+            var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+            mainWindow?.ShowDialogOverlay();
+            try { dialog.ShowDialog(); }
+            finally { mainWindow?.HideDialogOverlay(); }
         }
         catch (Exception exception)
         {
-            ReactionRefreshMessage = $"Не удалось синхронизировать: {exception.Message}";
+            ReactionRefreshMessage = $"Не удалось начать синхронизацию: {exception.Message}";
         }
         finally { IsBusy = false; }
     }
@@ -2005,6 +2128,25 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     // Presentation-only transformation: the original Telegram text and emoji offsets remain in SQLite.
     private readonly WorkspaceTaskPresentation _presentation =
         WorkspaceTaskPresentation.Create(task.Text, task.CustomEmojiJson);
+
+    public string KindLabel => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    {
+        WorkspaceTaskKind.SUBSCRIBE => "Подписка",
+        WorkspaceTaskKind.UNSUBSCRIBE => "Отписка",
+        _ => "Задание"
+    };
+    public string KindBackground => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    {
+        WorkspaceTaskKind.SUBSCRIBE => "#EDE3FF",
+        WorkspaceTaskKind.UNSUBSCRIBE => "#FCE7E8",
+        _ => "#EBEBF2"
+    };
+    public string KindForeground => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    {
+        WorkspaceTaskKind.SUBSCRIBE => "#6C36A8",
+        WorkspaceTaskKind.UNSUBSCRIBE => "#A03748",
+        _ => "#54516E"
+    };
 
     public string CustomEmojiJson => _presentation.CustomEmojiJson;
     public string ReelUrl => _presentation.ReelUrl;

@@ -54,6 +54,29 @@ public sealed class ChatActivityAnalyzerTests
         Assert.Null(result.Network);
     }
 
+    [Theory]
+    [InlineData("✨Это наш ПОСТ ЧАТ✨\nПример: https://www.instagram.com/p/abc123/")]
+    [InlineData("Это наш **ПОСТ ЧАТ**\nhttps://www.instagram.com/reel/abc123/")]
+    [InlineData("**Это наш ПОСТ-ЧАТ**\nРеакции https://t.me/channel/123")]
+    public void PostChatNoticeWithPublicationLinks_IsNotTask(string text)
+    {
+        var result = ChatActivityAnalyzer.AnalyzeMessage(new ChatActivityMessage(50, text));
+
+        Assert.Equal(ChatMessageClassification.NOT_TASK, result.Classification);
+        Assert.Null(result.Network);
+        Assert.Empty(result.PostLinks);
+    }
+
+    [Fact]
+    public void MentionOfPostChatHeadingInsideTaskSentence_DoesNotHideTask()
+    {
+        var result = ChatActivityAnalyzer.AnalyzeMessage(new ChatActivityMessage(51,
+            "Это наш пост чат, актив на https://www.instagram.com/p/abc123/"));
+
+        Assert.Equal(ChatMessageClassification.TASK, result.Classification);
+        Assert.Equal(ChatTaskNetwork.INSTAGRAM, result.Network);
+    }
+
     [Fact]
     public void OnlyRules_NoActivityConfirmation()
     {

@@ -1,3 +1,5 @@
+using ChatPulse.Application.Features.Chats.Analyze;
+
 namespace ChatPulse.Desktop.Services;
 
 /// <summary>
@@ -10,6 +12,10 @@ public static class ChatRulesMessageClassifier
     public static bool IsChatRules(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
+
+        // The standalone heading is sufficient: a short rules announcement may
+        // contain post links without the full set of instructions.
+        if (ChatActivityAnalyzer.HasPostChatRulesHeading(text)) return true;
 
         var hasHeading = ContainsAny(text,
             "это наш пост чат", "это наш пост-чат", "правила постчата",

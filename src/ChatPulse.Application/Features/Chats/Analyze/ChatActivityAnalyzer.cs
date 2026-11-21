@@ -69,9 +69,37 @@ public static class ChatActivityAnalyzer
             tasks.Length, evidence.Count(message => message.Classification == ChatMessageClassification.POSSIBLE_TASK), evidence);
     }
 
+    /// <summary>
+    /// A standalone "Это наш ПОСТ ЧАТ" heading marks an administrative announcement,
+    /// even when the message also contains publication URLs. A passing mention of
+    /// the words inside a task sentence must not hide the task.
+    /// </summary>
+    public static bool HasPostChatRulesHeading(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        foreach (var line in text.Split('\n'))
+        {
+            // Telegram may decorate the heading with emoji, punctuation and Markdown bold.
+            var heading = new string(line.Where(character =>
+                char.IsLetterOrDigit(character) || char.IsWhiteSpace(character) || character == '-').ToArray());
+            var normalized = string.Join(' ', heading.Split((char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries));
+            if (normalized.Equals("Это наш ПОСТ ЧАТ", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("Это наш ПОСТ-ЧАТ", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Equals("Это наш ПОСТЧАТ", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
     public static ChatMessageEvidence AnalyzeMessage(ChatActivityMessage message)
     {
         var text = message.Text ?? string.Empty;
+        if (HasPostChatRulesHeading(text))
+            return new ChatMessageEvidence(message.MessageId, ChatMessageClassification.NOT_TASK,
+                null, Array.Empty<string>());
         try
         {
             var recognized = new List<(ChatTaskNetwork Network, string Url)>();

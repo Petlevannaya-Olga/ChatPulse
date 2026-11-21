@@ -378,7 +378,7 @@
                                                               Checked="ChatCheckBox_OnChanged"
                                                               Unchecked="ChatCheckBox_OnChanged"
                                                               VerticalAlignment="Top">
-                                                        <TextBlock Margin="6,0,0,0" FontSize="15"
+                                                        <TextBlock Margin="6,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI" FontSize="15"
                                                                    Foreground="#24154C" TextTrimming="CharacterEllipsis">
                                                             <Run Text="{Binding Title, Mode=OneWay}" FontWeight="SemiBold" />
                                                             <Run Text="  ·  " Foreground="#B4A6C9" />
@@ -428,7 +428,7 @@
                                                             <Border x:Name="CardAccent" Background="#AC76EE"
                                                                     CornerRadius="10,0,0,10" />
                                                             <StackPanel Grid.Column="1" Margin="15,12,14,12">
-                                                                <TextBlock Text="{Binding Title}"
+                                                                <TextBlock Text="{Binding Title}" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
                                                                            FontSize="15" FontWeight="SemiBold"
                                                                            Foreground="{StaticResource TextPrimary}"
                                                                            TextTrimming="CharacterEllipsis"

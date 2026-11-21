@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using ChatPulse.Desktop.Services;
 using System.IO;
 using System.Text.Json;
@@ -36,7 +36,8 @@ public partial class MainWindow : Window
         ChatPulse.Application.Services.TelegramAuthorizationEvents authorizationEvents,
         TelegramConnectionMonitor connectionMonitor,
         WorkspaceTaskReader workspaceTaskReader,
-        ChatPulse.Application.Services.ITelegramParticipantListHistoryReader participantHistoryReader)
+        ChatPulse.Application.Services.ITelegramParticipantListHistoryReader participantHistoryReader,
+        ChatPulse.Application.Services.ITelegramAuthenticationClient telegram)
     {
         InitializeComponent();
         _settings = settings;
@@ -45,7 +46,7 @@ public partial class MainWindow : Window
         FourthStepScreen.BackRequested += async (_, _) => await NavigateAsync(OnboardingStep.FirstChat);
         FourthStepScreen.ContinueRequested += FourthStepScreen_OnContinueRequested;
         WorkspaceScreen.Initialize(_settings, workspaceTaskReader, _synchronization,
-            participantHistoryReader);
+            participantHistoryReader, telegram);
         _telegramSetup = telegramSetup;
         _firstChatSetup = firstChatSetup;
         _logger = logger;

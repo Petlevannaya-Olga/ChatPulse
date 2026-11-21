@@ -49,7 +49,7 @@
             <StackPanel>
                 <TextBlock Text="Восстановление истории участниц" FontSize="20" FontWeight="SemiBold"
                            Foreground="#24154C" />
-                <TextBlock Text="{Binding ChatTitle}" FontSize="13" Foreground="#78658D"
+                <TextBlock Text="{Binding ChatTitle}" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI" FontSize="13" Foreground="#78658D"
                            TextWrapping="Wrap" Margin="0,7,0,14" />
                 <Border Background="#F8F4FF" Padding="13" CornerRadius="10">
                     <StackPanel>

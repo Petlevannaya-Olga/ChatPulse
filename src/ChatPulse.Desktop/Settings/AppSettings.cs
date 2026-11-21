@@ -1,4 +1,4 @@
-namespace ChatPulse.Desktop.Settings;
+﻿namespace ChatPulse.Desktop.Settings;
 
 /// <summary>
 /// Фактический этап мастера настройки. Сохраняется между запусками.
@@ -62,6 +62,8 @@ public sealed class ConfiguredChat
     public string DisplayName { get; set; } = string.Empty;
     public string SocialNetwork { get; set; } = string.Empty;
     public DateOnly StartDate { get; set; } // Legacy configuration; not used for initial synchronization.
+    /// <summary>Назначенный этому чату набор правил списка участниц.</summary>
+    public string ParticipantRuleset { get; set; } = string.Empty;
     public int HistoryDays { get; set; } = 7;
     // Desired period for an explicit history reload; does not change the successful snapshot.
     public int? RequestedHistoryDays { get; set; } = null;

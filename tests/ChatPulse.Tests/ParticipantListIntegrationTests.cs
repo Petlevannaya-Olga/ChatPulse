@@ -232,6 +232,8 @@ public sealed class ParticipantListIntegrationTests
     public void ChatRules_RecognizesRulesButNotRealTasks()
     {
         Assert.True(ChatRulesMessageClassifier.IsChatRules(CHAT_RULES));
+        Assert.True(ChatRulesMessageClassifier.IsChatRules(
+            "**Это наш ПОСТ ЧАТ**\nПример https://www.instagram.com/p/abc123/"));
         Assert.False(ChatRulesMessageClassifier.IsChatRules(null));
         Assert.False(ChatRulesMessageClassifier.IsChatRules("Аккаунт для репостов: https://www.instagram.com/repost.orion.chat"));
         Assert.False(ChatRulesMessageClassifier.IsChatRules(
@@ -263,7 +265,8 @@ public sealed class ParticipantListIntegrationTests
                      {
                          (1, CHAT_RULES),
                          (2, "Реакции https://www.instagram.com/p/abc123/"),
-                         (3, "Аккаунт для репостов https://www.instagram.com/repost.orion.chat")
+                         (3, "Аккаунт для репостов https://www.instagram.com/repost.orion.chat"),
+                         (4, "✨Это наш ПОСТ ЧАТ✨\nПример https://www.instagram.com/p/abc123/")
                      })
             {
                 var insert = connection.CreateCommand();
@@ -281,7 +284,7 @@ public sealed class ParticipantListIntegrationTests
         await check.OpenAsync();
         var count = check.CreateCommand();
         count.CommandText = "SELECT COUNT(*) FROM ImportedChatMessages";
-        Assert.Equal(3L, await count.ExecuteScalarAsync());
+        Assert.Equal(4L, await count.ExecuteScalarAsync());
     }
 
     [Fact]

@@ -1,4 +1,6 @@
 using System.IO;
+using System.Diagnostics;
+using ChatPulse.Desktop.Services;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -37,12 +39,12 @@ public static class CustomEmojiText
             // Telegram offsets are UTF-16 indices (the same indexing used by .NET strings).
             if (entity.Offset < position || entity.Offset < 0 || entity.Length <= 0 ||
                 entity.Offset > text.Length || entity.Length > text.Length - entity.Offset) continue;
-            if (entity.Offset > position) block.Inlines.Add(new Run(text[position..entity.Offset]));
+            if (entity.Offset > position) AppendTextWithLinks(block, text[position..entity.Offset]);
             var path = new[] { Path.Combine(directory, $"{entity.DocumentId}.png"),
                                Path.Combine(directory, $"{entity.DocumentId}.jpg") }
                 .FirstOrDefault(File.Exists);
             if (path is null)
-                block.Inlines.Add(new Run(text.Substring(entity.Offset, entity.Length)));
+                AppendTextWithLinks(block, text.Substring(entity.Offset, entity.Length));
             else
             {
                 try
@@ -59,11 +61,42 @@ public static class CustomEmojiText
                 }
                 catch (Exception exception) when (exception is IOException or NotSupportedException or InvalidOperationException)
                 {
-                    block.Inlines.Add(new Run(text.Substring(entity.Offset, entity.Length)));
+                    AppendTextWithLinks(block, text.Substring(entity.Offset, entity.Length));
                 }
             }
             position = entity.Offset + entity.Length;
         }
-        if (position < text.Length) block.Inlines.Add(new Run(text[position..]));
+        if (position < text.Length) AppendTextWithLinks(block, text[position..]);
     }
+
+    private static void AppendTextWithLinks(TextBlock block, string text)
+    {
+        foreach (var part in WorkspaceTaskLinks.Split(text))
+        {
+            if (part.Url is null)
+            {
+                block.Inlines.Add(new Run(part.Text));
+                continue;
+            }
+            var hyperlink = new Hyperlink(new Run(part.Text))
+            {
+                NavigateUri = new Uri(part.Url),
+                ToolTip = part.Url
+            };
+            hyperlink.RequestNavigate += (_, args) =>
+            {
+                args.Handled = true;
+                if (args.Uri is not { IsAbsoluteUri: true } address ||
+                    address.Scheme is not ("https" or "http")) return;
+                try { Process.Start(new ProcessStartInfo(address.AbsoluteUri) { UseShellExecute = true }); }
+                catch (Exception)
+                {
+                    MessageBox.Show("Не удалось открыть ссылку.", "ChatPulse",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            };
+            block.Inlines.Add(hyperlink);
+        }
+    }
+
 }

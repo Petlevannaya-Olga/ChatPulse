@@ -142,7 +142,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="{Binding Marker}" Foreground="{Binding StateColor}"
                                            FontSize="17" FontWeight="Bold" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="1" Text="{Binding Title}" Foreground="#352353"
+                                <TextBlock Grid.Column="1" Text="{Binding Title}" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI" Foreground="#352353"
                                            FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap" />
                                 <TextBlock Grid.Column="2" Text="{Binding StateLabel}" Foreground="{Binding StateColor}"
                                            FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />

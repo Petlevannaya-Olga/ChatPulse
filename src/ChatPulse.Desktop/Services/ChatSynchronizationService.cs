@@ -239,8 +239,9 @@ public sealed class ChatSynchronizationService(
             var anchor = reactedId ?? current.LastProcessedMessageId ?? 0;
             if (anchor > int.MaxValue)
                 throw new InvalidOperationException("Недопустимый номер сообщения Telegram.");
-            progress?.Invoke("Получаем новые сообщения и обновляем историю…");
+            progress?.Invoke("Получаем новые сообщения из Telegram…");
             var fetched = await incremental.GetChatMessagesAfterAsync(chat, (int)anchor, cancellationToken);
+            progress?.Invoke($"Получено сообщений: {fetched.Count}. Сохраняем историю в SQLite…");
             await SaveHistoryAsync(current, fetched, cancellationToken);
             await SaveAuthorsAsync(current, fetched, cancellationToken);
             await SaveMessageDatesAsync(current, fetched, cancellationToken);
@@ -251,6 +252,7 @@ public sealed class ChatSynchronizationService(
             // The recent window is metadata-only; it must never replace original texts.
             progress?.Invoke("Повторно проверяем реакции и участников…");
             var recent = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
+            progress?.Invoke($"Получено для перепроверки: {recent.Count}. Сохраняем реакции и данные участников…");
             await SaveAuthorsAsync(current, recent, cancellationToken);
             await SaveMessageDatesAsync(current, recent, cancellationToken);
             await SaveCustomEmojiAsync(current, recent, cancellationToken);

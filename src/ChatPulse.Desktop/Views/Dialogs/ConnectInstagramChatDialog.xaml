@@ -1,0 +1,66 @@
+<Window x:Class="ChatPulse.Desktop.Views.Dialogs.ConnectInstagramChatDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ChatPulse — Подключить Instagram-чат"
+        Width="580" Height="580" MinHeight="450"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="#FAF7FE" FontFamily="Segoe UI"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <Style x:Key="ConnectionButton" TargetType="Button">
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Padding" Value="18,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderBrush" Value="#DDD1EB" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Foreground" Value="#503278" />
+        </Style>
+    </Window.Resources>
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="Подключить Instagram-чат" FontSize="20"
+                       FontWeight="SemiBold" Foreground="#24154C" />
+            <TextBlock Margin="0,5,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="#78688B"
+                       Text="Выберите постчат Telegram. ChatPulse автоматически определит соцсеть по заданиям за один день, при необходимости — за семь дней. Сообщения без ссылок пропускаются." />
+        </StackPanel>
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="ChatSearch" Grid.Column="0" MinHeight="38"
+                     Padding="10,7" VerticalContentAlignment="Center"
+                     TextChanged="ChatSearch_OnTextChanged" ToolTip="Поиск по названию Telegram-чата" />
+            <Button Grid.Column="1" Content="Обновить" Margin="10,0,0,0"
+                    Style="{StaticResource ConnectionButton}" Click="RefreshButton_OnClick"
+                    IsEnabled="{Binding CanRefresh}" />
+        </Grid>
+        <Border Grid.Row="2" Background="White" BorderBrush="#E8DDF3"
+                BorderThickness="1" CornerRadius="12">
+            <ListBox x:Name="ChatList" Margin="5" BorderThickness="0" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
+                     ItemsSource="{Binding VisibleChats}"
+                     DisplayMemberPath="DisplayName"
+                     SelectionChanged="ChatList_OnSelectionChanged" />
+        </Border>
+        <StackPanel Grid.Row="3" Margin="0,12,0,8">
+            <TextBlock Text="Проверка чата" FontWeight="SemiBold" Foreground="#38285A" />
+            <TextBlock Text="{Binding Status}" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI" Foreground="#715B86" TextWrapping="Wrap"
+                       FontSize="12" Margin="0,6,0,0" />
+        </StackPanel>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Отмена" Margin="0,0,10,0" Style="{StaticResource ConnectionButton}"
+                    Click="CancelButton_OnClick" />
+            <Button Content="Подключить" Style="{StaticResource ConnectionButton}"
+                    Background="#7545F9" Foreground="White" BorderThickness="0"
+                    IsEnabled="{Binding CanConnect}" Click="ConnectButton_OnClick" />
+        </StackPanel>
+    </Grid>
+</Window>

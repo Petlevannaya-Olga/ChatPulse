@@ -232,7 +232,7 @@
 
                                             <!-- Чат и его фактический статус. -->
                                             <StackPanel Grid.Column="0" Margin="0,0,20,0" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold"
+                                                <TextBlock Text="{Binding Title}" FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI" FontSize="16" FontWeight="SemiBold"
                                                            Foreground="#24154C" TextWrapping="Wrap" />
                                                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                                                     <!-- Векторные значки соцсетей вместо текстового бейджа. -->

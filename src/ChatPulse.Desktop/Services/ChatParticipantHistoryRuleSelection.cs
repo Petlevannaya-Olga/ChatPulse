@@ -4,11 +4,14 @@ using ChatPulse.Desktop.Settings;
 namespace ChatPulse.Desktop.Services;
 
 /// <summary>
-/// Explicitly limits the first historical-import ruleset to chat 14.
-/// Other chats require their own rules before importing their history.
+/// Uses the historical 14-chat format for its original chat and for chats that
+/// were explicitly connected with the same ruleset. No rules are inferred from
+/// unrelated chat names.
 /// </summary>
 public static class ChatParticipantHistoryRuleSelection
 {
+    public const string CHAT_14_RULESET = "Chat14Rules";
+
     private static readonly TimeSpan REGEX_TIMEOUT = TimeSpan.FromMilliseconds(100);
     private static readonly Regex CHAT_14_NUMBER = new(
         @"(?<!\d)14(?!\d)", RegexOptions.Compiled | RegexOptions.CultureInvariant,
@@ -24,7 +27,9 @@ public static class ChatParticipantHistoryRuleSelection
 
         // Chat numbers in names are a provisional, conservative routing rule.
         // Do not silently apply the chat-14 parser to unrelated Telegram chats.
-        return CHAT_14_NUMBER.IsMatch(chat.TelegramTitle) ||
+        return string.Equals(chat.ParticipantRuleset, CHAT_14_RULESET,
+                   StringComparison.Ordinal) ||
+               CHAT_14_NUMBER.IsMatch(chat.TelegramTitle) ||
                CHAT_14_NUMBER.IsMatch(chat.DisplayName);
     }
 }

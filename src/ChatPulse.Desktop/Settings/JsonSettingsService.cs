@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Contracts.Telegram;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -173,6 +173,8 @@ public sealed class JsonSettingsService : ISettingsService, IDisposable
             else
             {
                 var previous = settings.Chats[index];
+                if (string.IsNullOrEmpty(chat.ParticipantRuleset))
+                    chat.ParticipantRuleset = previous.ParticipantRuleset;
                 chat.HistoryDays = previous.HistoryDays;
                 chat.SynchronizationState = previous.SynchronizationState;
                 chat.ImportedMessageCount = previous.ImportedMessageCount;
