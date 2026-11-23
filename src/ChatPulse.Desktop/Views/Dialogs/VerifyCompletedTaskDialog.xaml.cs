@@ -1,4 +1,6 @@
 ﻿using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
 
@@ -9,19 +11,23 @@ public partial class VerifyCompletedTaskDialog : Window
     private readonly string _postUrl;
     private readonly string _ownAccount;
     private readonly InstagramBrowserService _browser;
+    private readonly Func<WorkspaceFailedTaskReport, Task> _saveFailedReport;
     private CancellationTokenSource _cancellation = new();
     private bool _running;
 
     public InstagramTaskVerificationResult? VerifiedResult { get; private set; }
 
-    public VerifyCompletedTaskDialog(InstagramBrowserService browser, string postUrl, string ownAccount, string taskText)
+    public VerifyCompletedTaskDialog(InstagramBrowserService browser, string postUrl, string ownAccount, string taskText,
+        Func<WorkspaceFailedTaskReport, Task> saveFailedReport)
     {
         _browser = browser;
+        _saveFailedReport = saveFailedReport;
         _postUrl = postUrl;
         _ownAccount = ownAccount;
         InitializeComponent();
         var suggested = InstagramTaskVerificationRules.SuggestChecks(taskText);
-        CheckLikeBox.IsChecked = suggested.Like;
+        // The like is mandatory and must not be deselected.
+        CheckLikeBox.IsChecked = true;
         CheckCommentBox.IsChecked = suggested.Comment;
         CheckSaveBox.IsChecked = suggested.Save;
         CheckRepostBox.IsChecked = suggested.Repost;
@@ -58,9 +64,30 @@ public partial class VerifyCompletedTaskDialog : Window
 
         ErrorsText.Text = string.Join(Environment.NewLine, errors.Distinct(StringComparer.Ordinal));
         ErrorsPanel.Visibility = errors.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        SuccessHint.Visibility = result.CanHide ? Visibility.Visible : Visibility.Collapsed;
-        StartButton.Content = result.CanHide ? "Проверено" : "Повторить";
-        CancelButton.Content = result.CanHide ? "Закрыть отчёт" : "Закрыть";
+        // The only action after full confirmation closes the report and publishes the hide result.
+        // Keep retry/close as separate actions when any selected check was not confirmed.
+        SuccessHint.Visibility = Visibility.Collapsed;
+        ConfigureResultButtons(result.CanHide);
+    }
+
+    private void ConfigureResultButtons(bool canHide)
+    {
+        if (canHide)
+        {
+            StartButton.Visibility = Visibility.Collapsed;
+            CancelButton.Content = "Закрыть отчёт и скрыть задание";
+            CancelButton.Background = new SolidColorBrush(Color.FromRgb(0x75, 0x45, 0xB9));
+            CancelButton.Foreground = Brushes.White;
+            Grid.SetColumnSpan(CancelButton, 3);
+            return;
+        }
+
+        StartButton.Visibility = Visibility.Visible;
+        StartButton.Content = "Повторить";
+        CancelButton.Content = "Закрыть";
+        CancelButton.Background = new SolidColorBrush(Color.FromRgb(0xF1, 0xEB, 0xFA));
+        CancelButton.Foreground = new SolidColorBrush(Color.FromRgb(0x39, 0x23, 0x5C));
+        Grid.SetColumnSpan(CancelButton, 1);
     }
 
     private static void SetCheckResult(System.Windows.Controls.CheckBox checkBox,
@@ -85,12 +112,8 @@ public partial class VerifyCompletedTaskDialog : Window
     private async void Start_OnClick(object sender, RoutedEventArgs args)
     {
         if (_running) return;
-        if (CheckLikeBox.IsChecked != true && CheckCommentBox.IsChecked != true &&
-            CheckSaveBox.IsChecked != true && CheckRepostBox.IsChecked != true)
-        {
-            ShowNotice("Выберите хотя бы один вид проверки.");
-            return;
-        }
+        // Always include the mandatory like, regardless of optional selections.
+        CheckLikeBox.IsChecked = true;
         string account;
         try { account = InstagramUserName.Normalize(_ownAccount); }
         catch (ArgumentException exception)
@@ -116,10 +139,12 @@ public partial class VerifyCompletedTaskDialog : Window
         {
             var progress = new Progress<string>(stage => ProgressText.Text = stage);
             var result = await _browser.CheckTaskActivityAsync(_postUrl, account,
-                CheckLikeBox.IsChecked == true, CheckCommentBox.IsChecked == true,
+                true, CheckCommentBox.IsChecked == true,
                 progress, _cancellation.Token, null,
                 CheckSaveBox.IsChecked == true, CheckRepostBox.IsChecked == true);
             ShowResults(result);
+            if (!result.CanHide)
+                await SaveFailedReportAsync(WorkspaceFailedTaskReport.FromPost(result));
             if (result.CanHide)
             {
                 VerifiedResult = result;
@@ -128,7 +153,13 @@ public partial class VerifyCompletedTaskDialog : Window
             }
         }
         catch (OperationCanceledException) { ShowNotice("Проверка остановлена."); }
-        catch (Exception exception) { ShowNotice($"Проверка не завершена: {exception.Message}"); }
+        catch (Exception exception)
+        {
+            var detail = $"Проверка не завершена: {exception.Message}";
+            ShowNotice(detail);
+            await SaveFailedReportAsync(WorkspaceFailedTaskReport.FromError("Публикация", account,
+                _postUrl, SelectedChecks(), detail));
+        }
         finally
         {
             _running = false;
@@ -136,7 +167,9 @@ public partial class VerifyCompletedTaskDialog : Window
             {
                 StartButton.IsEnabled = VerifiedResult is null;
                 CancelButton.IsEnabled = true;
-                CancelButton.Content = VerifiedResult is not null ? "Закрыть отчёт" : "Закрыть";
+                CancelButton.Content = VerifiedResult is not null
+                    ? "Закрыть отчёт и скрыть задание"
+                    : "Закрыть";
                 CheckLikeBox.IsEnabled = VerifiedResult is null;
                 CheckCommentBox.IsEnabled = VerifiedResult is null;
                 CheckSaveBox.IsEnabled = VerifiedResult is null;
@@ -145,11 +178,38 @@ public partial class VerifyCompletedTaskDialog : Window
         }
     }
 
+    private IEnumerable<string> SelectedChecks()
+    {
+        yield return "Лайк";
+        if (CheckCommentBox.IsChecked == true) yield return "Комментарий";
+        if (CheckSaveBox.IsChecked == true) yield return "Сохранение";
+        if (CheckRepostBox.IsChecked == true) yield return "Репост";
+    }
+
+    private async Task SaveFailedReportAsync(WorkspaceFailedTaskReport report)
+    {
+        try
+        {
+            await _saveFailedReport(report);
+        }
+        catch (Exception exception)
+        {
+            var message = $"Не удалось сохранить отчёт о проверке: {exception.Message}";
+            if (ErrorsPanel.Visibility == Visibility.Visible)
+                ErrorsText.Text += Environment.NewLine + message;
+            else
+                ShowNotice(message);
+        }
+    }
+
     private void RestoreSelectionView()
     {
         DialogTitle.Text = "Проверить выполненное задание";
         ErrorsPanel.Visibility = Visibility.Collapsed;
         SuccessHint.Visibility = Visibility.Collapsed;
+        ConfigureResultButtons(false);
+        StartButton.Content = "Проверить";
+        CheckLikeBox.IsChecked = true;
         RestoreCheckRow(LikeRow, CheckLikeBox, LikeLabel, LikeStatus);
         RestoreCheckRow(CommentRow, CheckCommentBox, CommentLabel, CommentStatus);
         RestoreCheckRow(SaveRow, CheckSaveBox, SaveLabel, SaveStatus);

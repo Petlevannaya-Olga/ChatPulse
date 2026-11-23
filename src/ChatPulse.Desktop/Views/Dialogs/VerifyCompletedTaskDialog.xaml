@@ -63,7 +63,9 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <CheckBox x:Name="CheckLikeBox" Content="Лайк" Foreground="#39295F"
-                                  FontSize="15" VerticalAlignment="Center" />
+                                  FontSize="15" VerticalAlignment="Center" IsChecked="True"
+                                  IsHitTestVisible="False" Focusable="False"
+                                  ToolTip="Лайк обязателен для проверки задания" />
                         <TextBlock x:Name="LikeLabel" Text="Лайк" Visibility="Collapsed"
                                    FontSize="15" Foreground="#39295F" VerticalAlignment="Center" />
                         <TextBlock x:Name="LikeStatus" Grid.Column="1" Visibility="Collapsed"

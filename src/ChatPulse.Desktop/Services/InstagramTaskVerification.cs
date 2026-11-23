@@ -1,3 +1,6 @@
+﻿using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 using ChatPulse.Desktop.Settings;
 
 namespace ChatPulse.Desktop.Services;
@@ -33,15 +36,50 @@ public static class InstagramTaskVerificationRules
     // The operator can correct these suggestions before checking.
     public static (bool Like, bool Comment, bool Save, bool Repost) SuggestChecks(string? taskText)
     {
-        if (string.IsNullOrWhiteSpace(taskText)) return (false, false, false, false);
-        var text = taskText.ToLowerInvariant();
-        return (ContainsAction(text, @"(?:лайк(?:и|ов|нуть|айте)?|нравится|сердечк[оаи])"),
-            ContainsAction(text, @"(?:коммент(?:арий|арии|ировать|ы)?|комент|напишите\s+слово)"),
+        if (string.IsNullOrWhiteSpace(taskText)) return (true, false, false, false);
+        var text = NormalizeActionText(taskText);
+        return (true, // A like is mandatory for every post task, even without an explicit request.
+            ContainsAction(text, @"(?:коммент(?:арий|арии|ировать|ы)?|коментар(?:ий|ия|ию|ием|ии|иев|иях|иями)|комент|напишите\s+слово)", optionalComment: true),
             ContainsAction(text, @"(?:сохран(?:ить|ите|ение|ения)|закладк[уаие])"),
             ContainsAction(text, @"(?:репост(?:нуть|ите|а|ы)?|перепост(?:ить|ите)?)"));
     }
 
-    private static bool ContainsAction(string text, string pattern)
+    // Telegram text may contain invisible formatting characters or Latin letters
+    // visually indistinguishable from Cyrillic. Normalize only for rule matching;
+    // the original message remains unchanged in SQLite and on the task card.
+    private static string NormalizeActionText(string text)
+    {
+        var canonical = text.Normalize(NormalizationForm.FormKC).ToLowerInvariant();
+        var clean = new StringBuilder(canonical.Length);
+        foreach (var character in canonical)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(character) == UnicodeCategory.Format)
+                continue;
+            clean.Append(character);
+        }
+
+        return Regex.Replace(clean.ToString(), @"[\p{L}]+", match =>
+        {
+            var word = match.Value;
+            if (!word.Any(character => character is >= 'а' and <= 'я' or 'ё'))
+                return word;
+
+            // Replace confusables only in words already containing Cyrillic letters.
+            var result = new StringBuilder(word.Length);
+            foreach (var character in word)
+            {
+                result.Append(character switch
+                {
+                    'a' => 'а', 'c' => 'с', 'e' => 'е', 'o' => 'о',
+                    'p' => 'р', 'x' => 'х', 'y' => 'у',
+                    _ => character
+                });
+            }
+            return result.ToString();
+        }, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(150));
+    }
+
+    private static bool ContainsAction(string text, string pattern, bool optionalComment = false)
     {
         var matches = System.Text.RegularExpressions.Regex.Matches(text,
             $@"(?<![\p{{L}}]){pattern}(?![\p{{L}}])",
@@ -61,9 +99,41 @@ public static class InstagramTaskVerificationRules
                 @"(?:не\s+надо|не\s+нужно|без|не\s+ставить|не\s+делать|не\s+требуется)\s*$",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase,
                 TimeSpan.FromMilliseconds(150))) continue;
+            if (optionalComment && IsOptionalComment(text, match)) continue;
             return true;
         }
         return false;
+    }
+
+    // A comment marked "по желанию" is not an automatic requirement.
+    // Keep matching local to the comment's line to avoid reading optional
+    // instructions belonging to a different task action.
+    private static bool IsOptionalComment(string text, Match comment)
+    {
+        var lineStart = text.LastIndexOf('\n', comment.Index);
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        var lineEnd = text.IndexOf('\n', comment.Index + comment.Length);
+        lineEnd = lineEnd < 0 ? text.Length : lineEnd;
+
+        var before = text[lineStart..comment.Index];
+        var lastSeparator = Math.Max(before.LastIndexOf(','), before.LastIndexOf(';'));
+        before = before[(lastSeparator + 1)..];
+        var optionalBefore = Regex.IsMatch(before,
+            @"(?:по\s+желанию|не\s*обязательно|опционально)\s*[-—–:]?\s*$",
+            RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(150));
+        if (optionalBefore) return true;
+
+        var after = text[(comment.Index + comment.Length)..lineEnd];
+        // If another action appears first, its optional instruction should not
+        // silently make this comment optional.
+        var nextAction = Regex.Match(after,
+            @"(?<![\p{L}])(?:лайк|репост|сохран|подписк|отписк)(?![\p{L}])",
+            RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(150));
+        if (nextAction.Success) after = after[..nextAction.Index];
+
+        return Regex.IsMatch(after,
+            @"(?:по\s+желанию|не\s*обязател(?:ьно|ен|ьна|ьны|ьный)|опциональн[\p{L}]*|если\s+хотите)",
+            RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(150));
     }
 
     // The likes count is the sibling of the span wrapping the Like/Unlike action.

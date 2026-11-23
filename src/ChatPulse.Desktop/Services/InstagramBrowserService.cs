@@ -207,6 +207,111 @@ public sealed class InstagramBrowserService : IDisposable
     }
 
     /// <summary>
+    /// Reads the profile follow button under the selected Chrome identity, without clicking it.
+    /// A pending follow request, a missing control and any ambiguous DOM are inconclusive.
+    /// </summary>
+    public async Task<InstagramTaskCheckResult> CheckOwnFollowingAsync(
+        string viewerUserName, string targetUserName, bool shouldFollow,
+        CancellationToken cancellationToken = default)
+    {
+        var viewer = InstagramUserName.Normalize(viewerUserName);
+        var target = InstagramUserName.Normalize(targetUserName);
+        if (string.Equals(viewer, target, StringComparison.OrdinalIgnoreCase))
+            return InstagramTaskCheckResult.Inconclusive("Нельзя проверять подписку аккаунта на самого себя.");
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    var driver = GetDriver();
+                    driver.Navigate().GoToUrl("https://www.instagram.com/");
+                    if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
+                        return InstagramTaskCheckResult.Inconclusive($"Сессия @{viewer} не авторизована в Chrome.");
+
+                    var authenticated = false;
+                    for (var attempt = 0; attempt < 18; attempt++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (IsCurrentInstagramAccount(driver, viewer))
+                        {
+                            authenticated = true;
+                            break;
+                        }
+                        WaitWithCancellation(250, cancellationToken);
+                    }
+                    if (!authenticated)
+                        authenticated = ConfirmAccountThroughProfileNavigation(driver, viewer, cancellationToken);
+                    if (!authenticated)
+                        return InstagramTaskCheckResult.Inconclusive(
+                            $"Не удалось подтвердить аккаунт @{viewer}. Проверка не выполнена.");
+
+                    driver.Navigate().GoToUrl($"https://www.instagram.com/{target}/");
+                    string[] lastButtonLabels = [];
+                    for (var attempt = 0; attempt < 24; attempt++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!string.Equals(InstagramActivityProfile.TryGetUserName(driver.Url), target,
+                                StringComparison.OrdinalIgnoreCase))
+                            return InstagramTaskCheckResult.Inconclusive("Instagram перенаправил на другую страницу.");
+                        var labels = (IReadOnlyCollection<object>)((IJavaScriptExecutor)driver).ExecuteScript(
+                            """
+                            const nodes = [...document.querySelectorAll(
+                              'main header button, main header [role="button"], ' +
+                              '[role="main"] header button, [role="main"] header [role="button"]')];
+                            const seen = new Set();
+                            return nodes.filter(el => {
+                              const box = el.getBoundingClientRect();
+                              if (box.width === 0 || box.height === 0 || box.bottom <= 0 || box.top >= innerHeight ||
+                                  getComputedStyle(el).visibility === 'hidden' || el.closest('a[href]') ||
+                                  el.querySelector('a[href]')) return false;
+                              const text = (el.innerText || el.getAttribute('aria-label') ||
+                                  el.getAttribute('title') || '').trim().replace(/\s+/g, ' ');
+                              if (!text || seen.has(text)) return false;
+                              seen.add(text);
+                              return true;
+                            }).map(el => (el.innerText || el.getAttribute('aria-label') ||
+                                el.getAttribute('title') || '').trim().replace(/\s+/g, ' '));
+                            """);
+                        var normalizedLabels = labels.Select(label => label?.ToString() ?? string.Empty).ToArray();
+                        lastButtonLabels = normalizedLabels;
+                        var state = InstagramFollowTaskRules.Classify(normalizedLabels);
+                        if (state != InstagramFollowButtonState.UNKNOWN)
+                        {
+                            if (shouldFollow && state == InstagramFollowButtonState.FOLLOWING)
+                                return InstagramTaskCheckResult.Confirmed($"Подписка @{viewer} на @{target} подтверждена.");
+                            if (!shouldFollow && state == InstagramFollowButtonState.NOT_FOLLOWING)
+                                return InstagramTaskCheckResult.Confirmed($"Отсутствие подписки @{viewer} на @{target} подтверждено.");
+                            return InstagramTaskCheckResult.Inconclusive(shouldFollow
+                                ? $"На странице @{target} отображается «Подписаться»: подписка не подтверждена."
+                                : $"На странице @{target} отображается «Подписки»: отписка не подтверждена.");
+                        }
+                        WaitWithCancellation(350, cancellationToken);
+                    }
+                    var observed = lastButtonLabels.Length == 0 ? "нет видимых кнопок в заголовке"
+                        : string.Join("; ", lastButtonLabels.Take(6)
+                            .Select(label => label.Length > 50 ? label[..50] : label));
+                    return InstagramTaskCheckResult.Inconclusive(
+                        $"Не удалось однозначно определить кнопку подписки на странице @{target}. " +
+                        $"Диагностика кнопок: {observed}.");
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (WebDriverException exception)
+                {
+                    return InstagramTaskCheckResult.Inconclusive($"Ошибка Instagram: {exception.Message}");
+                }
+                catch (InvalidOperationException exception)
+                {
+                    return InstagramTaskCheckResult.Inconclusive(exception.Message);
+                }
+            }, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
     /// Best-effort browser verification of the user's own activity on a public Instagram post.
     /// Only exact observed usernames can produce CONFIRMED; scrolling limits, absent UI and
     /// missing results are INCONCLUSIVE. Browser selectors require live Instagram testing.

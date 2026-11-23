@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ChatPulse.Desktop.Services;
@@ -13,13 +13,21 @@ public static class WorkspaceTaskKindDetector
     private static readonly Regex UNSUBSCRIBE = CreatePattern("отписка");
     private static readonly Regex SUBSCRIBE = CreatePattern("подписка");
 
-    public static WorkspaceTaskKind Detect(string? message)
+    public static WorkspaceTaskKind Detect(string? message, string? postUrl = null)
     {
         if (string.IsNullOrWhiteSpace(message)) return WorkspaceTaskKind.TASK;
         var normalized = message.Normalize(NormalizationForm.FormKC);
+
+        // Words such as «Подписка» may occur in ordinary engagement tasks (like,
+        // comment, save, repost). Only an actual Instagram profile link can make
+        // a message a follow/unfollow task. /p/ and /reel/ links are not profiles.
+        if (!UNSUBSCRIBE.IsMatch(normalized) && !SUBSCRIBE.IsMatch(normalized))
+            return WorkspaceTaskKind.TASK;
+        if (InstagramFollowTaskRules.GetProfileTargets(message, postUrl).Count == 0)
+            return WorkspaceTaskKind.TASK;
+
         if (UNSUBSCRIBE.IsMatch(normalized)) return WorkspaceTaskKind.UNSUBSCRIBE;
-        if (SUBSCRIBE.IsMatch(normalized)) return WorkspaceTaskKind.SUBSCRIBE;
-        return WorkspaceTaskKind.TASK;
+        return WorkspaceTaskKind.SUBSCRIBE;
     }
 
     private static Regex CreatePattern(string word)

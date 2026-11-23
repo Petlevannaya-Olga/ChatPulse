@@ -8,8 +8,8 @@ public sealed class WorkspaceTaskKindAndLinksTests
     [Theory]
     [InlineData("ПОДПИСКА 💜 https://instagram.com/user", WorkspaceTaskKind.SUBSCRIBE)]
     [InlineData("⚡ ОТПИСКА ⚡ https://instagram.com/user", WorkspaceTaskKind.UNSUBSCRIBE)]
-    [InlineData("О💔Т💔П💔И💔С💔К💔А", WorkspaceTaskKind.UNSUBSCRIBE)]
-    [InlineData("о т п и с к а", WorkspaceTaskKind.UNSUBSCRIBE)]
+    [InlineData("О💔Т💔П💔И💔С💔К💔А https://instagram.com/username", WorkspaceTaskKind.UNSUBSCRIBE)]
+    [InlineData("о т п и с к а https://instagram.com/username", WorkspaceTaskKind.UNSUBSCRIBE)]
     [InlineData("Моя публикация https://instagram.com/p/example", WorkspaceTaskKind.TASK)]
     [InlineData("", WorkspaceTaskKind.TASK)]
     public void ClassifiesTaskTextForPresentation(string text, WorkspaceTaskKind expected)
@@ -18,7 +18,52 @@ public sealed class WorkspaceTaskKindAndLinksTests
     [Fact]
     public void UnsubscribeTakesPriorityOverSubscribe()
         => Assert.Equal(WorkspaceTaskKind.UNSUBSCRIBE,
-            WorkspaceTaskKindDetector.Detect("Подписка, потом отписка"));
+            WorkspaceTaskKindDetector.Detect("Подписка, потом отписка https://instagram.com/username"));
+
+    [Fact]
+    public void EngagementPostWithSubscribeInstructionButNoProfileIsRegularTask()
+    {
+        var message = """
+            **VIP LITE PLUS**⭐️
+            [https://www.instagram.com/reel/Df9ollSMsmL/?cnvx=MXU3YTYzb2I5dDZzcw==](https://www.instagram.com/reel/Df9ollSMsmL/?cnvx=MXU3YTYzb2I5dDZzcw==)
+            [https://www.instagram.com/p/Df9ollSMsmL/?cnvx=MXU3YTYzb2I5dDZzcw==](https://www.instagram.com/p/Df9ollSMsmL/?cnvx=MXU3YTYzb2I5dDZzcw==)
+            Подписка✔️
+            🤍лайк
+            🤍репост
+            🤍комментарий
+            🤍сохранение
+            **VIP LITE PLUS**⭐️
+            🤍Контролируется администрацией чата🤍
+            """;
+        var postUrl = "https://www.instagram.com/p/Df9ollSMsmL/";
+
+        Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(message, postUrl));
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new WorkspaceDetectedTask(10, message, postUrl));
+        Assert.Equal("Задание", card.KindLabel);
+        Assert.True(card.IsRegularTask);
+        Assert.False(card.IsSubscriptionAction);
+        Assert.Equal(2, card.ActionLinks.Count);
+    }
+
+    [Theory]
+    [InlineData("Подписка✔️ https://www.instagram.com/reel/Df9ollSMsmL/", WorkspaceTaskKind.TASK)]
+    [InlineData("Отписка✔️ https://www.instagram.com/p/Df9ollSMsmL/", WorkspaceTaskKind.TASK)]
+    [InlineData("Подписка без URL", WorkspaceTaskKind.TASK)]
+    [InlineData("ПОДПИСКА https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.SUBSCRIBE)]
+    [InlineData("ОТПИСКА https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.UNSUBSCRIBE)]
+    [InlineData("Подписка https://www.instagram.com/reel/Df9ollSMsmL/ https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.SUBSCRIBE)]
+    public void FollowTasksRequireAnActualInstagramProfileUrl(string message, WorkspaceTaskKind expected)
+        => Assert.Equal(expected, WorkspaceTaskKindDetector.Detect(message));
+
+    [Fact]
+    public void SubscriptionCanUseLegacyProfileUrlButNotLegacyPostUrl()
+    {
+        Assert.Equal(WorkspaceTaskKind.SUBSCRIBE, WorkspaceTaskKindDetector.Detect(
+            "Подписка", "https://www.instagram.com/q.r1s_/"));
+        Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(
+            "Подписка", "https://www.instagram.com/reel/Df9ollSMsmL/"));
+    }
 
     [Fact]
     public void ConvertsLinksToShortLabelsWithoutChangingTheirTargets()

@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
+<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:ChatPulse.Desktop.Views.Workspace"
@@ -22,6 +22,15 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="16" />
             <Setter Property="Padding" Value="22" />
+        </Style>
+        <Style x:Key="TaskPanelCard" TargetType="Border" BasedOn="{StaticResource PanelCard}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTaskListExpanded}" Value="True">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="Background" Value="Transparent" />
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
         <Style x:Key="SubscriptionPanelCard" TargetType="Border" BasedOn="{StaticResource PanelCard}">
             <Style.Triggers>
@@ -734,7 +743,7 @@
                     <Style TargetType="Grid">
                         <Setter Property="Margin" Value="0,16,10,18" />
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                            <DataTrigger Binding="{Binding IsChatContentExpanded}" Value="True">
                                 <Setter Property="Margin" Value="0,6,0,0" />
                             </DataTrigger>
                         </Style.Triggers>
@@ -749,7 +758,7 @@
                         <Grid.Style>
                             <Style TargetType="Grid">
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsSubscriptionTableExpanded}" Value="True">
+                                    <DataTrigger Binding="{Binding IsChatContentExpanded}" Value="True">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -855,7 +864,7 @@
                         </Button>
                     </Grid>
 
-                    <Border Grid.Row="1" Style="{StaticResource PanelCard}"
+                    <Border Grid.Row="1" Style="{StaticResource TaskPanelCard}"
                             Visibility="{Binding IsTasksVisible, Converter={StaticResource BoolVisible}}">
                         <Grid>
                             <Grid.RowDefinitions>
@@ -867,9 +876,56 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Text="Задания" Foreground="#24154C" FontSize="21" FontWeight="Bold" />
+                            <Grid Grid.Row="0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Задания" Foreground="#24154C"
+                                           FontSize="21" FontWeight="Bold" VerticalAlignment="Center" />
+                                <Button Grid.Column="1" Content="Начать проверку" Click="StartBulkTaskVerification_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}"
+                                        Background="#7545B9" Foreground="White" BorderThickness="0"
+                                        Height="44" Padding="18,0" Margin="10,0,0,0"
+                                        ToolTip="Последовательно проверить выполненные задания выбранного чата"
+                                        Visibility="{Binding IsCompletedTasksSelected, Converter={StaticResource BoolVisible}}"
+                                        IsEnabled="{Binding IsNotBusy}" />
+                                <!-- Same maximize/restore control as on the Subscriptions tab. -->
+                                <Button Grid.Column="2" Click="ToggleTaskListExpansionButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}"
+                                        Height="44" Width="44" Padding="0" Margin="12,0,0,0"
+                                        ToolTip="{Binding TaskListExpandLabel}"
+                                        AutomationProperties.Name="{Binding TaskListExpandLabel}">
+                                    <Path Width="21" Height="21" Stretch="Uniform"
+                                          Stroke="#7640B5" StrokeThickness="2"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round" Fill="Transparent">
+                                        <Path.Style>
+                                            <Style TargetType="Path">
+                                                <Setter Property="Data" Value="M 9,3 L 3,3 L 3,9 M 15,3 L 21,3 L 21,9 M 21,15 L 21,21 L 15,21 M 9,21 L 3,21 L 3,15" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsTaskListExpanded}" Value="True">
+                                                        <Setter Property="Data" Value="M 3,9 L 9,9 L 9,3 M 21,9 L 15,9 L 15,3 M 15,21 L 15,15 L 21,15 M 3,15 L 9,15 L 9,21" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Path.Style>
+                                    </Path>
+                                </Button>
+                            </Grid>
                             <TextBlock Grid.Row="1" Text="{Binding TaskSummary}" Foreground="#81718F" FontSize="12" Margin="0,6,0,14"
-                                       TextWrapping="Wrap" />
+                                       TextWrapping="Wrap">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsTaskListExpanded}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                             <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,20">
                                 <Button x:Name="DetectedFilterButton" Content="Невыполненные" Click="DetectedFilterButton_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,0"
@@ -969,14 +1025,10 @@
                                                         <Grid Grid.Row="0" Grid.ColumnSpan="2"
                                                               Visibility="{Binding IsRegularTask, Converter={StaticResource BoolVisible}}">
                                                             <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="42" />
+                                                                <ColumnDefinition Width="0" />
                                                                 <ColumnDefinition Width="*" />
                                                             </Grid.ColumnDefinitions>
-                                                            <Border Width="34" Height="34" Background="#F0E5FF" CornerRadius="10"
-                                                                    VerticalAlignment="Top">
-                                                                <TextBlock Text="▤" FontSize="19" Foreground="#9152D5"
-                                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                            </Border>
+
                                                             <StackPanel Grid.Column="1" Margin="0,0,0,12">
                                                                 <Grid>
                                                                     <Grid.ColumnDefinitions>
@@ -1044,7 +1096,14 @@
                                                                     Style="{StaticResource WorkspaceActionButton}"
                                                                     Background="#7545B9" Foreground="White" BorderThickness="0"
                                                                     Margin="0,0,9,0" />
-                                                             <Button Content="Удалить" Tag="{Binding MessageId}"
+                                                             <Button Content="Отчёт" Tag="{Binding MessageId}"
+                                                                    ToolTip="История неуспешных проверок задания"
+                                                                    Visibility="{Binding HasFailedVerification, Converter={StaticResource BoolVisible}}"
+                                                                    Click="FailedTaskReportButton_OnClick"
+                                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                                    Background="#EFE5FB" Foreground="#653A9B"
+                                                                    BorderThickness="0" Margin="0,0,9,0" />
+                                                            <Button Content="Удалить" Tag="{Binding MessageId}"
                                                                      Visibility="{Binding CanHideCompleted, Converter={StaticResource BoolVisible}}"
                                                                      Click="HideCompletedTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                      Background="#BB496A" Foreground="White" BorderThickness="0"

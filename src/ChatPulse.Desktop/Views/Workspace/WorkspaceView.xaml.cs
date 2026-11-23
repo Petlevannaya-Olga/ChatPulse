@@ -1,4 +1,4 @@
-﻿using ChatPulse.Application.Services;
+using ChatPulse.Application.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -59,6 +59,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private bool _isBusy;
     private bool _isSidebarExpanded = true;
     private bool _isSubscriptionTableExpanded;
+    private bool _isTaskListExpanded;
     private static readonly string[] SubscriptionColumnKeys =
         ["participant", "profile", "i-follow", "follows-me", "updated"];
     private readonly DispatcherTimer _subscriptionColumnSaveTimer = new()
@@ -161,6 +162,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify(nameof(SelectedChatTitle));
             Notify(nameof(SelectedChatNetwork));
             Notify(nameof(SelectedChatTaskCount));
+            Notify(nameof(IsCompletedTasksSelected));
             Notify(nameof(LastSelectedChatSyncLabel));
         }
     }
@@ -1316,6 +1318,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public bool IsSidebarExpanded => _isSidebarExpanded;
     public bool IsSubscriptionTableExpanded => _isSubscriptionTableExpanded;
     public string SubscriptionTableExpandLabel => _isSubscriptionTableExpanded ? "Свернуть" : "Развернуть";
+    public bool IsCompletedTasksSelected => _page == WorkspacePage.Chat &&
+        _chatPage == ChatPage.Tasks && _taskFilter == TaskFilter.Completed && SelectedChat is not null;
+    public bool IsTaskListExpanded => _isTaskListExpanded;
+    public string TaskListExpandLabel => _isTaskListExpanded ? "Свернуть задания" : "Развернуть задания";
+    public bool IsChatContentExpanded => _isTaskListExpanded || _isSubscriptionTableExpanded;
 
     private void SetSubscriptionTableExpanded(bool expanded)
     {
@@ -1323,10 +1330,23 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _isSubscriptionTableExpanded = expanded;
         Notify(nameof(IsSubscriptionTableExpanded));
         Notify(nameof(SubscriptionTableExpandLabel));
+        Notify(nameof(IsChatContentExpanded));
+    }
+
+    private void SetTaskListExpanded(bool expanded)
+    {
+        if (_isTaskListExpanded == expanded) return;
+        _isTaskListExpanded = expanded;
+        Notify(nameof(IsTaskListExpanded));
+        Notify(nameof(TaskListExpandLabel));
+        Notify(nameof(IsChatContentExpanded));
     }
 
     private void ToggleSubscriptionTableExpansionButton_OnClick(object sender, RoutedEventArgs args)
         => SetSubscriptionTableExpanded(!_isSubscriptionTableExpanded);
+
+    private void ToggleTaskListExpansionButton_OnClick(object sender, RoutedEventArgs args)
+        => SetTaskListExpanded(!_isTaskListExpanded);
 
     private void RestoreSubscriptionColumnWidths(AppSettings settings)
     {
@@ -1578,6 +1598,29 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify(nameof(EmptyTasksMessage));
         }
         finally { _isRenderingTasks = false; }
+        if (_taskFilter == TaskFilter.Completed)
+            _ = RefreshFailedVerificationIndicatorsAsync(chat, _taskWindowVersion);
+    }
+
+    private async Task RefreshFailedVerificationIndicatorsAsync(WorkspaceChatRow chat, int version)
+    {
+        if (_reader is null || !ReferenceEquals(SelectedChat, chat)) return;
+        var ids = Tasks.Select(item => item.MessageId).ToArray();
+        if (ids.Length == 0) return;
+        try
+        {
+            var found = await new WorkspaceFailedTaskVerificationStore(_reader.DatabasePath)
+                .FindWithReportsAsync(chat.Chat, ids);
+            if (version != _taskWindowVersion || !ReferenceEquals(SelectedChat, chat) ||
+                _taskFilter != TaskFilter.Completed) return;
+            foreach (var item in Tasks)
+                item.HasFailedVerification = found.Contains(item.MessageId);
+        }
+        catch (Exception exception)
+        {
+            // Report lookup must not block task paging. The report remains safely in SQLite.
+            SetTaskPageError($"Не удалось загрузить отметки отчётов: {exception.Message}");
+        }
     }
 
     private async void TaskListScroll_OnScrollChanged(object sender, ScrollChangedEventArgs args)
@@ -1703,6 +1746,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         if (SelectedChat is null) return;
         SetSubscriptionTableExpanded(false);
+        SetTaskListExpanded(false);
         _subscriptionRowsLoadVersion++;
         _chatPage = ChatPage.Tasks;
         SubscriptionRows.Clear();
@@ -2058,6 +2102,44 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private async void StartBulkTaskVerification_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (IsBusy || !IsCompletedTasksSelected || _reader is null ||
+            _settings is null || SelectedChat is not { } row) return;
+
+        string account;
+        try
+        {
+            var settings = await _settings.LoadAsync();
+            var accounts = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
+            account = InstagramUserName.Normalize(accounts?.ReceivingUserName ?? string.Empty);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Проверьте основной Instagram-аккаунт в настройках: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var owner = Window.GetWindow(this);
+        var dialog = new WorkspaceBulkTaskVerificationDialog(
+            new WorkspaceBulkTaskVerifier(_reader, _mainInstagramBrowser),
+            row.Chat, account, _oldestTasksFirst) { Owner = owner };
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        try { dialog.ShowDialog(); }
+        finally { mainWindow?.HideDialogOverlay(); }
+
+        if (dialog.HiddenCount == 0 && dialog.ProcessedCount == 0) return;
+        row.DetectedCount = Math.Max(0, row.DetectedCount - dialog.HiddenCount);
+        _totalDetected = Math.Max(0, _totalDetected - dialog.HiddenCount);
+        Notify(nameof(TotalDetected));
+        Notify(nameof(SelectedChatTaskCount));
+        UpdateSelectedTasks();
+        NotifyTaskFilter();
+    }
+
     private async void VerifyCompletedTaskButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (IsBusy || _reader is null || _settings is null || SelectedChat is null ||
@@ -2067,6 +2149,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         if (!_taskCache.TryGetValue(row, out var items)) return;
         var task = items.FirstOrDefault(item => item.MessageId == messageId);
         if (task is not { IsCompleted: true, IsSkipped: false }) return;
+        var kind = WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl);
+        if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE)
+        {
+            await VerifySubscriptionTaskAsync(row, messageId, task, kind);
+            return;
+        }
         if (!InstagramTaskVerificationRules.TryGetPostUrl(task.PostUrl, out var postUrl))
         {
             MessageBox.Show("Для этой проверки нужна прямая ссылка на публикацию или Reel Instagram.",
@@ -2096,7 +2184,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
 
         var owner = Window.GetWindow(this);
-        var dialog = new VerifyCompletedTaskDialog(_mainInstagramBrowser, postUrl, initialAccount, task.Text)
+        var dialog = new VerifyCompletedTaskDialog(_mainInstagramBrowser, postUrl, initialAccount,
+            task.Text, report => new WorkspaceFailedTaskVerificationStore(_reader.DatabasePath)
+                .SaveAsync(row.Chat, messageId, report))
         {
             Owner = owner
         };
@@ -2108,7 +2198,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             result = dialog.ShowDialog() == true ? dialog.VerifiedResult : null;
         }
         finally { mainWindow?.HideDialogOverlay(); }
-        if (result is null || !result.CanHide) return;
+        if (result is null || !result.CanHide)
+        {
+            await RefreshFailedVerificationIndicatorsAsync(row, _taskWindowVersion);
+            return;
+        }
 
         IsBusy = true;
         try
@@ -2128,6 +2222,101 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally { IsBusy = false; NotifyTaskFilter(); }
+    }
+
+    private async Task VerifySubscriptionTaskAsync(WorkspaceChatRow row, long messageId,
+        WorkspaceDetectedTask task, WorkspaceTaskKind kind)
+    {
+        if (_settings is null || _reader is null) return;
+        InstagramOwnAccounts? accounts;
+        try
+        {
+            var settings = await _settings.LoadAsync();
+            accounts = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Не удалось прочитать Instagram-аккаунты: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (accounts is null || string.IsNullOrWhiteSpace(accounts.ReceivingUserName))
+        {
+            MessageBox.Show("Укажите основной Instagram-аккаунт в настройках ChatPulse.",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var candidates = InstagramFollowTaskRules.GetProfileTargets(task.Text, task.PostUrl);
+        var owner = Window.GetWindow(this);
+        var dialog = new VerifySubscriptionTaskDialog(kind,
+            _mainInstagramBrowser, accounts.ReceivingUserName, candidates,
+            report => new WorkspaceFailedTaskVerificationStore(_reader.DatabasePath)
+                .SaveAsync(row.Chat, messageId, report))
+        {
+            Owner = owner
+        };
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        InstagramFollowTaskVerification? result;
+        try
+        {
+            result = dialog.ShowDialog() == true ? dialog.VerifiedResult : null;
+        }
+        finally { mainWindow?.HideDialogOverlay(); }
+        if (result?.CanHide != true)
+        {
+            await RefreshFailedVerificationIndicatorsAsync(row, _taskWindowVersion);
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            await new WorkspaceSubscriptionTaskVerificationStore(_reader.DatabasePath)
+                .PublishAsync(row.Chat, messageId, result);
+            row.DetectedCount = Math.Max(0, row.DetectedCount - 1);
+            _totalDetected = Math.Max(0, _totalDetected - 1);
+            Notify(nameof(TotalDetected));
+            Notify(nameof(SelectedChatTaskCount));
+            UpdateSelectedTasks();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Проверка прошла, но не удалось сохранить результат: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally { IsBusy = false; NotifyTaskFilter(); }
+    }
+
+    private async void FailedTaskReportButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_reader is null || SelectedChat is not { } row ||
+            _taskFilter != TaskFilter.Completed ||
+            sender is not Button { Tag: long messageId }) return;
+        try
+        {
+            var reports = await new WorkspaceFailedTaskVerificationStore(_reader.DatabasePath)
+                .ReadAsync(row.Chat, messageId);
+            if (reports.Count == 0)
+            {
+                MessageBox.Show("Для этого задания ещё нет неуспешных отчётов.", "ChatPulse",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var owner = Window.GetWindow(this);
+            var dialog = new FailedTaskVerificationReportsDialog(reports) { Owner = owner };
+            var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+            mainWindow?.ShowDialogOverlay();
+            try { dialog.ShowDialog(); }
+            finally { mainWindow?.HideDialogOverlay(); }
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Не удалось открыть отчёты проверки: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private async void HideCompletedTaskButton_OnClick(object sender, RoutedEventArgs args)
@@ -2340,6 +2529,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     {
         if (_page != WorkspacePage.Chat || _chatPage != ChatPage.Subscriptions)
             SetSubscriptionTableExpanded(false);
+        if (_page != WorkspacePage.Chat || _chatPage != ChatPage.Tasks)
+            SetTaskListExpanded(false);
         Notify(nameof(IsHomeVisible));
         Notify(nameof(IsChatVisible));
         Notify(nameof(IsSettingsVisible));
@@ -2352,6 +2543,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private void NotifyTaskFilter()
     {
+        Notify(nameof(IsCompletedTasksSelected));
         Notify(nameof(HasTasks));
         Notify(nameof(HasNoTasks));
         Notify(nameof(EmptyTasksMessage));
@@ -2419,8 +2611,21 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
     public string DetectedLabel => $"Найдено заданий: {DetectedCount}";
 }
 
-public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
+public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPropertyChanged
 {
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private bool _hasFailedVerification;
+    public bool HasFailedVerification
+    {
+        get => _hasFailedVerification;
+        set
+        {
+            if (_hasFailedVerification == value) return;
+            _hasFailedVerification = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasFailedVerification)));
+        }
+    }
+
     private static readonly CultureInfo RUSSIAN_CULTURE = CultureInfo.GetCultureInfo("ru-RU");
     private DateTime? LocalDate => task.SentAtUtc?.ToLocalTime().DateTime;
 
@@ -2447,38 +2652,40 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task)
     // Presentation-only transformation: the original Telegram text and emoji offsets remain in SQLite.
     private readonly WorkspaceTaskPresentation _presentation =
         WorkspaceTaskPresentation.Create(task.Text, task.CustomEmojiJson);
+    private readonly WorkspaceTaskKind _kind =
+        WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl);
 
-    public string KindLabel => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    public string KindLabel => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "Подписка",
         WorkspaceTaskKind.UNSUBSCRIBE => "Отписка",
         _ => "Задание"
     };
-    public string KindBackground => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    public string KindBackground => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#D9F1E0",
         WorkspaceTaskKind.UNSUBSCRIBE => "#FFE5CC",
-        _ => "#EBEBF2"
+        _ => "#F0E5FF"
     };
-    public string KindForeground => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    public string KindForeground => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#246F43",
         WorkspaceTaskKind.UNSUBSCRIBE => "#965219",
-        _ => "#54516E"
+        _ => "#6D3AAA"
     };
 
     // Subscription and unsubscription cards deliberately show only clickable targets.
     // The original Telegram text remains available in SQLite and in the source message.
-    public bool IsSubscriptionAction => WorkspaceTaskKindDetector.Detect(task.Text) is
+    public bool IsSubscriptionAction => _kind is
         WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE;
     public bool IsRegularTask => !IsSubscriptionAction;
-    public string CardBackground => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    public string CardBackground => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#F2FBF5",
         WorkspaceTaskKind.UNSUBSCRIBE => "#FFF6EC",
         _ => "#FCFAFF"
     };
-    public string CardBorderBrush => WorkspaceTaskKindDetector.Detect(task.Text) switch
+    public string CardBorderBrush => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#CBE9D5",
         WorkspaceTaskKind.UNSUBSCRIBE => "#F3D9B9",

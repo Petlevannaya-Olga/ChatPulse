@@ -21,11 +21,20 @@ public sealed class WorkspaceTaskReader(string databasePath)
         return result.Tasks.OrderBy(task => task.MessageId).ToArray();
     }
 
+    /// <summary>Loads one visible completed task by its stable Telegram message ID.</summary>
+    public async Task<WorkspaceDetectedTask?> ReadCompletedByIdAsync(
+        ConfiguredChat chat, long messageId, CancellationToken cancellationToken = default)
+    {
+        var page = await ReadPageAsync(chat, WorkspaceTaskState.Completed, false, 0, 1,
+            cancellationToken, includeTotals: false, onlyMessageId: messageId).ConfigureAwait(false);
+        return page.Tasks.FirstOrDefault();
+    }
+
     // Classification must happen before offsetting: a message with a URL is not always a task.
     // The database cursor is streamed; only the requested page is retained in managed memory.
     public async Task<WorkspaceTaskPage> ReadPageAsync(ConfiguredChat chat, WorkspaceTaskState state,
         bool oldestFirst, int offset, int pageSize, CancellationToken cancellationToken = default,
-        bool includeTotals = true)
+        bool includeTotals = true, long? onlyMessageId = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(pageSize);
@@ -115,6 +124,7 @@ public sealed class WorkspaceTaskReader(string databasePath)
             {skipJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             {hiddenPredicate}
+            {(onlyMessageId.HasValue ? "AND message.MessageId = $onlyMessageId" : string.Empty)}
             ORDER BY CASE WHEN {timestampColumn} IS NULL THEN 1 ELSE 0 END ASC,
                      {timestampColumn} {(oldestFirst ? "ASC" : "DESC")},
                      message.MessageId {(oldestFirst ? "ASC" : "DESC")}
@@ -122,6 +132,8 @@ public sealed class WorkspaceTaskReader(string databasePath)
         command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
         command.Parameters.AddWithValue("$peerType", chat.PeerType);
         command.Parameters.AddWithValue("$peerId", chat.PeerId);
+        if (onlyMessageId.HasValue)
+            command.Parameters.AddWithValue("$onlyMessageId", onlyMessageId.Value);
 
         // Use the same candidate detection as participant synchronization. A damaged
         // register is not a task just because its full parsing fails.
