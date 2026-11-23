@@ -1,4 +1,4 @@
-using ChatPulse.Application.Services;
+﻿using ChatPulse.Application.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -24,9 +24,14 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private enum ChatPage { Tasks, Subscriptions, MyActivity }
 
     private ISettingsService? _settings;
+    // Legacy Chrome directory is retained for the reserve account: no automatic cookie migration.
     private readonly InstagramBrowserService _instagramBrowser = new();
+    private readonly InstagramBrowserService _mainInstagramBrowser = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ChatPulse", "InstagramBrowserMain"));
     private bool _instagramSettingsLoaded;
     private bool _instagramSessionCleared;
+    private bool _mainInstagramSessionCleared;
     private bool _instagramBusy;
     private CancellationTokenSource? _instagramBatchCancellation;
     private InstagramParticipantOption? _selectedInstagramParticipant;
@@ -66,6 +71,18 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private enum TaskFilter { Pending, Completed, Skipped }
 
     private TaskFilter _taskFilter;
+    private bool _oldestTasksFirst;
+    private const int TASK_PAGE_SIZE = 30;
+    private const int TASK_MAX_CACHED_PAGES = 9;
+    private readonly SortedDictionary<int, IReadOnlyList<WorkspaceDetectedTask>> _taskPages = new();
+    private int _taskWindowVersion;
+    private CancellationTokenSource? _taskWindowCancellation;
+    private int _taskTotalCount;
+    private bool _isTaskPageLoading;
+    private bool _isRenderingTasks;
+    private string _taskPageError = string.Empty;
+    private int? _failedTaskPage;
+    private bool _failedTaskPagePrepend;
     private bool _isRebuildingChatList;
     private readonly ICollectionView _subscriptionRowsView;
     private bool _showOnlySubscriptionDiscrepancies;
@@ -119,7 +136,10 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         {
             _instagramBatchCancellation?.Cancel();
             _historyImportCancellation?.Cancel();
+            _taskWindowCancellation?.Cancel();
+            _taskWindowCancellation?.Dispose();
             _instagramBrowser.Dispose();
+            _mainInstagramBrowser.Dispose();
         };
     }
 
@@ -268,7 +288,10 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     }
 
     public bool HasTasks => !IsBusy && Tasks.Count > 0;
-    public bool HasNoTasks => !IsBusy && Tasks.Count == 0;
+    public bool HasNoTasks => !IsBusy && !_isTaskPageLoading && Tasks.Count == 0;
+    public bool IsTaskPageLoading => _isTaskPageLoading;
+    public string TaskPageError => _taskPageError;
+    public bool HasTaskPageError => !string.IsNullOrEmpty(_taskPageError);
     public bool IsNotBusy => !IsBusy;
 
     public string ReactionRefreshMessage
@@ -487,12 +510,13 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             : await new InstagramOwnAccountStore(_reader.DatabasePath)
                 .EnsureFromLegacyAsync(saved.InstagramTargetUserName);
         InstagramTargetBox.Text = owned?.ReceivingUserName ?? saved.InstagramTargetUserName ?? string.Empty;
-        InstagramGiveFromBox.Text = owned?.GivingUserName ?? string.Empty;
-        InstagramBrowserBox.Text = saved.InstagramBrowserUserName ?? string.Empty;
+        InstagramGiveFromBox.Text = owned?.GivingUserName ??
+            (string.Equals(saved.InstagramTargetUserName, saved.InstagramBrowserUserName,
+                StringComparison.OrdinalIgnoreCase) ? string.Empty : saved.InstagramBrowserUserName) ?? string.Empty;
         _instagramSettingsLoaded = true;
-        InstagramStatus = string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName)
-            ? "Укажите аккаунты и сохраните настройки."
-            : "Настройки сохранены. Состояние сессии ещё не проверено.";
+        InstagramStatus = string.IsNullOrWhiteSpace(InstagramGiveFromBox.Text)
+            ? "Укажите основной и резервный аккаунты, затем сохраните настройки."
+            : "Два аккаунта настроены. Их Chrome-сессии проверяются отдельно.";
     }
 
     private async Task LoadInstagramParticipantsAsync()
@@ -1125,35 +1149,41 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private async void SaveInstagramButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (_settings is null || _instagramBusy) return;
+        if (_settings is null || _reader is null || _instagramBusy) return;
         SetInstagramBusy(true);
         try
         {
-            var target = InstagramUserName.Normalize(InstagramTargetBox.Text);
-            var giving = string.IsNullOrWhiteSpace(InstagramGiveFromBox.Text)
-                ? null
-                : InstagramUserName.Normalize(InstagramGiveFromBox.Text);
-            if (string.Equals(target, giving, StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Резервный аккаунт должен отличаться от основного.");
-            var browser = InstagramUserName.Normalize(InstagramBrowserBox.Text);
+            var main = InstagramUserName.Normalize(InstagramTargetBox.Text);
+            var reserve = InstagramUserName.Normalize(InstagramGiveFromBox.Text);
+            if (string.Equals(main, reserve, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Основной и резервный аккаунты должны отличаться.");
+
             var previous = await _settings.LoadAsync();
-            if (previous.InstagramBrowserUserName is { } old &&
-                !string.Equals(old, browser, StringComparison.OrdinalIgnoreCase) && !_instagramSessionCleared)
+            var previousOwn = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(previous.InstagramTargetUserName);
+            // Never silently reuse an authenticated profile under a different declared identity.
+            if (previous.InstagramBrowserUserName is { } browserName &&
+                !string.Equals(browserName, reserve, StringComparison.OrdinalIgnoreCase) &&
+                !_instagramSessionCleared)
             {
-                InstagramStatus = "Для смены проверочного аккаунта сначала сбросьте текущую сессию.";
+                InstagramStatus = "Текущий Chrome-профиль принадлежит @" + browserName +
+                                  ". Для назначения другого резервного аккаунта сначала сбросьте резервную сессию.";
                 return;
             }
-
-            await _settings.SaveInstagramAccountsAsync(target, browser);
-            if (_reader is not null)
+            if (previousOwn is not null &&
+                !string.Equals(previousOwn.ReceivingUserName, main, StringComparison.OrdinalIgnoreCase) &&
+                !_mainInstagramSessionCleared)
             {
-                await new InstagramOwnAccountStore(_reader.DatabasePath).SaveAsync(target, giving);
-                await LoadInstagramParticipantsAsync();
+                InstagramStatus = "Для смены основного аккаунта сначала сбросьте его Chrome-сессию " +
+                                  "и подтвердите новую авторизацию.";
+                return;
             }
-
+            await _settings.SaveInstagramAccountsAsync(main, reserve);
+            await new InstagramOwnAccountStore(_reader.DatabasePath).SaveAsync(main, reserve);
+            await LoadInstagramParticipantsAsync();
             _instagramSessionCleared = false;
-            InstagramStatus = "Собственные Instagram-профили сохранены в SQLite. " +
-                              "Аккаунт Selenium настраивается отдельно.";
+            _mainInstagramSessionCleared = false;
+            InstagramStatus = "Аккаунты сохранены. Основная и резервная сессии Chrome независимы.";
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
         {
@@ -1162,46 +1192,90 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         finally { SetInstagramBusy(false); }
     }
 
-    private async void InstagramLoginButton_OnClick(object sender, RoutedEventArgs args)
+    private async Task<string?> GetConfiguredInstagramAccountAsync(bool isMain)
     {
-        if (_settings is null || _instagramBusy) return;
+        if (_settings is null || _reader is null) return null;
+        var state = await _settings.LoadAsync();
+        var own = await new InstagramOwnAccountStore(_reader.DatabasePath)
+            .EnsureFromLegacyAsync(state.InstagramTargetUserName);
+        return isMain ? own?.ReceivingUserName : own?.GivingUserName;
+    }
+
+    private async Task RunInstagramSessionActionAsync(bool isMain, string operation)
+    {
+        if (_instagramBusy)
+        {
+            InstagramStatus = "Дождитесь завершения текущей операции Instagram.";
+            return;
+        }
         SetInstagramBusy(true);
+        var profileName = isMain ? "основного" : "резервного";
+        InstagramStatus = operation switch
+        {
+            "open" => $"Открываем Chrome для {profileName} аккаунта…",
+            "check" => $"Проверяем сессию {profileName} аккаунта…",
+            "reset" => $"Подготавливаем сброс сессии {profileName} аккаунта…",
+            _ => $"Выполняем операцию с {profileName} аккаунтом…"
+        };
         try
         {
-            var saved = await _settings.LoadAsync();
-            if (string.IsNullOrWhiteSpace(saved.InstagramBrowserUserName))
+            var account = await GetConfiguredInstagramAccountAsync(isMain);
+            if (string.IsNullOrWhiteSpace(account))
             {
-                InstagramStatus = "Сначала сохраните основной и проверочный аккаунты.";
+                InstagramStatus = $"Не настроен {profileName} Instagram-аккаунт. " +
+                                  "Укажите оба username и нажмите «Сохранить аккаунты».";
                 return;
             }
-
-            await _instagramBrowser.OpenLoginAsync();
-            InstagramStatus = "Chrome открыт. Войдите вручную и нажмите «Проверить сессию».";
+            var browser = isMain ? _mainInstagramBrowser : _instagramBrowser;
+            if (operation == "open")
+            {
+                await browser.OpenLoginAsync();
+                InstagramStatus = $"Chrome для @{account} открыт. Выполните вход вручную.";
+            }
+            else if (operation == "check")
+            {
+                var confirmed = await browser.IsLoggedInAsAsync(account);
+                InstagramStatus = confirmed
+                    ? $"Chrome-сессия @{account} подтверждена."
+                    : $"Не удалось подтвердить Chrome-сессию @{account}. " +
+                      "Проверьте, какой аккаунт открыт в соответствующем Chrome.";
+            }
+            else if (operation == "reset")
+            {
+                if (MessageBox.Show($"Удалить только Chrome-сессию @{account}? " +
+                        "Для повторного входа потребуется авторизация Instagram.",
+                        "ChatPulse — Instagram", MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+                await browser.ClearSessionAsync();
+                if (isMain) _mainInstagramSessionCleared = true;
+                else _instagramSessionCleared = true;
+                InstagramStatus = $"Локальная Chrome-сессия @{account} очищена.";
+            }
         }
         catch (Exception exception)
         {
-            InstagramStatus = $"Не удалось запустить Chrome: {exception.Message}";
+            InstagramStatus = $"Операция с Chrome не завершена: {exception.Message}";
         }
         finally { SetInstagramBusy(false); }
     }
+
+    private async void OpenMainInstagram_OnClick(object sender, RoutedEventArgs args)
+        => await RunInstagramSessionActionAsync(true, "open");
+
+    private async void CheckMainInstagram_OnClick(object sender, RoutedEventArgs args)
+        => await RunInstagramSessionActionAsync(true, "check");
+
+    private async void ResetMainInstagram_OnClick(object sender, RoutedEventArgs args)
+        => await RunInstagramSessionActionAsync(true, "reset");
+
+    private async void InstagramLoginButton_OnClick(object sender, RoutedEventArgs args)
+        => await RunInstagramSessionActionAsync(false, "open");
 
     private async void CheckInstagramButton_OnClick(object sender, RoutedEventArgs args)
-    {
-        if (_instagramBusy) return;
-        SetInstagramBusy(true);
-        try
-        {
-            var active = await _instagramBrowser.HasSessionAsync();
-            InstagramStatus = active
-                ? "Cookie сессии обнаружен. Принадлежность аккаунту и доступ к спискам пока не подтверждены."
-                : "Сессия не обнаружена. Откройте Instagram и авторизуйтесь вручную.";
-        }
-        catch (Exception exception)
-        {
-            InstagramStatus = $"Проверка сессии не удалась: {exception.Message}";
-        }
-        finally { SetInstagramBusy(false); }
-    }
+        => await RunInstagramSessionActionAsync(false, "check");
+
+    private async void ResetInstagramButton_OnClick(object sender, RoutedEventArgs args)
+        => await RunInstagramSessionActionAsync(false, "reset");
 
     private async void CollectInstagramListsButton_OnClick(object sender, RoutedEventArgs args)
     {
@@ -1229,26 +1303,6 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         catch (Exception exception)
         {
             InstagramStatus = $"Не удалось получить списки Instagram: {exception.Message}";
-        }
-        finally { SetInstagramBusy(false); }
-    }
-
-    private async void ResetInstagramButton_OnClick(object sender, RoutedEventArgs args)
-    {
-        if (_instagramBusy || _settings is null) return;
-        if (MessageBox.Show("Удалить локальную сессию Instagram? Для нового аккаунта потребуется повторный вход.",
-                "ChatPulse — Instagram", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-            return;
-        SetInstagramBusy(true);
-        try
-        {
-            await _instagramBrowser.ClearSessionAsync();
-            _instagramSessionCleared = true;
-            InstagramStatus = "Сессия очищена. Можно изменить проверочный аккаунт и сохранить настройки.";
-        }
-        catch (Exception exception)
-        {
-            InstagramStatus = $"Не удалось очистить сессию: {exception.Message}";
         }
         finally { SetInstagramBusy(false); }
     }
@@ -1346,7 +1400,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         if (IsVisible && _settings is not null && _reader is not null)
             await ReloadAsync();
         else if (!IsVisible)
+        {
             _loadVersion++;
+            _taskWindowVersion++;
+            _taskWindowCancellation?.Cancel();
+        }
     }
 
     private async Task ReloadAsync()
@@ -1392,10 +1450,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify(nameof(ConnectedChatCount));
             foreach (var chat in Chats)
             {
-                var detected = await _reader!.GetTasksAsync(chat.Chat);
+                // Scan without materializing all task cards; only requested pages are retained.
+                var summary = await _reader!.ReadPageAsync(chat.Chat, WorkspaceTaskState.All,
+                    false, 0, 0);
                 if (version != _loadVersion) return;
-                _taskCache[chat] = detected;
-                chat.DetectedCount = detected.Count(task => !task.IsSkipped);
+                chat.DetectedCount = summary.NonSkippedTotal;
                 _totalDetected += chat.DetectedCount;
                 Notify(nameof(TotalDetected));
                 Notify(nameof(SelectedChatTaskCount));
@@ -1423,32 +1482,199 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private WorkspaceTaskState CurrentTaskState => _taskFilter switch
+    {
+        TaskFilter.Completed => WorkspaceTaskState.Completed,
+        TaskFilter.Skipped => WorkspaceTaskState.Skipped,
+        _ => WorkspaceTaskState.Pending
+    };
+
+    private void SetTaskPageLoading(bool value)
+    {
+        _isTaskPageLoading = value;
+        Notify(nameof(IsTaskPageLoading));
+        Notify(nameof(HasNoTasks));
+    }
+
+    private void SetTaskPageError(string value)
+    {
+        _taskPageError = value;
+        Notify(nameof(TaskPageError));
+        Notify(nameof(HasTaskPageError));
+    }
+
     private void UpdateSelectedTasks()
     {
+        var version = ++_taskWindowVersion;
+        _taskWindowCancellation?.Cancel();
+        _taskWindowCancellation?.Dispose();
+        _taskWindowCancellation = new CancellationTokenSource();
+        _taskPages.Clear();
+        _taskTotalCount = 0;
+        _taskCache.Clear();
         Tasks.Clear();
-        if (SelectedChat is not null && _taskCache.TryGetValue(SelectedChat, out var detected))
-        {
-            foreach (var task in detected.Where(task => _taskFilter switch
-                     {
-                         TaskFilter.Skipped => task.IsSkipped,
-                         TaskFilter.Completed => !task.IsSkipped && task.IsCompleted,
-                         _ => !task.IsSkipped && !task.IsCompleted
-                     }).OrderByDescending(task => task.MessageId))
-                Tasks.Add(new WorkspaceTaskCard(task));
-        }
-
-        TaskSummary = SelectedChat is null
-            ? "Подключённых чатов пока нет."
-            : _taskFilter switch
-            {
-                TaskFilter.Skipped => $"Пропущенных: {Tasks.Count}. Реакции в Telegram не изменяются.",
-                TaskFilter.Completed =>
-                    $"Выполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram.",
-                _ => $"Невыполненных: {Tasks.Count}. Статус определяется по твоим реакциям в Telegram."
-            };
+        SetTaskPageError(string.Empty);
         Notify(nameof(HasTasks));
         Notify(nameof(HasNoTasks));
-        Notify(nameof(EmptyTasksMessage));
+        if (SelectedChat is not { } chat || _reader is null)
+        {
+            TaskSummary = "Подключённых чатов пока нет.";
+            SetTaskPageLoading(false);
+            return;
+        }
+
+        SetTaskPageLoading(true);
+        TaskSummary = "Загружаем задания…";
+        _ = LoadInitialTaskPageAsync(chat, version);
+    }
+
+    private async Task LoadInitialTaskPageAsync(WorkspaceChatRow chat, int version)
+    {
+        try
+        {
+            var result = await _reader!.ReadPageAsync(chat.Chat, CurrentTaskState,
+                _oldestTasksFirst, 0, TASK_PAGE_SIZE,
+                _taskWindowCancellation!.Token);
+            if (version != _taskWindowVersion || !ReferenceEquals(SelectedChat, chat)) return;
+            _taskTotalCount = result.Total;
+            _taskPages[0] = result.Tasks;
+            RenderTaskPages(chat);
+            TaskListScroll.ScrollToTop();
+        }
+        catch (OperationCanceledException) when (version != _taskWindowVersion) {/*ignore*/ }
+        catch (Exception exception)
+        {
+            if (version == _taskWindowVersion)
+            {
+                _failedTaskPage = 0;
+                _failedTaskPagePrepend = false;
+                SetTaskPageError($"Не удалось загрузить задания: {exception.Message}");
+            }
+        }
+        finally
+        {
+            if (version == _taskWindowVersion) SetTaskPageLoading(false);
+        }
+    }
+
+    private void RenderTaskPages(WorkspaceChatRow chat)
+    {
+        _isRenderingTasks = true;
+        try
+        {
+            var loaded = _taskPages.Values.SelectMany(page => page).ToArray();
+            _taskCache[chat] = loaded;
+            Tasks.Clear();
+            foreach (var task in loaded)
+                Tasks.Add(new WorkspaceTaskCard(task));
+            TaskSummary = _taskFilter switch
+            {
+                TaskFilter.Completed => $"Выполненных: {_taskTotalCount}. Статус определяется по твоим реакциям в Telegram.",
+                TaskFilter.Skipped => $"Пропущенных: {_taskTotalCount}. Реакции в Telegram не изменяются.",
+                _ => $"Невыполненных: {_taskTotalCount}. Статус определяется по твоим реакциям в Telegram."
+            };
+            Notify(nameof(HasTasks));
+            Notify(nameof(HasNoTasks));
+            Notify(nameof(EmptyTasksMessage));
+        }
+        finally { _isRenderingTasks = false; }
+    }
+
+    private async void TaskListScroll_OnScrollChanged(object sender, ScrollChangedEventArgs args)
+    {
+        if (_isRenderingTasks || _isTaskPageLoading || _reader is null ||
+            SelectedChat is null || _taskPages.Count == 0 || !IsTasksVisible) return;
+        if (args.ExtentHeightChange != 0 && args.VerticalChange == 0) return;
+        if (args.VerticalChange < 0 && args.VerticalOffset < 180 && _taskPages.First().Key > 0)
+        {
+            await LoadAdjacentTaskPageAsync(true);
+        }
+        else if (args.VerticalChange > 0 &&
+                 args.VerticalOffset >= args.ExtentHeight - args.ViewportHeight - 240 &&
+                 (_taskPages.Last().Key + 1) * TASK_PAGE_SIZE < _taskTotalCount)
+        {
+            await LoadAdjacentTaskPageAsync(false);
+        }
+    }
+
+    private async Task LoadAdjacentTaskPageAsync(bool prepend)
+    {
+        if (_isTaskPageLoading || _reader is null || SelectedChat is not { } chat || _taskPages.Count == 0)
+            return;
+        var version = _taskWindowVersion;
+        var page = prepend ? _taskPages.First().Key - 1 : _taskPages.Last().Key + 1;
+        if (page < 0 || page * TASK_PAGE_SIZE >= _taskTotalCount) return;
+        var priorOffset = TaskListScroll.VerticalOffset;
+        var removedTopPageHeight = EstimateFirstPageHeight();
+        SetTaskPageLoading(true);
+        SetTaskPageError(string.Empty);
+        try
+        {
+            var result = await _reader.ReadPageAsync(chat.Chat, CurrentTaskState,
+                _oldestTasksFirst, page * TASK_PAGE_SIZE, TASK_PAGE_SIZE,
+                _taskWindowCancellation!.Token, includeTotals: false);
+            if (version != _taskWindowVersion || !ReferenceEquals(SelectedChat, chat)) return;
+            // Keep the original total from the initial snapshot. Adjacent reads are bounded.
+            _taskPages[page] = result.Tasks;
+            var removedFromStart = false;
+            if (_taskPages.Count > TASK_MAX_CACHED_PAGES)
+            {
+                var evicted = prepend ? _taskPages.Last().Key : _taskPages.First().Key;
+                removedFromStart = !prepend;
+                _taskPages.Remove(evicted);
+            }
+            RenderTaskPages(chat);
+            // The visible window is bounded; preserve the user's position approximately
+            // across a page prepend or eviction without keeping removed cards alive.
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (version != _taskWindowVersion) return;
+                TaskListScroll.UpdateLayout();
+                if (prepend)
+                {
+                    var addedHeight = EstimateFirstPageHeight();
+                    TaskListScroll.ScrollToVerticalOffset(priorOffset + addedHeight);
+                }
+                else if (removedFromStart)
+                {
+                    TaskListScroll.ScrollToVerticalOffset(Math.Max(0, priorOffset - removedTopPageHeight));
+                }
+                else TaskListScroll.ScrollToVerticalOffset(priorOffset);
+            }, DispatcherPriority.Loaded);
+        }
+        catch (OperationCanceledException) when (version != _taskWindowVersion) {/*ignore*/ }
+        catch (Exception exception)
+        {
+            if (version == _taskWindowVersion)
+            {
+                _failedTaskPage = page;
+                _failedTaskPagePrepend = prepend;
+                SetTaskPageError($"Не удалось подгрузить сообщения: {exception.Message}");
+            }
+        }
+        finally
+        {
+            if (version == _taskWindowVersion) SetTaskPageLoading(false);
+        }
+    }
+
+    private double EstimateFirstPageHeight()
+    {
+        var displayedCount = Math.Min(TASK_PAGE_SIZE, Tasks.Count);
+        var height = 0d;
+        for (var index = 0; index < displayedCount; index++)
+        {
+            if (TaskItemsControl.ItemContainerGenerator.ContainerFromIndex(index) is FrameworkElement item)
+                height += item.ActualHeight;
+        }
+        return height;
+    }
+
+    private async void RetryTaskPageButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (_failedTaskPage is null) return;
+        if (_failedTaskPage == 0) UpdateSelectedTasks();
+        else await LoadAdjacentTaskPageAsync(_failedTaskPagePrepend);
     }
 
     private async void ChatList_OnSelectionChanged(object sender, SelectionChangedEventArgs args)
@@ -1775,6 +2001,15 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         NotifyPageState();
     }
 
+    private void TaskDateSort_OnSelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (sender is not ComboBox { SelectedIndex: >= 0 } selector) return;
+        var oldestFirst = selector.SelectedIndex == 1;
+        if (_oldestTasksFirst == oldestFirst) return;
+        _oldestTasksFirst = oldestFirst;
+        UpdateSelectedTasks();
+    }
+
     private void DetectedFilterButton_OnClick(object sender, RoutedEventArgs args)
     {
         _taskFilter = TaskFilter.Pending;
@@ -1823,6 +2058,78 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private async void VerifyCompletedTaskButton_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (IsBusy || _reader is null || _settings is null || SelectedChat is null ||
+            _taskFilter != TaskFilter.Completed ||
+            sender is not Button { Tag: long messageId }) return;
+        var row = SelectedChat;
+        if (!_taskCache.TryGetValue(row, out var items)) return;
+        var task = items.FirstOrDefault(item => item.MessageId == messageId);
+        if (task is not { IsCompleted: true, IsSkipped: false }) return;
+        if (!InstagramTaskVerificationRules.TryGetPostUrl(task.PostUrl, out var postUrl))
+        {
+            MessageBox.Show("Для этой проверки нужна прямая ссылка на публикацию или Reel Instagram.",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        string initialAccount;
+        try
+        {
+            var settings = await _settings.LoadAsync();
+            var own = await new InstagramOwnAccountStore(_reader.DatabasePath)
+                .EnsureFromLegacyAsync(settings.InstagramTargetUserName);
+            initialAccount = own?.ReceivingUserName ?? string.Empty;
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Не удалось прочитать Instagram-аккаунт: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(initialAccount))
+        {
+            MessageBox.Show("Сначала укажите свой Instagram-аккаунт в настройках.",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var owner = Window.GetWindow(this);
+        var dialog = new VerifyCompletedTaskDialog(_mainInstagramBrowser, postUrl, initialAccount, task.Text)
+        {
+            Owner = owner
+        };
+        var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+        mainWindow?.ShowDialogOverlay();
+        InstagramTaskVerificationResult? result;
+        try
+        {
+            result = dialog.ShowDialog() == true ? dialog.VerifiedResult : null;
+        }
+        finally { mainWindow?.HideDialogOverlay(); }
+        if (result is null || !result.CanHide) return;
+
+        IsBusy = true;
+        try
+        {
+            await new WorkspaceTaskVerificationStore(_reader.DatabasePath)
+                .PublishAsync(row.Chat, messageId, result);
+            // The cache contains only visible pages. Update global totals by the known delta.
+            row.DetectedCount = Math.Max(0, row.DetectedCount - 1);
+            _totalDetected = Math.Max(0, _totalDetected - 1);
+            Notify(nameof(TotalDetected));
+            Notify(nameof(SelectedChatTaskCount));
+            UpdateSelectedTasks();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show($"Проверка прошла, но не удалось сохранить результат: {exception.Message}",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally { IsBusy = false; NotifyTaskFilter(); }
+    }
+
     private async void HideCompletedTaskButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (IsBusy || _hideStore is null || SelectedChat is null ||
@@ -1853,9 +2160,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         try
         {
             await _hideStore.HideAsync(row.Chat, messageId);
-            _taskCache[row] = items.Where(task => task.MessageId != messageId).ToArray();
-            row.DetectedCount = _taskCache[row].Count(task => !task.IsSkipped);
-            _totalDetected = _taskCache.Sum(pair => pair.Value.Count(task => !task.IsSkipped));
+            // The cache contains only visible pages. Update global totals by the known delta.
+            row.DetectedCount = Math.Max(0, row.DetectedCount - 1);
+            _totalDetected = Math.Max(0, _totalDetected - 1);
             Notify(nameof(TotalDetected));
             Notify(nameof(SelectedChatTaskCount));
             UpdateSelectedTasks();
@@ -1889,11 +2196,10 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             await _skipStore.SetSkippedAsync(row.Chat, messageId, skipped);
             if (_taskCache.TryGetValue(row, out var items))
             {
-                _taskCache[row] = items.Select(task => task.MessageId == messageId
-                    ? task with { IsSkipped = skipped }
-                    : task).ToArray();
-                row.DetectedCount = _taskCache[row].Count(task => !task.IsSkipped);
-                _totalDetected = _taskCache.Sum(pair => pair.Value.Count(task => !task.IsSkipped));
+                // Skipped tasks stay in SQLite. Count changes are independent of the loaded pages.
+                var delta = skipped ? -1 : 1;
+                row.DetectedCount = Math.Max(0, row.DetectedCount + delta);
+                _totalDetected = Math.Max(0, _totalDetected + delta);
                 Notify(nameof(TotalDetected));
                 Notify(nameof(SelectedChatTaskCount));
             }

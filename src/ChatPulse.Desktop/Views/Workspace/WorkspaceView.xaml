@@ -1,4 +1,4 @@
-<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
+﻿<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:ChatPulse.Desktop.Views.Workspace"
@@ -354,6 +354,41 @@
                     <Setter Property="Margin" Value="6,2,2,2" />
                     <Setter Property="Background" Value="Transparent" />
                     <Setter Property="Template" Value="{StaticResource SubscriptionVerticalScrollBarTemplate}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <!-- A fixed-height thumb for the task lists. With a long paged list,
+             the standard proportional thumb shrinks to an almost invisible mark. -->
+        <Style x:Key="TaskListScrollThumb" TargetType="{x:Type Thumb}"
+               BasedOn="{StaticResource SubscriptionScrollThumb}">
+            <Setter Property="Height" Value="80" />
+            <Setter Property="MinHeight" Value="80" />
+        </Style>
+        <ControlTemplate x:Key="TaskListVerticalScrollBarTemplate"
+                         TargetType="{x:Type ScrollBar}">
+            <Grid Background="Transparent" SnapsToDevicePixels="True">
+                <Track x:Name="PART_Track" Orientation="Vertical"
+                       IsDirectionReversed="True" Margin="2"
+                       ViewportSize="NaN">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}"
+                                      Style="{StaticResource SubscriptionScrollPageButton}" />
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb Style="{StaticResource TaskListScrollThumb}" />
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}"
+                                      Style="{StaticResource SubscriptionScrollPageButton}" />
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+        <Style x:Key="TaskListScrollBar" TargetType="{x:Type ScrollBar}"
+               BasedOn="{StaticResource SubscriptionTableScrollBar}">
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Vertical">
+                    <Setter Property="Template" Value="{StaticResource TaskListVerticalScrollBarTemplate}" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -828,6 +863,9 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
+                                <!-- Status stays visible when the task list is scrolled. -->
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0" Text="Задания" Foreground="#24154C" FontSize="21" FontWeight="Bold" />
                             <TextBlock Grid.Row="1" Text="{Binding TaskSummary}" Foreground="#81718F" FontSize="12" Margin="0,6,0,14"
@@ -840,9 +878,22 @@
                                         Style="{StaticResource WorkspaceActionButton}" Opacity="0.6" Margin="0,0,8,0" />
                                 <Button x:Name="SkippedFilterButton" Content="Пропущенные" Click="SkippedFilterButton_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Opacity="0.6" />
+                                <TextBlock Text="Дата сообщения:" Foreground="#81718F" VerticalAlignment="Center"
+                                           Margin="20,0,8,0" />
+                                <ComboBox Width="170" SelectedIndex="0" VerticalAlignment="Center"
+                                          SelectionChanged="TaskDateSort_OnSelectionChanged"
+                                          ToolTip="Порядок сортировки заданий по дате сообщения">
+                                    <ComboBoxItem Content="Сначала новые" />
+                                    <ComboBoxItem Content="Сначала старые" />
+                                </ComboBox>
                             </StackPanel>
-                            <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
+                            <ScrollViewer x:Name="TaskListScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          ScrollChanged="TaskListScroll_OnScrollChanged">
+                                <ScrollViewer.Resources>
+                                    <Style TargetType="{x:Type ScrollBar}"
+                                           BasedOn="{StaticResource TaskListScrollBar}" />
+                                </ScrollViewer.Resources>
                                 <StackPanel>
                                     <TextBlock Text="Загружаем задания…" Foreground="#876FA0" FontSize="13"
                                                HorizontalAlignment="Center" Margin="0,25"
@@ -850,7 +901,7 @@
                                     <TextBlock Text="{Binding EmptyTasksMessage}" Foreground="#827393" FontSize="13"
                                                TextWrapping="Wrap" HorizontalAlignment="Center" Margin="0,30"
                                                Visibility="{Binding HasNoTasks, Converter={StaticResource BoolVisible}}" />
-                                    <ItemsControl ItemsSource="{Binding Tasks}"
+                                    <ItemsControl x:Name="TaskItemsControl" ItemsSource="{Binding Tasks}"
                                                   Visibility="{Binding HasTasks, Converter={StaticResource BoolVisible}}">
                                         <ItemsControl.GroupStyle>
                                             <GroupStyle>
@@ -987,6 +1038,12 @@
                                                                     Visibility="{Binding CanSkip, Converter={StaticResource BoolVisible}}"
                                                                     Click="SkipTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                     Margin="0,0,9,0" />
+                                                            <Button Content="Проверить" Tag="{Binding MessageId}"
+                                                                    Visibility="{Binding CanHideCompleted, Converter={StaticResource BoolVisible}}"
+                                                                    Click="VerifyCompletedTaskButton_OnClick"
+                                                                    Style="{StaticResource WorkspaceActionButton}"
+                                                                    Background="#7545B9" Foreground="White" BorderThickness="0"
+                                                                    Margin="0,0,9,0" />
                                                              <Button Content="Удалить" Tag="{Binding MessageId}"
                                                                      Visibility="{Binding CanHideCompleted, Converter={StaticResource BoolVisible}}"
                                                                      Click="HideCompletedTaskButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
@@ -1010,6 +1067,40 @@
                                     </ItemsControl>
                                 </StackPanel>
                             </ScrollViewer>
+
+                            <!-- Compact Mnemora-style dark loader stays visible outside the
+                                 scrollable task list and never intercepts scrolling/clicks. -->
+                            <Border Grid.Row="4" HorizontalAlignment="Center"
+                                    Margin="0,10,0,2" Padding="20,12"
+                                    Background="#F0061735" BorderBrush="#334A67"
+                                    BorderThickness="1" CornerRadius="12"
+                                    IsHitTestVisible="False"
+                                    Visibility="{Binding IsTaskPageLoading, Converter={StaticResource BoolVisible}}">
+                                <StackPanel HorizontalAlignment="Center" MinWidth="184">
+                                    <ProgressBar Width="96" Height="4" Margin="0,0,0,9"
+                                                 HorizontalAlignment="Center"
+                                                 Background="#8EA2B5" Foreground="#FFFFFF"
+                                                 IsIndeterminate="True" />
+                                    <TextBlock Text="Подгружаем сообщения…" Foreground="#FFFFFF"
+                                               FontSize="12" FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Loading errors remain visible even after the list is scrolled. -->
+                            <Border Grid.Row="5" Margin="0,10,0,2" Padding="14,12"
+                                    Background="#FCF4F7" BorderBrush="#F0DCE5"
+                                    BorderThickness="1" CornerRadius="10"
+                                    Visibility="{Binding HasTaskPageError, Converter={StaticResource BoolVisible}}">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <TextBlock Text="{Binding TaskPageError}" Foreground="#BB496A"
+                                               FontSize="12" TextWrapping="Wrap" MaxWidth="500"
+                                               TextAlignment="Center" />
+                                    <Button Content="Повторить" Click="RetryTaskPageButton_OnClick"
+                                            Style="{StaticResource WorkspaceActionButton}" Margin="0,10,0,0"
+                                            HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
                         </Grid>
                     </Border>
 
@@ -1408,35 +1499,43 @@
                     <Border Style="{StaticResource PanelCard}" Margin="0,0,0,16">
                         <StackPanel>
                             <TextBlock Text="Instagram-аккаунты" FontSize="18" FontWeight="SemiBold" Foreground="#24154C" />
-                            <TextBlock Text="Мой основной профиль — получаю актив и проверяю подписки" Foreground="#655478"
-                                       Margin="0,14,0,5" />
+                            <TextBlock Text="Основной профиль — получаю актив, проверяю подписки и свои действия"
+                                       Foreground="#655478" Margin="0,14,0,5" TextWrapping="Wrap" />
                             <TextBox x:Name="InstagramTargetBox" FontSize="14" Padding="10,8"
-                                     ToolTip="Имя профиля без @" />
-                            <TextBlock Text="Резервный профиль — могу давать актив с другой страницы (необязательно)"
-                                       Foreground="#655478" Margin="0,14,0,5" TextWrapping="Wrap" />
-                            <TextBox x:Name="InstagramGiveFromBox" FontSize="14" Padding="10,8"
-                                     ToolTip="Можно оставить пустым. Имя профиля без @" />
-                            <TextBlock Text="Аккаунт Selenium — только для автоматической проверки (основной или запасной)"
-                                       Foreground="#655478" Margin="0,14,0,5" TextWrapping="Wrap" />
-                            <TextBox x:Name="InstagramBrowserBox" FontSize="14" Padding="10,8"
-                                     ToolTip="Имя профиля без @" />
-                            <TextBlock Text="Собственные профили сохраняются в SQLite. Аккаунт Selenium не переключается при смене резервного профиля. Вход выполняется вручную в отдельном Chrome, пароль не сохраняется."
-                                       Foreground="#81718F" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,12" />
-                            <WrapPanel>
-                                <Button Content="Сохранить" Click="SaveInstagramButton_OnClick"
+                                     ToolTip="Username основного профиля без @" />
+                            <WrapPanel Margin="0,9,0,0">
+                                <Button Content="Открыть основной" Click="OpenMainInstagram_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
                                         IsEnabled="{Binding CanUseInstagram}" />
-                                <Button Content="Открыть Instagram" Click="InstagramLoginButton_OnClick"
+                                <Button Content="Проверить основную сессию" Click="CheckMainInstagram_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
                                         IsEnabled="{Binding CanUseInstagram}" />
-                                <Button Content="Проверить сессию" Click="CheckInstagramButton_OnClick"
-                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
-                                        IsEnabled="{Binding CanUseInstagram}" />
-
-                                <Button Content="Сбросить сессию" Click="ResetInstagramButton_OnClick"
+                                <Button Content="Сбросить основную сессию" Click="ResetMainInstagram_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
                                         IsEnabled="{Binding CanUseInstagram}" />
                             </WrapPanel>
+                            <TextBlock Text="Резервный профиль — отчёты по реакциям на мои публикации"
+                                       Foreground="#655478" Margin="0,14,0,5" TextWrapping="Wrap" />
+                            <TextBox x:Name="InstagramGiveFromBox" FontSize="14" Padding="10,8"
+                                     ToolTip="Username резервного профиля без @" />
+                            <WrapPanel Margin="0,9,0,0">
+                                <Button Content="Открыть резервный" Click="InstagramLoginButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
+                                        IsEnabled="{Binding CanUseInstagram}" />
+                                <Button Content="Проверить резервную сессию" Click="CheckInstagramButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
+                                        IsEnabled="{Binding CanUseInstagram}" />
+                                <Button Content="Сбросить резервную сессию" Click="ResetInstagramButton_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}" Margin="0,0,8,8"
+                                        IsEnabled="{Binding CanUseInstagram}" />
+                            </WrapPanel>
+                            <TextBlock Text="{Binding InstagramStatus}" TextWrapping="Wrap"
+                                       Foreground="#75499F" FontSize="12" Margin="0,7,0,8" />
+                            <TextBlock Text="Два отдельных Chrome-профиля. Авторизация выполняется вручную; пароли не сохраняются. Старая сессия Selenium остаётся резервной. Сброс одного профиля не затрагивает другой."
+                                       Foreground="#81718F" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,12" />
+                            <Button Content="Сохранить аккаунты" Click="SaveInstagramButton_OnClick"
+                                    Style="{StaticResource WorkspaceActionButton}" HorizontalAlignment="Left"
+                                    IsEnabled="{Binding CanUseInstagram}" />
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource PanelCard}" Margin="0,0,0,16">

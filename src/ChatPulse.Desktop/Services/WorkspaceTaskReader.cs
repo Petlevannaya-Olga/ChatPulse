@@ -15,8 +15,22 @@ public sealed class WorkspaceTaskReader(string databasePath)
     public async Task<IReadOnlyList<WorkspaceDetectedTask>> GetTasksAsync(
         ConfiguredChat chat, CancellationToken cancellationToken = default)
     {
+        var result = await ReadPageAsync(chat, WorkspaceTaskState.All, false, 0, int.MaxValue,
+            cancellationToken).ConfigureAwait(false);
+        // Preserve the original ordering contract for existing consumers/tests.
+        return result.Tasks.OrderBy(task => task.MessageId).ToArray();
+    }
+
+    // Classification must happen before offsetting: a message with a URL is not always a task.
+    // The database cursor is streamed; only the requested page is retained in managed memory.
+    public async Task<WorkspaceTaskPage> ReadPageAsync(ConfiguredChat chat, WorkspaceTaskState state,
+        bool oldestFirst, int offset, int pageSize, CancellationToken cancellationToken = default,
+        bool includeTotals = true)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(pageSize);
         ArgumentNullException.ThrowIfNull(chat);
-        if (!File.Exists(databasePath)) return [];
+        if (!File.Exists(databasePath)) return new WorkspaceTaskPage([], 0, 0);
 
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -27,7 +41,7 @@ public sealed class WorkspaceTaskReader(string databasePath)
 
         var exists = connection.CreateCommand();
         exists.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedChatMessages'";
-        if ((long)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) == 0) return [];
+        if ((long)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) == 0) return new WorkspaceTaskPage([], 0, 0);
 
         var stateTable = connection.CreateCommand();
         stateTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageReactionStates'";
@@ -101,7 +115,9 @@ public sealed class WorkspaceTaskReader(string databasePath)
             {skipJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             {hiddenPredicate}
-            ORDER BY message.MessageId ASC
+            ORDER BY CASE WHEN {timestampColumn} IS NULL THEN 1 ELSE 0 END ASC,
+                     {timestampColumn} {(oldestFirst ? "ASC" : "DESC")},
+                     message.MessageId {(oldestFirst ? "ASC" : "DESC")}
             """;
         command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
         command.Parameters.AddWithValue("$peerType", chat.PeerType);
@@ -113,7 +129,9 @@ public sealed class WorkspaceTaskReader(string databasePath)
             ? new Chat14ParticipantHistoryParser()
             : new StandardParticipantHistoryParser(
                 string.Equals(chat.SocialNetwork, "Instagram", StringComparison.OrdinalIgnoreCase));
-        var tasks = new List<WorkspaceDetectedTask>();
+        var tasks = new List<WorkspaceDetectedTask>(Math.Min(pageSize, 256));
+        var matchingCount = 0;
+        var nonSkippedCount = 0;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -131,13 +149,30 @@ public sealed class WorkspaceTaskReader(string databasePath)
             var authorName = reader.IsDBNull(3) ? "Автор неизвестен" : reader.GetString(3);
             DateTimeOffset? sentAt = reader.IsDBNull(5)
                 ? null : DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5));
-            tasks.Add(new WorkspaceDetectedTask(messageId, messageText, postUrl,
+            var task = new WorkspaceDetectedTask(messageId, messageText, postUrl,
                 !reader.IsDBNull(2) && reader.GetInt64(2) == 1, authorName, sourceUrl,
-                reader.IsDBNull(4) ? string.Empty : reader.GetString(4), sentAt, reader.GetInt64(6) == 1));
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4), sentAt, reader.GetInt64(6) == 1);
+            if (!task.IsSkipped) nonSkippedCount++;
+            var matches = state switch
+            {
+                WorkspaceTaskState.Pending => !task.IsSkipped && !task.IsCompleted,
+                WorkspaceTaskState.Completed => !task.IsSkipped && task.IsCompleted,
+                WorkspaceTaskState.Skipped => task.IsSkipped,
+                _ => true
+            };
+            if (!matches) continue;
+            if (matchingCount >= offset && tasks.Count < pageSize)
+                tasks.Add(task);
+            matchingCount++;
+            if (!includeTotals && matchingCount >= (long)offset + pageSize) break;
         }
-        return tasks;
+        return new WorkspaceTaskPage(tasks, matchingCount, nonSkippedCount);
     }
 }
+
+public enum WorkspaceTaskState { All, Pending, Completed, Skipped }
+
+public sealed record WorkspaceTaskPage(IReadOnlyList<WorkspaceDetectedTask> Tasks, int Total, int NonSkippedTotal);
 
 public sealed record WorkspaceDetectedTask(long MessageId, string Text, string PostUrl,
     bool IsCompleted = false, string AuthorName = "Автор неизвестен", string SourceUrl = "", string CustomEmojiJson = "", DateTimeOffset? SentAtUtc = null, bool IsSkipped = false);

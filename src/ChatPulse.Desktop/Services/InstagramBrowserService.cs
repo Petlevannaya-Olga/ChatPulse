@@ -1,9 +1,10 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.IO;
 using System.Diagnostics;
 using ChatPulse.Desktop.Settings;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.Interactions;
 
 namespace ChatPulse.Desktop.Services;
 
@@ -47,6 +48,33 @@ public sealed class InstagramBrowserService : IDisposable
             {
                 _driver.Navigate().GoToUrl("https://www.instagram.com/");
                 return _driver.Manage().Cookies.GetCookieNamed("sessionid") is not null;
+            }, cancellationToken);
+        }
+        catch (WebDriverException) { return false; }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Confirms the active account using its own navigation link, not a cookie alone.</summary>
+    public async Task<bool> IsLoggedInAsAsync(string userName,
+        CancellationToken cancellationToken = default)
+    {
+        var expected = InstagramUserName.Normalize(userName);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return await Task.Run(() =>
+            {
+                var driver = GetDriver();
+                driver.Navigate().GoToUrl("https://www.instagram.com/");
+                if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null) return false;
+                for (var attempt = 0; attempt < 20; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (IsCurrentInstagramAccount(driver, expected)) return true;
+                    WaitWithCancellation(250, cancellationToken);
+                }
+                return ConfirmAccountThroughProfileNavigation(driver, expected, cancellationToken);
             }, cancellationToken);
         }
         catch (WebDriverException) { return false; }
@@ -176,6 +204,1471 @@ public sealed class InstagramBrowserService : IDisposable
             }, cancellationToken);
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Best-effort browser verification of the user's own activity on a public Instagram post.
+    /// Only exact observed usernames can produce CONFIRMED; scrolling limits, absent UI and
+    /// missing results are INCONCLUSIVE. Browser selectors require live Instagram testing.
+    /// </summary>
+    public async Task<InstagramTaskVerificationResult> CheckTaskActivityAsync(
+        string postUrl, string userName, bool checkLike, bool checkComment,
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        string? postAuthorUserName = null, bool checkSave = false, bool checkRepost = false)
+    {
+        if (!checkLike && !checkComment && !checkSave && !checkRepost)
+            throw new ArgumentException("Выберите хотя бы один вид проверки.");
+        if (!InstagramTaskVerificationRules.TryGetPostUrl(postUrl, out var url))
+            throw new ArgumentException("Нужна ссылка на публикацию или Reel Instagram.", nameof(postUrl));
+        var user = InstagramUserName.Normalize(userName);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return await Task.Run(() =>
+            {
+                var driver = GetDriver();
+                driver.Navigate().GoToUrl("https://www.instagram.com/");
+                if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
+                    throw new InvalidOperationException("В Chrome необходимо войти в Instagram.");
+                // Session cookie alone does not identify the account. Read the
+                // logged-in profile link in Instagram's navigation before trusting
+                // any state that would cause a task to be hidden.
+                var accountConfirmed = false;
+                for (var attempt = 0; attempt < 20; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (IsCurrentInstagramAccount(driver, user))
+                    {
+                        accountConfirmed = true;
+                        break;
+                    }
+                    WaitWithCancellation(250, cancellationToken);
+                }
+                if (!accountConfirmed)
+                    accountConfirmed = ConfirmAccountThroughProfileNavigation(driver, user, cancellationToken);
+                if (!accountConfirmed)
+                {
+                    var uncertain = InstagramTaskCheckResult.Inconclusive(
+                        $"Не удалось подтвердить, что Chrome авторизован как @{user}. " +
+                        "Откройте Instagram под основным аккаунтом и повторите проверку. " +
+                        DescribeAccountNavigation(driver, user));
+                    return new InstagramTaskVerificationResult(user, url,
+                        checkLike ? uncertain : null, checkComment ? uncertain : null,
+                        checkSave ? uncertain : null, checkRepost ? uncertain : null);
+                }
+
+                InstagramTaskCheckResult? like = null;
+                InstagramTaskCheckResult? comment = null;
+                InstagramTaskCheckResult? save = null;
+                InstagramTaskCheckResult? repost = null;
+                // All checks are read-only: never press a like, bookmark or repost
+                // action just to determine whether it is active.
+                if (checkLike || checkSave || checkRepost)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report("Считываем состояние действий на публикации…");
+                    driver.Navigate().GoToUrl(url);
+                    WaitFor(driver, () => driver.FindElements(By.CssSelector("article, main"))
+                        .FirstOrDefault(element => element.Displayed), cancellationToken);
+                    if (checkLike)
+                    {
+                        // Allow Instagram to render the action toolbar asynchronously.
+                        // A visible SVG is not evidence until its state is readable.
+                        for (var attempt = 0; attempt < 12; attempt++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            like = CheckOwnPostAction(driver, "like", user);
+                            if (like.Status == InstagramTaskCheckStatus.CONFIRMED) break;
+                            WaitWithCancellation(250, cancellationToken);
+                        }
+                    }
+                    if (checkSave)
+                    {
+                        for (var attempt = 0; attempt < 12; attempt++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            save = CheckOwnPostAction(driver, "save", user);
+                            if (save.Status == InstagramTaskCheckStatus.CONFIRMED) break;
+                            WaitWithCancellation(250, cancellationToken);
+                        }
+                    }
+                    if (checkRepost)
+                    {
+                        for (var attempt = 0; attempt < 12; attempt++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            repost = CheckOwnPostAction(driver, "repost", user);
+                            if (repost.Status == InstagramTaskCheckStatus.CONFIRMED) break;
+                            WaitWithCancellation(250, cancellationToken);
+                        }
+                    }
+                }
+                if (checkComment)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report("Ищем ваш комментарий под публикацией…");
+                    comment = CheckDirectPostComment(driver, url, user, progress, cancellationToken);
+                }
+                return new InstagramTaskVerificationResult(user, url, like, comment, save, repost);
+            }, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private static bool IsCurrentInstagramAccount(ChromeDriver driver, string userName)
+    {
+        try
+        {
+            // A post can link to any user's profile. Only the application's own
+            // Profile navigation control is admissible evidence of the signed-in user.
+            // Instagram does not always mark the sidebar as nav/aside.
+            foreach (var link in driver.FindElements(By.CssSelector("a[href]")))
+            {
+                if (!InstagramTaskVerificationRules.IsExactProfileLink(
+                        link.GetAttribute("href"), userName) || !link.Displayed)
+                    continue;
+
+                var inNavigation = (bool)((IJavaScriptExecutor)driver).ExecuteScript(
+                    "return !!arguments[0].closest('nav, aside, [role=\"navigation\"]');", link);
+                if (inNavigation) return true;
+
+                var labels = new List<string>
+                {
+                    link.GetAttribute("aria-label") ?? string.Empty,
+                    link.GetAttribute("title") ?? string.Empty,
+                    link.Text
+                };
+                labels.AddRange(link.FindElements(By.CssSelector(
+                    "svg[aria-label], [role='img'][aria-label], img[alt]"))
+                    .Select(element => element.GetAttribute("aria-label") ??
+                        element.GetAttribute("alt") ?? string.Empty));
+
+                if (labels.Any(label => string.Equals(label.Trim(), "Profile",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(label.Trim(), "Профиль", StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+            return false;
+        }
+        catch (StaleElementReferenceException) { return false; }
+        catch (WebDriverException) { return false; }
+    }
+
+    /// <summary>
+    /// Opens only the Instagram navigation control labelled Profile. The resulting
+    /// URL must match the expected username; arbitrary profile links in posts are
+    /// not considered proof of the signed-in identity.
+    /// </summary>
+    private static bool ConfirmAccountThroughProfileNavigation(ChromeDriver driver,
+        string expectedUserName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var profileControl = ((IJavaScriptExecutor)driver).ExecuteScript("""
+                const labels = new Set(['profile', 'профиль']);
+                const visible = element => {
+                    const r = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+                    return r.width > 0 && r.height > 0 &&
+                        style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const normalize = value => (value || '').trim().toLowerCase();
+                const nodes = document.querySelectorAll(
+                    'a, button, [role="button"], [aria-label], svg[aria-label], img[alt], span');
+                for (const node of nodes) {
+                    const labelsOnNode = [node.getAttribute('aria-label'),
+                        node.getAttribute('title'), node.getAttribute('alt')];
+                    // In some layouts Profile is the text of a nested span rather
+                    // than the link or SVG accessibility label.
+                    if (node.tagName.toLowerCase() === 'span')
+                        labelsOnNode.push(node.textContent);
+                    if (!labelsOnNode.some(value => labels.has(normalize(value)))) continue;
+                    const control = node.closest('a, button, [role="button"]');
+                    if (control && visible(control)) return control;
+                }
+                return null;
+                """) as IWebElement;
+            if (profileControl is null) return false;
+            profileControl.Click();
+            for (var attempt = 0; attempt < 24; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (InstagramTaskVerificationRules.IsExactProfileLink(
+                        driver.Url, expectedUserName)) return true;
+                var observed = InstagramActivityProfile.TryGetUserName(driver.Url);
+                if (observed is not null && !string.Equals(observed, expectedUserName,
+                        StringComparison.OrdinalIgnoreCase)) return false;
+                WaitWithCancellation(250, cancellationToken);
+            }
+            return false;
+        }
+        catch (StaleElementReferenceException) { return false; }
+        catch (WebDriverException) { return false; }
+    }
+
+    /// <summary>Read-only diagnostics; does not expose cookies or profile data.</summary>
+    private static string DescribeAccountNavigation(ChromeDriver driver, string userName)
+    {
+        try
+        {
+            var info = ((IJavaScriptExecutor)driver).ExecuteScript("""
+                const expected = arguments[0].toLowerCase();
+                const visible = node => {
+                    const r = node.getBoundingClientRect();
+                    const style = getComputedStyle(node);
+                    return r.width > 0 && r.height > 0 &&
+                        style.display !== 'none' && style.visibility !== 'hidden';
+                };
+                const anchors = [...document.querySelectorAll('a[href]')];
+                const profileLinks = anchors.filter(a => {
+                    try {
+                        const u = new URL(a.href, location.href);
+                        return u.hostname === 'www.instagram.com' &&
+                            u.pathname.replace(/^\/+|\/+$/g, '').toLowerCase() === expected;
+                    } catch { return false; }
+                });
+                const labels = new Set(['profile', 'профиль']);
+                const controls = [...document.querySelectorAll(
+                    'a, button, [role="button"], [aria-label], svg[aria-label], span')];
+                const labelled = controls.filter(node => {
+                    const raw = [node.getAttribute('aria-label'), node.getAttribute('title')];
+                    if (node.tagName.toLowerCase() === 'span') raw.push(node.textContent);
+                    return raw.some(x => labels.has((x || '').trim().toLowerCase()));
+                });
+                return 'совпадающих ссылок=' + profileLinks.length +
+                    ', видимых=' + profileLinks.filter(visible).length +
+                    ', элементов «Профиль»=' + labelled.length +
+                    ', видимых кнопок=' + labelled.filter(n => {
+                        const b = n.closest('a, button, [role="button"]');
+                        return b && visible(b);
+                    }).length;
+                """, userName) as string;
+            return "Диагностика меню: " + (info ?? "данные недоступны") + ".";
+        }
+        catch (WebDriverException)
+        {
+            return "Диагностика меню недоступна: страница изменилась.";
+        }
+    }
+
+    private static InstagramTaskCheckResult CheckOwnPostAction(
+        ChromeDriver driver, string action, string userName)
+    {
+        try
+        {
+            // Instagram may keep dozens of post toolbars in the DOM. Finding an
+            // icon by aria-label on the entire document is not enough to prove
+            // which publication it belongs to. Resolve a single post container
+            // first, preferably using the shortcode from the requested URL.
+            var labels = ((IJavaScriptExecutor)driver).ExecuteScript("""
+                const action = arguments[0];
+                const requestedUrl = arguments[1];
+                const shortcodeOf = url => {
+                    try {
+                        const path = new URL(url, location.href).pathname;
+                        const match = path.match(/^\/(?:p|reel|reels)\/([^/]+)\/?/i);
+                        return match ? match[1].toLowerCase() : null;
+                    } catch { return null; }
+                };
+                const wanted = shortcodeOf(requestedUrl);
+                const visible = node => {
+                    if (!node || !node.isConnected) return false;
+                    const r = node.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) return false;
+                    if (r.bottom <= 0 || r.top >= innerHeight ||
+                        r.right <= 0 || r.left >= innerWidth) return false;
+                    for (let el = node; el && el.nodeType === 1; el = el.parentElement) {
+                        const style = getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden' ||
+                            style.opacity === '0') return false;
+                    }
+                    return true;
+                };
+                const names = {
+                    like: ['Like', 'Unlike', 'Нравится', 'Не нравится', 'Больше не нравится'],
+                    save: ['Save', 'Unsave', 'Remove from saved', 'Сохранить', 'Удалить',
+                           'Удалить из сохраненного', 'Удалить из сохранённого', 'Убрать из сохраненного', 'Убрать из сохранённого'],
+                    repost: ['Repost', 'Remove repost', 'Undo repost', 'Репост',
+                             'Сделать репост', 'Отменить репост', 'Удалить репост']
+                };
+                const accepted = new Set(names[action] || []);
+                // On this Instagram layout the repost icon keeps the SAME accessible
+                // label in both states. Distinguish the two supplied SVG paths, not
+                // the aggregate repost count or the CSS classes.
+                const observedState = svg => {
+                    const label = svg.getAttribute('aria-label') || '';
+                    const path = svg.querySelector('path')?.getAttribute('d') || '';
+                    if (action === 'repost' && label === 'Сделать репост') {
+                        if (path.startsWith('M16 6.001') && path.includes('-3.905 3.906'))
+                            return '__REPOST_ACTIVE__';
+                        if (path.startsWith('M19.998 9.497') && path.includes('-6.41-3.496'))
+                            return '__REPOST_INACTIVE__';
+                        return '__REPOST_UNKNOWN__';
+                    }
+                    if (action === 'save' && label === 'Удалить') {
+                        // "Удалить" alone is not evidence: the icon must be the
+                        // specific filled bookmark from the supplied markup.
+                        if (svg.getAttribute('viewBox') === '0 0 24 24' &&
+                            path.startsWith('M20 22') && path.includes('12 14.815'))
+                            return '__SAVE_ACTIVE__';
+                        return '__SAVE_UNKNOWN__';
+                    }
+                    return label;
+                };
+                const hasPermalink = container => [...container.querySelectorAll('a[href]')]
+                    .some(a => shortcodeOf(a.href) === wanted);
+                const articles = [...document.querySelectorAll('article')].filter(visible);
+                const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(visible);
+                // A permalink inside a post can identify its article, even when
+                // Instagram renders multiple other articles in the background.
+                const linkedArticles = wanted ? articles.filter(hasPermalink) : [];
+                const linkedDialogs = wanted ? dialogs.filter(hasPermalink) : [];
+                let root = null;
+                if (linkedArticles.length === 1) root = linkedArticles[0];
+                else if (!linkedArticles.length && linkedDialogs.length === 1)
+                    root = linkedDialogs[0];
+                else if (!linkedArticles.length && !linkedDialogs.length &&
+                         articles.length === 1 && !dialogs.length &&
+                         shortcodeOf(location.href) === wanted)
+                    root = articles[0];
+                else if (!linkedArticles.length && !linkedDialogs.length &&
+                         dialogs.length === 1 && !articles.length &&
+                         shortcodeOf(location.href) === wanted)
+                    root = dialogs[0];
+                if (!root && wanted &&
+                    shortcodeOf(location.href) === wanted) {
+                    // Direct post/Reels can omit article/dialog. Associate the action
+                    // with one dominant visible media item, never with feed icons.
+                    const rectOf = node => node.getBoundingClientRect();
+                    const media = [...document.querySelectorAll('video, img')]
+                        .filter(visible)
+                        .map(node => ({ node, rect: rectOf(node) }))
+                        .filter(item => item.rect.width >= 220 && item.rect.height >= 220 &&
+                            item.rect.width * item.rect.height >= 65000 &&
+                            !item.node.closest('nav, aside, header, [role="navigation"]'))
+                        .sort((a, b) => b.rect.width * b.rect.height -
+                            a.rect.width * a.rect.height);
+                    const actionIcons = [...document.querySelectorAll('svg[aria-label]')]
+                        .filter(svg => visible(svg) && accepted.has(svg.getAttribute('aria-label')) &&
+                            !svg.closest('nav, aside, header, [role="navigation"]'));
+                    if (media.length && actionIcons.length) {
+                        const mainMedia = media[0].rect;
+                        const cx = mainMedia.left + mainMedia.width / 2;
+                        const cy = mainMedia.top + mainMedia.height / 2;
+                        const distance = rect => {
+                            const x = rect.left + rect.width / 2;
+                            const y = rect.top + rect.height / 2;
+                            return Math.hypot(x - cx, y - cy);
+                        };
+                        // A second similarly sized media is ambiguous: this might
+                        // be a feed/carousel instead of the requested single post.
+                        const otherBigMedia = media.slice(1).some(item =>
+                            item.rect.width * item.rect.height >=
+                            mainMedia.width * mainMedia.height * 0.85 &&
+                            distance(item.rect) > 160);
+                        if (!otherBigMedia) {
+                            const candidates = actionIcons.map(svg => {
+                                const r = rectOf(svg);
+                                // Distance from the heart to the media rectangle.
+                                const x = r.left + r.width / 2;
+                                const y = r.top + r.height / 2;
+                                const dx = Math.max(mainMedia.left - x, 0,
+                                    x - mainMedia.right);
+                                const dy = Math.max(mainMedia.top - y, 0,
+                                    y - mainMedia.bottom);
+                                return { svg, distance: Math.hypot(dx, dy) };
+                            }).filter(item => item.distance <= 240)
+                              .sort((a, b) => a.distance - b.distance);
+                            if (candidates.length === 1 ||
+                                (candidates.length > 1 &&
+                                 candidates[1].distance - candidates[0].distance > 120)) {
+                                return [observedState(candidates[0].svg)];
+                            }
+                        }
+                    }
+                    // The open post may contain two equally sized media elements
+                    // (for example a Reel cover and its video). In that case the
+                    // media-only heuristic is ambiguous. For save/repost, anchor to
+                    // the *single visible post-sized like control* in the same
+                    // action toolbar. Comment hearts are normally 16px and must
+                    // never be used as the post anchor.
+                    if (action === 'save' || action === 'repost') {
+                        const mainHearts = [...document.querySelectorAll('svg[aria-label]')]
+                            .filter(svg => visible(svg) &&
+                                ['Нравится', 'Не нравится', 'Like', 'Unlike',
+                                 'Больше не нравится'].includes(svg.getAttribute('aria-label')) &&
+                                !svg.closest('nav, aside, header, [role="navigation"]'))
+                            .filter(svg => {
+                                const r = svg.getBoundingClientRect();
+                                return r.width >= 22 && r.height >= 22;
+                            });
+                        if (mainHearts.length === 1 && actionIcons.length) {
+                            const h = mainHearts[0].getBoundingClientRect();
+                            const hx = h.left + h.width / 2;
+                            const hy = h.top + h.height / 2;
+                            const nearby = actionIcons.map(svg => {
+                                const r = svg.getBoundingClientRect();
+                                const dx = r.left + r.width / 2 - hx;
+                                const dy = r.top + r.height / 2 - hy;
+                                return { svg, distance: Math.hypot(dx, dy),
+                                    dx: Math.abs(dx), dy: Math.abs(dy) };
+                            }).filter(item => item.distance <= 300 &&
+                                // Post controls form a horizontal row or a
+                                // vertical rail in different Instagram layouts.
+                                (item.dy <= 90 || item.dx <= 90))
+                              .sort((a, b) => a.distance - b.distance);
+                            // A small difference between the two nearest buttons
+                            // cannot prove which one belongs to the current post.
+                            if (nearby.length === 1 ||
+                                (nearby.length > 1 &&
+                                 nearby[1].distance - nearby[0].distance > 90))
+                                return [observedState(nearby[0].svg)];
+                        }
+                    }
+                    return ['__NO_SCOPE__|articles=' + articles.length +
+                        ', dialogs=' + dialogs.length + ', visibleActions=' + actionIcons.length +
+                        ', visibleMedia=' + media.length + ', scope=ambiguous'];
+                }
+                if (!root) return ['__NO_SCOPE__|articles=' + articles.length +
+                    ', dialogs=' + dialogs.length + ', matchingArticles=' +
+                    linkedArticles.length + ', matchingDialogs=' + linkedDialogs.length];
+                return [...root.querySelectorAll('svg[aria-label]')]
+                    .filter(svg => visible(svg) && accepted.has(svg.getAttribute('aria-label')))
+                    .filter(svg => !svg.closest('nav, aside, header, [role="navigation"]'))
+                    .map(observedState);
+                """, action, driver.Url) as System.Collections.ObjectModel.ReadOnlyCollection<object>;
+            var labelValues = labels?.OfType<string>().ToArray() ?? [];
+            if (labelValues.Length == 1 && labelValues[0].StartsWith("__NO_SCOPE__|", StringComparison.Ordinal))
+                return InstagramTaskCheckResult.Inconclusive(
+                    "Не удалось однозначно определить контейнер проверяемой публикации: " +
+                    labelValues[0]["__NO_SCOPE__|".Length..] + ".");
+            var (active, inactive, title) = action switch
+            {
+                "like" => (new[] { "Unlike", "Больше не нравится", "Не нравится" },
+                    new[] { "Like", "Нравится" }, "Лайк"),
+                "save" => (new[] { "__SAVE_ACTIVE__", "Remove from saved", "Unsave", "Удалить из сохраненного", "Удалить из сохранённого", "Убрать из сохраненного", "Убрать из сохранённого" },
+                    new[] { "Save", "Сохранить" }, "Сохранение"),
+                "repost" => (new[] { "__REPOST_ACTIVE__", "Remove repost", "Undo repost", "Отменить репост", "Удалить репост" },
+                    new[] { "__REPOST_INACTIVE__", "Repost", "Репост" }, "Репост"),
+                _ => throw new ArgumentOutOfRangeException(nameof(action))
+            };
+            // Multiple matching buttons can belong to distinct posts or overlays.
+            // Require exactly one indicator: never hide a task on ambiguous DOM.
+            if (labelValues.Length != 1)
+                return InstagramTaskCheckResult.Inconclusive(
+                    $"{title}: найдено индикаторов состояния: {labelValues.Length}. " +
+                    "Невозможно однозначно определить состояние нужной публикации.");
+            var observed = labelValues[0];
+            if (active.Contains(observed, StringComparer.OrdinalIgnoreCase))
+                return InstagramTaskCheckResult.Confirmed($"{title} @{userName} подтверждён по активному состоянию.");
+            if (inactive.Contains(observed, StringComparer.OrdinalIgnoreCase))
+                return InstagramTaskCheckResult.Inconclusive(
+                    observed == "__REPOST_INACTIVE__"
+                        ? "Репост: обнаружена неактивная иконка. Репост не подтверждён."
+                        : $"{title}: на публикации доступно действие «{observed}», но оно не подтверждено.");
+            return InstagramTaskCheckResult.Inconclusive(
+                $"{title}: Instagram не показал однозначный индикатор состояния.");
+        }
+        catch (WebDriverException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive(
+                $"{action}: ошибка чтения состояния Instagram: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Diagnostic-only probe: attempts to open the likes list without scrolling it,
+    /// inspecting account activity or modifying the task/reaction.
+    /// </summary>
+    public async Task<string> InspectPostLikesDialogAsync(string postUrl,
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        if (!InstagramTaskVerificationRules.TryGetPostUrl(postUrl, out var url))
+            throw new ArgumentException("Нужна ссылка на публикацию или Reel Instagram.", nameof(postUrl));
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return await Task.Run(() =>
+            {
+                var driver = GetDriver();
+                driver.Navigate().GoToUrl("https://www.instagram.com/");
+                if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
+                    return "Нет активной сессии Instagram в Chrome ChatPulse.";
+                cancellationToken.ThrowIfCancellationRequested();
+                progress?.Report("Открываем публикацию Instagram…");
+                driver.Navigate().GoToUrl(url);
+
+                var trigger = WaitFor(driver, () => FindPostLikesTrigger(driver), cancellationToken);
+                if (trigger is null)
+                    return "Счётчик лайков не найден. " + DescribeLikesTriggerState(driver);
+
+                var existingDialogs = GetVisibleLikesDialogCandidates(driver).ToArray();
+                progress?.Report("Счётчик найден, пытаемся открыть список лайков…");
+                if (!TryOpenPostLikes(driver, existingDialogs, cancellationToken, out var clickError))
+                    return clickError + " " + DescribeLikesTriggerState(driver);
+
+                // Do not confuse an unrelated existing dialog with a likes list.
+                for (var attempt = 0; attempt < 20; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var dialog = FindPostLikesDialog(driver, existingDialogs);
+                    if (dialog is not null)
+                    {
+                        var profiles = dialog.FindElements(By.CssSelector("a[href]"))
+                            .Count(link => IsInstagramProfileHref(link.GetAttribute("href")));
+                        return $"Список лайков открылся. Видимых ссылок на профили: {profiles}. " +
+                            "Прокрутка не выполнялась, отметка задания не менялась.";
+                    }
+                    WaitWithCancellation(250, cancellationToken);
+                }
+                return "После нажатия список лайков не подтверждён. " +
+                    DescribeLikesTriggerState(driver);
+            }, cancellationToken);
+        }
+        catch (WebDriverException exception)
+        {
+            return $"Ошибка браузера Instagram при открытии списка: {exception.Message}";
+        }
+        finally { _gate.Release(); }
+    }
+
+    private static string DescribeLikesTriggerState(ChromeDriver driver)
+    {
+        // Only aggregate diagnostics; do not include account names or page HTML.
+        var candidates = driver.FindElements(By.CssSelector(
+            "main a[href*='liked_by'], main button, main [role='button'], article button"));
+        var labelled = candidates.Count(element =>
+        {
+            try
+            {
+                return element.Displayed && InstagramTaskVerificationRules.IsLikesCounterLabel(
+                    element.Text + " " + element.GetAttribute("aria-label"));
+            }
+            catch (StaleElementReferenceException) { return false; }
+        });
+        return $"Видимых кандидатов со счётчиком лайков: {labelled}; " +
+            $"всего исследованных элементов: {candidates.Count}.";
+    }
+
+    private static InstagramTaskCheckResult CheckPostLike(ChromeDriver driver, string url,
+        string user, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        try
+        {
+            driver.Navigate().GoToUrl(url);
+            var existingDialogs = GetVisibleLikesDialogCandidates(driver).ToArray();
+            var trigger = WaitFor(driver, () => FindPostLikesTrigger(driver), cancellationToken);
+            if (trigger is null)
+                return InstagramTaskCheckResult.Inconclusive(
+                    "Instagram не показал доступную ссылку на список лайков.");
+            if (!TryOpenPostLikes(driver, existingDialogs, cancellationToken, out var clickError))
+                return InstagramTaskCheckResult.Inconclusive(clickError);
+            var dialog = WaitFor(driver, () => FindPostLikesDialog(driver, existingDialogs), cancellationToken);
+            if (dialog is null)
+                return InstagramTaskCheckResult.Inconclusive(
+                    "После нажатия список лайков не подтверждён: Instagram мог изменить разметку или ограничить доступ.");
+            for (var scroll = 0; scroll <= InstagramTaskVerificationRules.MAX_LIKE_SCROLLS; scroll++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Instagram replaces list nodes during lazy loading. Never reuse
+                // an IWebElement acquired before the previous scroll.
+                dialog = FindPostLikesDialog(driver, existingDialogs);
+                if (dialog is null)
+                    return InstagramTaskCheckResult.Inconclusive(
+                        "Окно лайков исчезло или перерисовывается во время проверки.");
+                try
+                {
+                    if (HasExactUserLink(dialog, user))
+                        return InstagramTaskCheckResult.Confirmed($"Лайк @{user} найден.");
+                }
+                catch (StaleElementReferenceException)
+                {
+                    // The next iteration must locate the fresh dialog.
+                    dialog = FindPostLikesDialog(driver, existingDialogs);
+                    if (dialog is null)
+                        return InstagramTaskCheckResult.Inconclusive(
+                            "Instagram обновил окно лайков, и оно больше не найдено.");
+                }
+                if (scroll == InstagramTaskVerificationRules.MAX_LIKE_SCROLLS) break;
+                progress?.Report($"Лайки: прокрутка {scroll + 1} из 10…");
+                if (!ScrollInstagramDialog(driver, existingDialogs))
+                    return InstagramTaskCheckResult.Inconclusive(
+                        "Не удалось прокрутить список лайков: контейнер не изменил позицию после JavaScript и прокрутки мышью. Возможно, список уже в конце или Instagram изменил его разметку.");
+                WaitWithCancellation(1400, cancellationToken);
+            }
+            return InstagramTaskCheckResult.Inconclusive(
+                "После 10 прокруток лайк не обнаружен. Полнота списка не подтверждена.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (WebDriverException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive($"Ошибка Instagram при проверке лайков: {exception.Message}");
+        }
+        catch (InvalidOperationException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive($"Не удалось проверить лайки: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Check comments directly on the target publication. This avoids assuming the
+    /// publication must appear in the author's profile grid. Absence after a partial
+    /// list is inconclusive, never a negative result.
+    /// </summary>
+    /// <summary>
+    /// Read-only search for the signed-in user's comment on an opened post/Reel.
+    /// Never equate an incomplete list with absence of a comment.
+    /// </summary>
+    private static InstagramTaskCheckResult CheckDirectPostComment(
+        ChromeDriver driver, string url, string user, IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            driver.Navigate().GoToUrl(url);
+            var shortcode = GetInstagramPublicationShortcode(url);
+            if (string.IsNullOrWhiteSpace(shortcode))
+                return InstagramTaskCheckResult.Inconclusive("Не удалось определить публикацию для проверки комментариев.");
+
+            // A direct post/Reel URL does not necessarily open its comments panel.
+            // First open the comment control, then look for comments and scroll.
+            var openingError = EnsureDirectPostCommentsOpened(driver, shortcode, cancellationToken);
+            if (openingError is not null)
+                return InstagramTaskCheckResult.Inconclusive(openingError);
+
+            // Instagram's comment rows are divs, not necessarily ul/li. Their time links
+            // contain /p/<shortcode>/c/<comment-id>/ even when the post was opened as a Reel.
+            // Observe each DOM iteration atomically: React may replace the entire list.
+            var stalled = 0;
+            string? previousSignature = null;
+            for (var batch = 0; batch < 100; batch++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var snapshot = ((IJavaScriptExecutor)driver).ExecuteScript("""
+                    const shortcode = arguments[0];
+                    const expected = arguments[1].toLowerCase();
+                    const visible = el => {
+                        if (!el?.isConnected) return false;
+                        const r = el.getBoundingClientRect();
+                        const style = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0 &&
+                            style.display !== 'none' && style.visibility !== 'hidden';
+                    };
+                    const path = el => {
+                        try { return new URL(el.href, location.href).pathname; }
+                        catch { return ''; }
+                    };
+                    const commentPath = new RegExp('^/(?:p|reel)/' +
+                        shortcode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/c/[^/]+/?$', 'i');
+                    const allCommentLinks = [...document.querySelectorAll('a[href]')]
+                        .filter(a => visible(a) && /^\/(?:p|reel)\/[^/]+\/c\/[^/]+\/?$/i.test(path(a)));
+                    const links = allCommentLinks.filter(a => commentPath.test(path(a)));
+                    const profilePath = '/' + expected + '/';
+                    const isProfile = a => path(a).toLowerCase() === profilePath;
+                    // A user profile elsewhere on the page cannot confirm a comment.
+                    const found = links.some(link => {
+                        let row = link.parentElement;
+                        for (let depth = 0; row && depth < 12; depth++, row = row.parentElement) {
+                            const ownLinks = [...row.querySelectorAll('a[href]')]
+                                .filter(a => commentPath.test(path(a)));
+                            if (ownLinks.length > 1) break;
+                            if ([...row.querySelectorAll('a[href]')].some(isProfile)) return true;
+                        }
+                        return false;
+                    });
+                    if (found) return [true, links.length, 'found', links.at(-1)?.href || '', allCommentLinks.length];
+
+                    const heading = [...document.querySelectorAll('span, h1, h2, h3')]
+                        .find(el => visible(el) && /^(Комментарии|Comments)$/i.test(
+                            (el.textContent || '').trim()));
+                    // On the supplied Instagram DOM the comments panel is a div,
+                    // not an article/dialog, and comment links may not match the
+                    // requested shortcode if Instagram redirected to another post.
+                    // Never treat those links as positive matches.
+                    const first = links[0] || allCommentLinks[0];
+                    let panel = null;
+                    if (heading) {
+                        for (let el = heading.parentElement; el && el !== document.body;
+                             el = el.parentElement) {
+                            if (el.querySelectorAll('a[href*="/c/"]').length > 0) {
+                                panel = el;
+                                break;
+                            }
+                        }
+                    }
+                    const root = panel || first?.parentElement?.parentElement || heading?.parentElement;
+                    if (!root) return [false, 0, 'loading', '', allCommentLinks.length];
+
+                    let scrolling = null;
+                    const anchors = [first, root, heading].filter(Boolean);
+                    for (const anchor of anchors) {
+                        for (let el = anchor; el && el !== document.body; el = el.parentElement) {
+                            if (!visible(el)) continue;
+                            if (el.scrollHeight > el.clientHeight + 12 && el.clientHeight > 90) {
+                                if (!scrolling || (el.clientHeight < scrolling.clientHeight))
+                                    scrolling = el;
+                            }
+                        }
+                    }
+                    const expand = [...(panel || root).querySelectorAll('button, [role="button"]')]
+                        .find(el => visible(el) &&
+                            /^(?:смотреть все ответы|посмотреть ответы|показать ответы|view (?:all )?replies|view more replies|view more comments|load more comments|показать ещё комментарии|показать еще комментарии)/i
+                                .test((el.textContent || el.getAttribute('aria-label') || '').trim()));
+                    if (expand) {
+                        expand.click();
+                        return [false, links.length, 'expanded', links.at(-1)?.href || '', allCommentLinks.length];
+                    }
+                    if (scrolling) {
+                        const before = scrolling.scrollTop;
+                        scrolling.scrollTop = Math.min(scrolling.scrollHeight,
+                            before + Math.max(200, Math.floor(scrolling.clientHeight * 0.8)));
+                        if (scrolling.scrollTop > before + 1)
+                            return [false, links.length, 'scrolled', links.at(-1)?.href || '', allCommentLinks.length, scrolling.scrollTop];
+                    }
+                    return [false, links.length, (first || heading) ? 'wheel' : 'loading', links.at(-1)?.href || '', allCommentLinks.length];
+                    """, shortcode, user) as System.Collections.ObjectModel.ReadOnlyCollection<object>;
+
+                if (snapshot is null || snapshot.Count < 3)
+                    return InstagramTaskCheckResult.Inconclusive(
+                        "Не удалось прочитать структуру комментариев Instagram.");
+                if (Convert.ToBoolean(snapshot[0]))
+                    return InstagramTaskCheckResult.Confirmed($"Комментарий @{user} найден.");
+
+                var count = Convert.ToInt32(snapshot[1]);
+                var action = Convert.ToString(snapshot[2]);
+                var visibleComments = snapshot.Count > 4 ? Convert.ToInt32(snapshot[4]) : count;
+                var position = snapshot.Count > 5 ? Convert.ToString(snapshot[5]) : string.Empty;
+                var signature = $"{count}:{visibleComments}:{position}:{(snapshot.Count > 3 ? snapshot[3] : string.Empty)}";
+                if (action == "wheel")
+                {
+                    // If setting scrollTop did not move a virtualized list, send a
+                    // real wheel gesture over a fresh comment anchor, not the page.
+                    var originElement = ((IJavaScriptExecutor)driver).ExecuteScript("""
+                        const code = arguments[0];
+                        const commentLinks = [...document.querySelectorAll('a[href]')]
+                            .filter(a => {
+                                try { return /^\/(?:p|reel)\/[^/]+\/c\/[^/]+\/?$/i.test(new URL(a.href).pathname); }
+                                catch { return false; }
+                            });
+                        return commentLinks.find(a => {
+                            try { return new URL(a.href).pathname.includes('/' + code + '/c/'); }
+                            catch { return false; }
+                        }) || commentLinks[0] || [...document.querySelectorAll('span, h1, h2, h3')]
+                            .find(el => /^(Комментарии|Comments)$/i.test((el.textContent || '').trim())) || null;
+                        """, shortcode) as IWebElement;
+                    if (originElement is not null)
+                    {
+                        try
+                        {
+                            var origin = new WheelInputDevice.ScrollOrigin { Element = originElement };
+                            new Actions(driver).ScrollFromOrigin(origin, 0, 450).Perform();
+                            action = "wheel-scrolled";
+                        }
+                        catch (StaleElementReferenceException) { action = "loading"; }
+                        catch (WebDriverException) { action = "loading"; }
+                    }
+                }
+                progress?.Report($"Комментарии: для публикации {count}, всего видимых {visibleComments}, шаг {batch + 1}…");
+                WaitWithCancellation(action == "loading" ? 450 : 850, cancellationToken);
+                stalled = signature == previousSignature ? stalled + 1 : 0;
+                if (stalled >= 8)
+                    return InstagramTaskCheckResult.Inconclusive(
+                        $"Комментарии не удалось подгрузить дальше (для публикации {count}, " +
+                        $"всего видимых {visibleComments}); полнота списка не подтверждена. " +
+                        (count == 0 && visibleComments > 0
+                            ? "Ссылки комментариев относятся к другому shortcode — проверьте адрес публикации."
+                            : ""));
+                previousSignature = signature;
+            }
+            return InstagramTaskCheckResult.Inconclusive(
+                "Достигнут предел прокрутки комментариев; полнота списка неизвестна.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (WebDriverException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive(
+                $"Ошибка Instagram при проверке комментария: {exception.Message}");
+        }
+        catch (InvalidOperationException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive(
+                $"Не удалось проверить комментарий: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Open the comments area of a directly navigated post/Reel before inspecting rows.
+    /// We only click a uniquely identified comment control, never a reaction button.
+    /// The absence of a visible panel is inconclusive rather than a missing comment.
+    /// </summary>
+    private static string? EnsureDirectPostCommentsOpened(
+        ChromeDriver driver, string expectedShortcode, CancellationToken cancellationToken)
+    {
+        var executor = (IJavaScriptExecutor)driver;
+        for (var attempt = 0; attempt < 15; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var state = executor.ExecuteScript("""
+                const visible = e => {
+                    if (!e?.isConnected) return false;
+                    const r = e.getBoundingClientRect();
+                    const s = getComputedStyle(e);
+                    return r.width > 0 && r.height > 0 &&
+                        s.display !== 'none' && s.visibility !== 'hidden';
+                };
+                const commentLink = a => {
+                    try { return /^\/(?:p|reel)\/[^/]+\/c\/[^/]+\/?$/i
+                        .test(new URL(a.href, location.href).pathname); }
+                    catch { return false; }
+                };
+                const hasRows = [...document.querySelectorAll('a[href]')]
+                    .some(a => visible(a) && commentLink(a));
+                const hasHeading = [...document.querySelectorAll('span, h1, h2, h3')]
+                    .some(e => visible(e) && /^(Комментарии|Comments)$/i.test((e.textContent || '').trim()));
+                return [hasRows, hasHeading];
+                """) as System.Collections.ObjectModel.ReadOnlyCollection<object>;
+            if (state is not null && state.Count >= 2 &&
+                (Convert.ToBoolean(state[0]) || Convert.ToBoolean(state[1])))
+                return null;
+            WaitWithCancellation(200, cancellationToken);
+        }
+
+        // A direct post can coexist with many cached feed toolbars. Only consider
+        // controls actually inside the viewport, and tie the comment button to
+        // the target post's 24px like control near its dominant media.
+        var candidates = executor.ExecuteScript("""
+            const visible = e => {
+                if (!e?.isConnected) return false;
+                const r = e.getBoundingClientRect();
+                if (r.width < 2 || r.height < 2 || r.right <= 0 || r.bottom <= 0 ||
+                    r.left >= innerWidth || r.top >= innerHeight) return false;
+                for (let a = e; a && a.nodeType === 1; a = a.parentElement) {
+                    const s = getComputedStyle(a);
+                    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0')
+                        return false;
+                }
+                return true;
+            };
+            const label = e => (e.getAttribute('aria-label') ||
+                e.querySelector('title')?.textContent || '').trim();
+            const commentName = /^(?:комментировать|комментарии|комментарий|comment|comments|view comments)$/i;
+            const likeName = /^(?:нравится|не нравится|больше не нравится|like|unlike)$/i;
+            const iconButtons = predicate => [...new Set(
+                [...document.querySelectorAll('svg[aria-label]')]
+                    .filter(e => visible(e) && predicate(label(e)))
+                    .map(e => e.closest('[role="button"], button, a'))
+                    .filter(e => e && visible(e))
+            )];
+            const comments = iconButtons(v => commentName.test(v));
+            const numeric = e => /^\d[\d\s.,]*[KkMm]?$/u.test(
+                (e.innerText || '').trim().replace(/\s+/g, ' '));
+            const numbered = comments.filter(numeric);
+            const expectedCode = arguments[0];
+            const currentPost = location.pathname.match(/^\/(?:p|reel|reels|tv)\/([^/]+)(?:\/|$)/i);
+            const currentMatches = currentPost &&
+                currentPost[1].toLowerCase() === expectedCode.toLowerCase();
+            const matchingLinks = [...document.querySelectorAll('a[href]')].filter(a => {
+                if (!visible(a)) return false;
+                try {
+                    const m = new URL(a.href, location.href).pathname
+                        .match(/^\/(?:p|reel|reels|tv)\/([^/]+)(?:\/|$)/i);
+                    return m && m[1].toLowerCase() === expectedCode.toLowerCase();
+                } catch { return false; }
+            });
+            // Instagram can open a post in an overlay while leaving the feed URL.
+            // Do not click a feed control unless the target post is identifiable.
+            if (!currentMatches && !matchingLinks.length)
+                return [null, comments.length, numbered.length,
+                    'post-unverified; path=' + location.pathname + '; targetLinks=0'];
+            if (currentPost && !currentMatches)
+                return [null, comments.length, numbered.length,
+                    'wrong-post; path=' + location.pathname];
+            const media = [...document.querySelectorAll('video, img')]
+                .filter(visible)
+                .map(e => ({e, r:e.getBoundingClientRect()}))
+                .filter(o => o.r.width >= 220 && o.r.height >= 220 &&
+                    o.r.width * o.r.height >= 65000 &&
+                    !o.e.closest('nav, aside, header, [role="navigation"]'))
+                .sort((a,b) => b.r.width*b.r.height - a.r.width*a.r.height);
+            if (!media.length) return [null, comments.length, numbered.length, 'no-main-media'];
+            const m = media[0].r;
+            if (!currentMatches) {
+                const aroundMedia = matchingLinks.some(a => {
+                    const r = a.getBoundingClientRect();
+                    const x = r.left + r.width/2, y = r.top + r.height/2;
+                    return Math.hypot(Math.max(m.left-x, 0, x-m.right),
+                                      Math.max(m.top-y, 0, y-m.bottom)) <= 150;
+                });
+                if (!aroundMedia) return [null, comments.length, numbered.length,
+                    'overlay-post-not-linked-to-media; path=' + location.pathname +
+                    '; targetLinks=' + matchingLinks.length];
+            }
+            const mcx = m.left + m.width/2, mcy = m.top + m.height/2;
+            const other = media.slice(1).some(o =>
+                o.r.width*o.r.height >= m.width*m.height*0.85 &&
+                Math.hypot(o.r.left+o.r.width/2-mcx, o.r.top+o.r.height/2-mcy) > 160);
+            if (other) return [null, comments.length, numbered.length, 'ambiguous-media'];
+            const edgeDistance = e => {
+                const r = e.getBoundingClientRect();
+                const x=r.left+r.width/2, y=r.top+r.height/2;
+                return Math.hypot(Math.max(m.left-x, 0, x-m.right),
+                                  Math.max(m.top-y, 0, y-m.bottom));
+            };
+            // Only the 24px post heart, not the 16px hearts on comment rows.
+            const hearts = [...document.querySelectorAll('svg[aria-label]')]
+                .filter(e => visible(e) && likeName.test(label(e)) &&
+                    e.getBoundingClientRect().height >= 20 && edgeDistance(e) <= 240)
+                .sort((a,b) => edgeDistance(a)-edgeDistance(b));
+            if (!hearts.length || (hearts.length > 1 &&
+                edgeDistance(hearts[1]) - edgeDistance(hearts[0]) <= 120))
+                return [null, comments.length, numbered.length, 'ambiguous-heart'];
+            const hr = hearts[0].getBoundingClientRect();
+            const hx = hr.left+hr.width/2, hy = hr.top+hr.height/2;
+            const paired = numbered.filter(button => {
+                const r = button.getBoundingClientRect();
+                const x=r.left+r.width/2, y=r.top+r.height/2;
+                return Math.abs(y-hy) <= 55 && x > hx-30 && x < hx+240 &&
+                    edgeDistance(button) <= 260;
+            });
+            // The comment count can be displayed on a different row from the
+            // post heart. When the address bar identifies the exact requested
+            // post and only one comment-count control is actually on screen,
+            // do not reject it solely because the icons are not aligned.
+            // For overlays and multiple controls, keep the stricter pairing.
+            if (paired.length === 0 && currentMatches &&
+                comments.length === 1 && numbered.length === 1 &&
+                edgeDistance(numbered[0]) <= 420) {
+                return [numbered[0], comments.length, numbered.length,
+                    'single-visible-on-target-post'];
+            }
+            return [paired.length === 1 ? paired[0] : null,
+                comments.length, numbered.length,
+                paired.length === 1 ? 'paired' : 'paired=' + paired.length];
+            """, expectedShortcode) as System.Collections.ObjectModel.ReadOnlyCollection<object>;
+        if (candidates is null || candidates.Count < 3)
+            return "Не удалось прочитать кнопки комментариев Instagram.";
+
+        var totalButtons = Convert.ToInt32(candidates[1]);
+        var numberedButtons = Convert.ToInt32(candidates[2]);
+        if (candidates[0] is not IWebElement button)
+            return "Не удалось однозначно определить кнопку открытия комментариев " +
+                $"(кнопок на экране: {totalButtons}, со счётчиком: {numberedButtons}, " +
+                $"выбор: {(candidates.Count > 3 ? candidates[3] : "неизвестно")}). " +
+                "Проверка не завершена.";
+        try
+        {
+            new Actions(driver).MoveToElement(button).Click().Perform();
+        }
+        catch (StaleElementReferenceException)
+        {
+            return "Instagram обновил кнопку комментариев до нажатия; повторите проверку.";
+        }
+        catch (WebDriverException exception)
+        {
+            return $"Не удалось открыть комментарии: {exception.Message}";
+        }
+
+        // Do not report success merely because the click did not throw.
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var opened = executor.ExecuteScript("""
+                const visible = e => {
+                    const r = e.getBoundingClientRect();
+                    return e.isConnected && r.width > 0 && r.height > 0;
+                };
+                const heading = [...document.querySelectorAll('span, h1, h2, h3')]
+                    .some(e => visible(e) && /^(Комментарии|Comments)$/i.test((e.textContent || '').trim()));
+                const rows = [...document.querySelectorAll('a[href]')].some(a => {
+                    if (!visible(a)) return false;
+                    try { return /^\/(?:p|reel)\/[^/]+\/c\/[^/]+\/?$/i
+                        .test(new URL(a.href, location.href).pathname); }
+                    catch { return false; }
+                });
+                return heading || rows;
+                """);
+            if (opened is true) return null;
+            WaitWithCancellation(300, cancellationToken);
+        }
+        return "Кнопка комментариев нажата, но список не открылся; полнота проверки неизвестна.";
+    }
+
+    private static string? GetInstagramPublicationShortcode(string? rawUrl)
+    {
+        if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri) ||
+            (uri.Host != "instagram.com" && !uri.Host.EndsWith(".instagram.com", StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2 &&
+            (segments[0].Equals("p", StringComparison.OrdinalIgnoreCase) ||
+             segments[0].Equals("reel", StringComparison.OrdinalIgnoreCase))
+            ? segments[1]
+            : null;
+    }
+
+    private static InstagramTaskCheckResult CheckPostComment(ChromeDriver driver, string url,
+        string user, string? postAuthorUserName, IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            driver.Navigate().GoToUrl(url);
+            string? authorUrl = null;
+            if (!string.IsNullOrWhiteSpace(postAuthorUserName))
+            {
+                // The explicit author is a user-provided hint, never inferred from commenters.
+                // Normalize before constructing the URL to avoid navigation to arbitrary hosts.
+                var author = InstagramUserName.Normalize(postAuthorUserName.Trim().TrimStart('@'));
+                authorUrl = $"https://www.instagram.com/{author}/";
+            }
+            else
+            {
+                // Reels may expose the author outside <article><header>.
+                var authorLink = WaitFor(driver, () =>
+                    driver.FindElements(By.CssSelector(
+                        "article header a[href], header a[href], main header a[href]"))
+                    .FirstOrDefault(element => element.Displayed &&
+                        IsInstagramProfileHref(element.GetAttribute("href"))), cancellationToken);
+                authorUrl = authorLink?.GetAttribute("href");
+            }
+            if (string.IsNullOrWhiteSpace(authorUrl))
+                return InstagramTaskCheckResult.Inconclusive(
+                    "Не удалось определить автора публикации. Укажите его username в окне проверки.");
+            driver.Navigate().GoToUrl(authorUrl);
+            var targetShortcode = GetInstagramPublicationShortcode(url);
+            if (targetShortcode is null)
+                return InstagramTaskCheckResult.Inconclusive(
+                    "Не удалось прочитать идентификатор проверяемой публикации.");
+
+            // Wait for the profile grid before scrolling. Otherwise the first post can
+            // be skipped while Instagram is still rendering the initial grid.
+            var gridReady = WaitFor(driver, () =>
+                driver.FindElements(By.CssSelector("main a[href*='/p/'], main a[href*='/reel/']"))
+                    .FirstOrDefault(), cancellationToken);
+            if (gridReady is null)
+                return InstagramTaskCheckResult.Inconclusive(
+                    "В профиле автора не загрузились ссылки на публикации.");
+
+            // Instagram renders profile tiles asynchronously. Read all hrefs as one DOM
+            // snapshot before moving the page: fast element-by-element Selenium calls
+            // may outlive a render and invalidate references.
+            IWebElement? postLink = null;
+            var inspectedLinks = 0;
+            var lastScrollY = -1d;
+            for (var page = 0; page < 60; page++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Give the current row time to render before inspecting and scrolling.
+                WaitWithCancellation(page == 0 ? 1500 : 1100, cancellationToken);
+                string[] hrefs;
+                try
+                {
+                    hrefs = ((IJavaScriptExecutor)driver).ExecuteScript("""
+                        return Array.from(document.querySelectorAll(
+                            "main a[href*='/p/'], main a[href*='/reel/']"))
+                            .map(a => a.href);
+                        """) is System.Collections.ObjectModel.ReadOnlyCollection<object> values
+                        ? values.OfType<string>().ToArray()
+                        : [];
+                }
+                catch (StaleElementReferenceException)
+                {
+                    // A concurrent Instagram rerender: retry at the same position.
+                    continue;
+                }
+
+                inspectedLinks += hrefs.Length;
+                if (hrefs.Any(href => string.Equals(GetInstagramPublicationShortcode(href),
+                        targetShortcode, StringComparison.OrdinalIgnoreCase)))
+                {
+                    // Resolve a fresh element only after matching its URL. Never keep
+                    // IWebElement references across scrolling/re-rendering.
+                    try
+                    {
+                        postLink = driver.FindElements(By.CssSelector(
+                                "main a[href*='/p/'], main a[href*='/reel/']"))
+                            .FirstOrDefault(link => string.Equals(
+                                GetInstagramPublicationShortcode(link.GetAttribute("href")),
+                                targetShortcode, StringComparison.OrdinalIgnoreCase));
+                    }
+                    catch (StaleElementReferenceException) { /* resolve again next pass */ }
+                    if (postLink is not null) break;
+                    continue;
+                }
+
+                // Move less than a row at a time, so newly loaded top tiles cannot
+                // be skipped. A scroll is only done AFTER the current links are read.
+                var scrollY = Convert.ToDouble(((IJavaScriptExecutor)driver).ExecuteScript(
+                    "return window.scrollY;"));
+                var nextY = Convert.ToDouble(((IJavaScriptExecutor)driver).ExecuteScript(
+                    "window.scrollBy(0, 240); return window.scrollY;"));
+                if (Math.Abs(nextY - scrollY) < 1 && Math.Abs(scrollY - lastScrollY) < 1)
+                    break;
+                lastScrollY = scrollY;
+            }
+            if (postLink is null)
+                return InstagramTaskCheckResult.Inconclusive(
+                    $"Публикация {targetShortcode} не найдена в загруженной сетке профиля автора " +
+                    $"(проверено ссылок: {inspectedLinks}).");
+            postLink.Click();
+            var surface = WaitFor(driver, () => FindListDialog(driver) ??
+                driver.FindElements(By.CssSelector("article")).FirstOrDefault(element => element.Displayed),
+                cancellationToken);
+            if (surface is null)
+                return InstagramTaskCheckResult.Inconclusive("Не удалось открыть комментарии публикации.");
+
+            var previousCount = -1;
+            var stalled = 0;
+            for (var batch = 0; batch < 250; batch++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // Check author anchors only within comment list items, not the post header,
+                // likes, suggested users or author information.
+                var entries = surface.FindElements(By.CssSelector("ul li"));
+                if (entries.Any(entry => entry.FindElements(By.CssSelector("a[href]"))
+                        .Any(link => InstagramTaskVerificationRules.IsExactProfileLink(
+                            link.GetAttribute("href"), user))))
+                    return InstagramTaskCheckResult.Confirmed($"Комментарий @{user} найден.");
+
+                var loadMore = surface.FindElements(By.CssSelector("button, [role='button']"))
+                    .FirstOrDefault(button => button.Displayed && IsMoreCommentsButton(button));
+                if (loadMore is null)
+                    return InstagramTaskCheckResult.Inconclusive(
+                        "Кнопка подгрузки комментариев недоступна; полнота списка неизвестна.");
+                progress?.Report($"Подгружаем комментарии: шаг {batch + 1}…");
+                loadMore.Click();
+                WaitWithCancellation(900, cancellationToken);
+                var count = surface.FindElements(By.CssSelector("ul li")).Count;
+                stalled = count == previousCount ? stalled + 1 : 0;
+                if (stalled >= 4)
+                    return InstagramTaskCheckResult.Inconclusive(
+                        "Instagram перестал загружать новые комментарии.");
+                previousCount = count;
+            }
+            return InstagramTaskCheckResult.Inconclusive(
+                "Достигнут технический предел подгрузки комментариев.");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (WebDriverException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive(
+                $"Ошибка Instagram при проверке комментариев: {exception.Message}");
+        }
+        catch (InvalidOperationException exception)
+        {
+            return InstagramTaskCheckResult.Inconclusive(
+                $"Не удалось проверить комментарии: {exception.Message}");
+        }
+    }
+
+    // Like checking must not use the generic dialog finder: the comments/login
+    // dialog can already be visible when the publication is opened.
+    private static IEnumerable<IWebElement> GetVisibleLikesDialogCandidates(ChromeDriver driver)
+        => driver.FindElements(By.CssSelector("[role='dialog'], [aria-modal='true']"))
+            .Where(element => element.Displayed);
+
+    private static IWebElement? FindPostLikesDialog(ChromeDriver driver,
+        IReadOnlyCollection<IWebElement> existingDialogs)
+    {
+        foreach (var dialog in GetVisibleLikesDialogCandidates(driver))
+        {
+            try
+            {
+                if (dialog.FindElements(By.CssSelector("h1,h2,h3,[role='heading']"))
+                    .Any(heading => InstagramTaskVerificationRules.IsLikesDialogHeading(heading.Text)))
+                    return dialog;
+
+                // Some Instagram layouts omit a heading. Accept a newly opened
+                // profile list only when it has no explicit unrelated heading.
+                var headings = dialog.FindElements(By.CssSelector("h1,h2,h3,[role='heading']"))
+                    .Where(heading => heading.Displayed)
+                    .Select(heading => heading.Text.Trim())
+                    .Where(heading => heading.Length > 0).ToArray();
+                if (!existingDialogs.Contains(dialog) && headings.Length == 0 &&
+                    dialog.FindElements(By.CssSelector("a[href]"))
+                        .Any(link => IsInstagramProfileHref(link.GetAttribute("href"))))
+                    return dialog;
+            }
+            catch (StaleElementReferenceException) { /* The dialog was rerendered. */ }
+        }
+        return null;
+    }
+
+    private static bool TryOpenPostLikes(ChromeDriver driver,
+        IReadOnlyCollection<IWebElement> existingDialogs, CancellationToken cancellationToken,
+        out string error)
+    {
+        error = string.Empty;
+        var attempts = new List<string>();
+        // Try a real mouse action first. A DOM click is not equivalent to a
+        // browser pointer click and may silently do nothing in Instagram.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (FindPostLikesDialog(driver, existingDialogs) is not null)
+                return true;
+
+            var trigger = WaitFor(driver, () => FindPostLikesTrigger(driver), cancellationToken);
+            if (trigger is null)
+            {
+                error = "Не найден безопасный счётчик лайков публикации. " +
+                    string.Join("; ", attempts);
+                return false;
+            }
+
+            try
+            {
+                var diagnostic = DescribeSelectedLikesTrigger(driver, trigger);
+                ((IJavaScriptExecutor)driver).ExecuteScript(
+                    "arguments[0].scrollIntoView({block:'center',inline:'nearest'});", trigger);
+                if (attempt == 0)
+                    new Actions(driver).MoveToElement(trigger).Click().Perform();
+                else if (attempt == 1)
+                    trigger.Click();
+                else
+                    ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", trigger);
+                attempts.Add($"Попытка {attempt + 1}: {diagnostic}, нажатие выполнено");
+            }
+            catch (WebDriverException exception)
+            {
+                attempts.Add($"Попытка {attempt + 1}: {exception.GetType().Name}");
+            }
+
+            for (var check = 0; check < 10; check++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (FindPostLikesDialog(driver, existingDialogs) is not null)
+                    return true;
+                WaitWithCancellation(250, cancellationToken);
+            }
+        }
+
+        error = "Список лайков не открылся после автоматических нажатий. " +
+            string.Join("; ", attempts) + ".";
+        return false;
+    }
+
+    private static string DescribeSelectedLikesTrigger(ChromeDriver driver, IWebElement trigger)
+    {
+        // No page HTML, URLs or account names in diagnostics.
+        var result = ((IJavaScriptExecutor)driver).ExecuteScript("""
+            const e=arguments[0], r=e.getBoundingClientRect();
+            const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+            const label=(e.innerText||e.getAttribute('aria-label')||'').trim();
+            return `tag=${e.tagName.toLowerCase()}, role=${e.getAttribute('role')||'-'}, `+
+                `numeric=${/\d/.test(label)}, covered=${!!hit&&!e.contains(hit)&&!hit.contains(e)}`;
+            """, trigger);
+        return result?.ToString() ?? "сведения об элементе недоступны";
+    }
+
+    private static IWebElement? FindPostLikesTrigger(ChromeDriver driver)
+    {
+        // Instagram can render the likes count as a bare number (for example,
+        // <div role="button" tabindex="0"><span>31</span></div>).
+        // Locate the clickable wrapper by proximity to the heart icon rather
+        // than depending on the changing number or generated CSS classes.
+        var numericButton = FindNumericLikesButtonNearHeart(driver);
+        if (numericButton is not null)
+            return numericButton;
+
+        // A liked_by link is unambiguous and must take priority over nearby
+        // numerical buttons (comments and views may also have counts).
+        foreach (var link in driver.FindElements(By.CssSelector(
+            "article a[href*='liked_by'], main a[href*='liked_by']")))
+        {
+            try
+            {
+                if (link.Displayed && link.Enabled && !ContainsHeartIcon(link))
+                    return link;
+            }
+            catch (StaleElementReferenceException) { /*ignore*/}
+        }
+
+        foreach (var counter in driver.FindElements(By.XPath(
+            InstagramTaskVerificationRules.LIKES_COUNTER_AFTER_HEART_XPATH)))
+        {
+            try
+            {
+                if (counter.Displayed && counter.Enabled &&
+                    counter.Text.Any(char.IsDigit) && !ContainsHeartIcon(counter))
+                    return counter;
+            }
+            catch (StaleElementReferenceException) {/*ignore*/ }
+        }
+
+        // Unlabelled counters must not be guessed by clicking arbitrary buttons.
+        foreach (var element in driver.FindElements(By.CssSelector(
+            "article button, article [role='button'], main button, main [role='button']")))
+        {
+            try
+            {
+                if (!element.Displayed || !element.Enabled || ContainsHeartIcon(element)) continue;
+                var label = element.Text + " " + element.GetAttribute("aria-label");
+                if (InstagramTaskVerificationRules.IsLikesCounterLabel(label)) return element;
+            }
+            catch (StaleElementReferenceException) { /*ignore*/}
+        }
+        return null;
+    }
+
+    private static IWebElement? FindNumericLikesButtonNearHeart(ChromeDriver driver)
+    {
+        // Run geometry matching in one DOM snapshot, avoiding stale Selenium
+        // references. The button must be close to the heart and must not contain
+        // the heart itself; the comments count is lower on the page.
+        const string script = """
+            const heart = [...document.querySelectorAll('svg[aria-label]')].find(svg =>
+                ['Like', 'Unlike', 'Нравится', 'Больше не нравится'].includes(svg.getAttribute('aria-label')) &&
+                svg.getBoundingClientRect().width > 0);
+            if (!heart) return null;
+            const h = heart.getBoundingClientRect();
+            const hx = h.left + h.width / 2;
+            const hy = h.top + h.height / 2;
+            const scope = heart.closest('article') || heart.closest('main') || document.querySelector('main');
+            if (!scope) return null;
+            const candidates = [...scope.querySelectorAll('div[role="button"][tabindex], button, a[href]')]
+                .filter(el => {
+                    if (el.contains(heart) || el.querySelector('svg[aria-label="Like"], svg[aria-label="Unlike"], svg[aria-label="Нравится"], svg[aria-label="Больше не нравится"]')) return false;
+                    const value = (el.innerText || '').trim().replace(/\s/g, '');
+                    if (!/^\d[\d.,]*$/.test(value)) return false;
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) return false;
+                    const dx = Math.abs((r.left + r.width / 2) - hx);
+                    const dy = (r.top + r.height / 2) - hy;
+                    return dx < 120 && dy > -12 && dy < 65;
+                })
+                .sort((a,b) => {
+                    const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();
+                    const ad=Math.abs((ar.left+ar.width/2)-hx)+Math.abs((ar.top+ar.height/2)-hy);
+                    const bd=Math.abs((br.left+br.width/2)-hx)+Math.abs((br.top+br.height/2)-hy);
+                    return ad-bd;
+                });
+            return candidates[0] || null;
+            """;
+        return ((IJavaScriptExecutor)driver).ExecuteScript(script) as IWebElement;
+    }
+
+    private static bool ContainsHeartIcon(IWebElement element)
+        => element.FindElements(By.CssSelector(
+            "svg[aria-label='Like'], svg[aria-label='Unlike'], " +
+            "svg[aria-label='Нравится'], svg[aria-label='Больше не нравится']")).Count > 0;
+
+    private static bool IsInstagramProfileHref(string? href)
+    {
+        if (!Uri.TryCreate(href, UriKind.Absolute, out var uri) ||
+            uri.Host is not ("www.instagram.com" or "instagram.com")) return false;
+        var segments = uri.AbsolutePath.Trim('/').Split('/');
+        return segments.Length == 1 && segments[0].Length > 0 &&
+            segments[0] is not ("p" or "reel" or "explore" or "accounts");
+    }
+
+    private static bool HasExactUserLink(IWebElement dialog, string user)
+        => dialog.FindElements(By.CssSelector("a[href]"))
+            .Any(link => InstagramTaskVerificationRules.IsExactProfileLink(link.GetAttribute("href"), user));
+
+    private static bool IsMoreCommentsButton(IWebElement element)
+    {
+        var label = (element.GetAttribute("aria-label") ?? "") + " " + element.Text;
+        return label.Contains("more comments", StringComparison.OrdinalIgnoreCase) ||
+               label.Contains("view more", StringComparison.OrdinalIgnoreCase) ||
+               label.Contains("показать ещё", StringComparison.OrdinalIgnoreCase) ||
+               label.Contains("загрузить", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ScrollInstagramDialog(ChromeDriver driver,
+        IReadOnlyCollection<IWebElement> existingDialogs)
+    {
+        // React can replace the dialog or individual rows while the list loads.
+        // Reacquire every Selenium reference after a stale-element failure.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                var dialog = FindPostLikesDialog(driver, existingDialogs);
+                if (dialog is null) return false;
+                var script = (IJavaScriptExecutor)driver;
+
+                // One atomic DOM operation to choose and scroll the actual list.
+                var moved = (bool)(script.ExecuteScript("""
+                    const root = arguments[0];
+                    const nodes = [root, ...root.querySelectorAll('*')];
+                    const candidates = nodes.filter(el =>
+                        el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 10 &&
+                        el.getClientRects().length > 0);
+                    candidates.sort((a, b) => {
+                        const count = el => el.querySelectorAll('a[href]').length;
+                        return count(b) - count(a) ||
+                            (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight);
+                    });
+                    for (const el of candidates) {
+                        const before = el.scrollTop;
+                        const limit = el.scrollHeight - el.clientHeight;
+                        if (limit - before <= 2) continue;
+                        el.scrollTop = Math.min(limit,
+                            before + Math.max(120, Math.floor(el.clientHeight * 0.65)));
+                        if (el.scrollTop > before + 2) return true;
+                    }
+                    return false;
+                    """, dialog) ?? false);
+                if (moved) return true;
+
+                // Find a new wheel origin immediately before the gesture.
+                // Avoid retaining a row element across an asynchronous DOM update.
+                var target = script.ExecuteScript("""
+                    const root = arguments[0];
+                    const links = [...root.querySelectorAll('a[href]')].filter(a => {
+                        const r = a.getBoundingClientRect();
+                        const d = root.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0 && r.bottom > d.top &&
+                            r.top < d.bottom && r.right > d.left && r.left < d.right;
+                    });
+                    return links[0] || root;
+                    """, dialog) as IWebElement;
+                if (target is null) return false;
+
+                var before = (string?)script.ExecuteScript("""
+                    const root = arguments[0];
+                    return JSON.stringify([root, ...root.querySelectorAll('*')]
+                        .filter(el => el.scrollHeight > el.clientHeight + 4)
+                        .map(el => [el.scrollTop, el.scrollHeight, el.clientHeight]));
+                    """, dialog);
+
+                var origin = new WheelInputDevice.ScrollOrigin
+                {
+                    Element = target
+                };
+                new Actions(driver)
+                    .ScrollFromOrigin(origin, 0, 350)
+                    .Perform();
+
+                WaitWithCancellation(350, CancellationToken.None);
+                // Do not use the old dialog after wheel input: Instagram may
+                // replace the entire subtree when it loads more rows.
+                var freshDialog = FindPostLikesDialog(driver, existingDialogs);
+                if (freshDialog is null) return false;
+                var after = (string?)script.ExecuteScript("""
+                    const root = arguments[0];
+                    return JSON.stringify([root, ...root.querySelectorAll('*')]
+                        .filter(el => el.scrollHeight > el.clientHeight + 4)
+                        .map(el => [el.scrollTop, el.scrollHeight, el.clientHeight]));
+                    """, freshDialog);
+                return !string.Equals(before, after, StringComparison.Ordinal);
+            }
+            catch (StaleElementReferenceException)
+            {
+                // A transient DOM replacement is not a failed Instagram check.
+                WaitWithCancellation(150, CancellationToken.None);
+            }
+            catch (WebDriverException)
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static InstagramSearchResult CheckSingleList(ChromeDriver driver, string target,
