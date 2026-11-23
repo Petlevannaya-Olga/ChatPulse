@@ -162,6 +162,11 @@ public partial class VerifyCompletedTaskDialog : Window
         }
         finally
         {
+            // The result is already collected. Close only the ChromeDriver-owned window;
+            // keep its user-data directory so Instagram stays signed in for the next check.
+            // This also runs after an error or cancellation, before the report is left open.
+            try { await _browser.CloseBrowserAsync(); }
+            catch (Exception exception) { AppendBrowserCloseError(exception); }
             _running = false;
             if (IsLoaded)
             {
@@ -176,6 +181,15 @@ public partial class VerifyCompletedTaskDialog : Window
                 CheckRepostBox.IsEnabled = VerifiedResult is null;
             }
         }
+    }
+
+    private void AppendBrowserCloseError(Exception exception)
+    {
+        var detail = $"Не удалось закрыть Chrome после проверки: {exception.Message}";
+        ErrorsText.Text = string.IsNullOrWhiteSpace(ErrorsText.Text)
+            ? detail
+            : ErrorsText.Text + Environment.NewLine + detail;
+        ErrorsPanel.Visibility = Visibility.Visible;
     }
 
     private IEnumerable<string> SelectedChecks()

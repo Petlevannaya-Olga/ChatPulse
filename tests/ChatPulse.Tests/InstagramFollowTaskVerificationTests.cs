@@ -82,4 +82,94 @@ public sealed class InstagramFollowTaskVerificationTests
         Assert.False(negative.CanHide);
         Assert.True(positive.CanHide);
     }
+    [Fact]
+    public void MassUnsubscribe_ChecksEveryUniqueProfileInOriginalOrder()
+    {
+        var text = """
+            **МАССОВАЯ ОТПИСКА**
+            https://www.instagram.com/z.profile/
+            https://www.instagram.com/a.profile/?hl=ru
+            https://www.instagram.com/Z.Profile/
+            https://www.instagram.com/reel/Df9ollSMsmL/
+            https://www.instagram.com/m.profile/
+            """;
+        Assert.Equal(WorkspaceTaskKind.UNSUBSCRIBE, WorkspaceTaskKindDetector.Detect(text));
+        Assert.Equal(new[] { "z.profile", "a.profile", "m.profile" },
+            InstagramFollowTaskRules.GetVerificationTargets(WorkspaceTaskKind.UNSUBSCRIBE, text, null));
+        Assert.Equal(new[] { "z.profile" },
+            InstagramFollowTaskRules.GetVerificationTargets(WorkspaceTaskKind.SUBSCRIBE, text, null));
+    }
+
+    [Fact]
+    public async Task MassUnsubscribe_VerifiesInOrderAndDoesNotHideIfOneStillFollowed()
+    {
+        var visited = new List<string>();
+        var result = await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+            ["first", "second", "third"], (name, shouldFollow, _) =>
+            {
+                Assert.False(shouldFollow);
+                visited.Add(name);
+                return Task.FromResult(name == "second"
+                    ? InstagramTaskCheckResult.Inconclusive("Подписка ещё есть")
+                    : InstagramTaskCheckResult.Confirmed("Нет подписки"));
+            });
+
+        Assert.Equal(new[] { "first", "second", "third" }, visited);
+        Assert.False(result.CanHide);
+        Assert.Equal(3, result.Results.Count);
+        var report = WorkspaceFailedTaskReport.FromFollow(result);
+        Assert.True(report.HasFailure);
+        Assert.Collection(report.Checks,
+            check => { Assert.Contains("@first", check.Name); Assert.True(check.Confirmed); },
+            check => { Assert.Contains("@second", check.Name); Assert.False(check.Confirmed); },
+            check => { Assert.Contains("@third", check.Name); Assert.True(check.Confirmed); });
+    }
+
+    [Fact]
+    public async Task MassUnsubscribe_AfterTechnicalError_StillChecksRemainingTargets()
+    {
+        var visited = new List<string>();
+        var result = await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+            ["a", "b", "c"], (name, _, _) =>
+            {
+                visited.Add(name);
+                if (name == "b") throw new InvalidOperationException("network");
+                return Task.FromResult(InstagramTaskCheckResult.Confirmed("Отписка есть"));
+            });
+        Assert.Equal(new[] { "a", "b", "c" }, visited);
+        Assert.False(result.CanHide);
+        Assert.Contains("network", result.Results[1].Check.Detail);
+    }
+
+    [Fact]
+    public async Task MassUnsubscribe_AllConfirmed_CanHideOnlyAfterLastProfile()
+    {
+        var visited = new List<string>();
+        var result = await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+            ["first", "second"], (name, _, _) =>
+            {
+                visited.Add(name);
+                return Task.FromResult(InstagramTaskCheckResult.Confirmed("Нет подписки"));
+            });
+        Assert.True(result.CanHide);
+        Assert.Equal(new[] { "first", "second" }, visited);
+        Assert.False(WorkspaceFailedTaskReport.FromFollow(result).HasFailure);
+    }
+
+    [Fact]
+    public async Task Subscription_StillChecksOnlyFirstProfile()
+    {
+        var targets = InstagramFollowTaskRules.GetVerificationTargets(WorkspaceTaskKind.SUBSCRIBE,
+            "Подписка https://www.instagram.com/first/ Актив отсюда https://www.instagram.com/second/", null);
+        Assert.Single(targets);
+        var result = await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.SUBSCRIBE,
+            targets, (_, shouldFollow, _) =>
+            {
+                Assert.True(shouldFollow);
+                return Task.FromResult(InstagramTaskCheckResult.Confirmed("Подписка есть"));
+            });
+        Assert.True(result.CanHide);
+        Assert.Single(result.Results);
+    }
+
 }

@@ -104,10 +104,31 @@ public partial class WorkspaceBulkTaskVerificationDialog : Window
         }
         finally
         {
-            _running = false;
-            _finished = true;
-            ActionButton.IsEnabled = true;
-            ActionButton.Content = "Закрыть";
+            // Keep one Chrome session for the whole batch. A soft stop first
+            // completes the current task and its SQLite write; only then quit Chrome.
+            StageText.Text = "Закрываем Chrome…";
+            var browserClosed = false;
+            try
+            {
+                await _runner.CloseBrowserAsync();
+                browserClosed = true;
+            }
+            catch (Exception exception)
+            {
+                AppendEntry(new LogEntry("Chrome", "Ошибка закрытия",
+                    exception.Message, new SolidColorBrush(Color.FromRgb(0xA9, 0x46, 0x69))));
+                FinalMessage.Text += $" Не удалось закрыть Chrome: {exception.Message}";
+            }
+            finally
+            {
+                StageText.Text = !browserClosed ? "Chrome не удалось закрыть автоматически."
+                    : _stopRequested ? "Проверка остановлена. Chrome закрыт."
+                    : "Проверка завершена. Chrome закрыт.";
+                _running = false;
+                _finished = true;
+                ActionButton.IsEnabled = true;
+                ActionButton.Content = "Закрыть";
+            }
         }
     }
 

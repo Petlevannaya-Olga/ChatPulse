@@ -41,6 +41,17 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
                     VerifiedAtUtc TEXT NOT NULL,
                     PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
                 );
+                -- An unsubscribe task may include many Instagram profiles. Store ALL
+                -- verified targets, while preserving the legacy one-target summary.
+                CREATE TABLE IF NOT EXISTS ImportedMessageSubscriptionVerifiedTargets (
+                    TelegramUserId INTEGER NOT NULL,
+                    PeerType TEXT NOT NULL,
+                    PeerId INTEGER NOT NULL,
+                    MessageId INTEGER NOT NULL,
+                    TargetUserName TEXT NOT NULL COLLATE NOCASE,
+                    VerifiedAtUtc TEXT NOT NULL,
+                    PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId, TargetUserName)
+                );
                 CREATE TABLE IF NOT EXISTS ImportedMessageHidden (
                     TelegramUserId INTEGER NOT NULL,
                     PeerType TEXT NOT NULL,
@@ -86,6 +97,38 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
             command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
             if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
                 throw new InvalidOperationException("Можно скрыть только выполненное задание выбранного чата.");
+        }
+        // Persist every confirmed profile in the SAME transaction as hiding the task.
+        // If any insert fails, neither the confirmation nor the hide is published.
+        using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = (SqliteTransaction)transaction;
+            delete.CommandText = """
+                DELETE FROM ImportedMessageSubscriptionVerifiedTargets
+                WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer AND MessageId=$message
+                """;
+            delete.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+            delete.Parameters.AddWithValue("$type", chat.PeerType);
+            delete.Parameters.AddWithValue("$peer", chat.PeerId);
+            delete.Parameters.AddWithValue("$message", messageId);
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+        foreach (var target in verification.Results)
+        {
+            using var add = connection.CreateCommand();
+            add.Transaction = (SqliteTransaction)transaction;
+            add.CommandText = """
+                INSERT INTO ImportedMessageSubscriptionVerifiedTargets
+                    (TelegramUserId, PeerType, PeerId, MessageId, TargetUserName, VerifiedAtUtc)
+                VALUES ($owner, $type, $peer, $message, $target, $at)
+                """;
+            add.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+            add.Parameters.AddWithValue("$type", chat.PeerType);
+            add.Parameters.AddWithValue("$peer", chat.PeerId);
+            add.Parameters.AddWithValue("$message", messageId);
+            add.Parameters.AddWithValue("$target", InstagramUserName.Normalize(target.TargetUserName));
+            add.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
+            await add.ExecuteNonQueryAsync(cancellationToken);
         }
         using (var hide = connection.CreateCommand())
         {

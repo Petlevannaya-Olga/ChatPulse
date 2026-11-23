@@ -881,6 +881,7 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Задания" Foreground="#24154C"
                                            FontSize="21" FontWeight="Bold" VerticalAlignment="Center" />
@@ -891,8 +892,16 @@
                                         ToolTip="Последовательно проверить выполненные задания выбранного чата"
                                         Visibility="{Binding IsCompletedTasksSelected, Converter={StaticResource BoolVisible}}"
                                         IsEnabled="{Binding IsNotBusy}" />
+                                <Button Grid.Column="2" Content="Начать выполнение"
+                                        Click="StartTaskExecution_OnClick"
+                                        Style="{StaticResource WorkspaceActionButton}"
+                                        Background="#7545B9" Foreground="White" BorderThickness="0"
+                                        Height="44" Padding="18,0" Margin="10,0,0,0"
+                                        ToolTip="Последовательно выполнить невыполненные задания этого чата"
+                                        Visibility="{Binding IsPendingTasksSelected, Converter={StaticResource BoolVisible}}"
+                                        IsEnabled="{Binding IsNotBusy}" />
                                 <!-- Same maximize/restore control as on the Subscriptions tab. -->
-                                <Button Grid.Column="2" Click="ToggleTaskListExpansionButton_OnClick"
+                                <Button Grid.Column="3" Click="ToggleTaskListExpansionButton_OnClick"
                                         Style="{StaticResource WorkspaceActionButton}"
                                         Height="44" Width="44" Padding="0" Margin="12,0,0,0"
                                         ToolTip="{Binding TaskListExpandLabel}"
@@ -1055,6 +1064,22 @@
                                                                          <Button Content="↗  Пост" Tag="{Binding FeedPostUrl}"
                                                                                  Visibility="{Binding HasFeedPostUrl, Converter={StaticResource BoolVisible}}"
                                                                                  Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}" />
+                                                                         <ItemsControl ItemsSource="{Binding AdditionalActionLinks, Mode=OneWay}"
+                                                                                       VerticalAlignment="Center">
+                                                                             <ItemsControl.ItemsPanel>
+                                                                                 <ItemsPanelTemplate>
+                                                                                     <WrapPanel Orientation="Horizontal" />
+                                                                                 </ItemsPanelTemplate>
+                                                                             </ItemsControl.ItemsPanel>
+                                                                             <ItemsControl.ItemTemplate>
+                                                                                 <DataTemplate>
+                                                                                     <Button Content="{Binding Text}" Tag="{Binding Url}"
+                                                                                             Margin="8,0,0,0"
+                                                                                             Click="OpenPostButton_OnClick"
+                                                                                             Style="{StaticResource WorkspaceActionButton}" />
+                                                                                 </DataTemplate>
+                                                                             </ItemsControl.ItemTemplate>
+                                                                         </ItemsControl>
                                                                      </WrapPanel>
                                                                     <TextBlock Grid.Column="1" Text="{Binding TimeLabel}" Foreground="#93849F"
                                                                                FontSize="12" Margin="12,0,0,0" />

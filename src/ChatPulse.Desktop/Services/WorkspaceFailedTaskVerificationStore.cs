@@ -33,9 +33,12 @@ public sealed record WorkspaceFailedTaskReport(
     public static WorkspaceFailedTaskReport FromFollow(InstagramFollowTaskVerification result) =>
         new(DateTimeOffset.UtcNow,
             result.TaskKind == WorkspaceTaskKind.SUBSCRIBE ? "Подписка" : "Отписка",
-            result.ViewerUserName, result.TargetUserName,
-            [new WorkspaceFailedCheck(result.TaskKind == WorkspaceTaskKind.SUBSCRIBE ? "Подписка" : "Отписка",
-                result.Check.Status == InstagramTaskCheckStatus.CONFIRMED, result.Check.Detail)]);
+            result.ViewerUserName,
+            string.Join(", ", result.Results.Select(item => $"@{item.TargetUserName}")),
+            result.Results.Select(item => new WorkspaceFailedCheck(
+                $"{(result.TaskKind == WorkspaceTaskKind.SUBSCRIBE ? "Подписка" : "Отписка")} @{item.TargetUserName}",
+                item.Check.Status == InstagramTaskCheckStatus.CONFIRMED,
+                item.Check.Detail)).ToArray());
 
     public static WorkspaceFailedTaskReport FromError(string kind, string viewer,
         string target, IEnumerable<string> requestedChecks, string error) =>

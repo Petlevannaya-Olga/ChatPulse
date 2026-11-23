@@ -1,4 +1,4 @@
-using ChatPulse.Application.Services;
+﻿using ChatPulse.Application.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -163,6 +163,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify(nameof(SelectedChatNetwork));
             Notify(nameof(SelectedChatTaskCount));
             Notify(nameof(IsCompletedTasksSelected));
+            Notify(nameof(IsPendingTasksSelected));
             Notify(nameof(LastSelectedChatSyncLabel));
         }
     }
@@ -1318,6 +1319,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     public bool IsSidebarExpanded => _isSidebarExpanded;
     public bool IsSubscriptionTableExpanded => _isSubscriptionTableExpanded;
     public string SubscriptionTableExpandLabel => _isSubscriptionTableExpanded ? "Свернуть" : "Развернуть";
+    public bool IsPendingTasksSelected => _page == WorkspacePage.Chat &&
+        _chatPage == ChatPage.Tasks && _taskFilter == TaskFilter.Pending && SelectedChat is not null;
     public bool IsCompletedTasksSelected => _page == WorkspacePage.Chat &&
         _chatPage == ChatPage.Tasks && _taskFilter == TaskFilter.Completed && SelectedChat is not null;
     public bool IsTaskListExpanded => _isTaskListExpanded;
@@ -2102,6 +2105,48 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private async void StartTaskExecution_OnClick(object sender, RoutedEventArgs args)
+    {
+        if (IsBusy || !IsPendingTasksSelected || _reader is null ||
+            _synchronization is null || SelectedChat is not { } row) return;
+
+        IsBusy = true;
+        try
+        {
+            var owner = Window.GetWindow(this);
+            var dialog = new WorkspaceTaskExecutionDialog(_reader, _synchronization,
+                row.Chat, _oldestTasksFirst)
+            {
+                Owner = owner
+            };
+            // ShowDialog disables the owner window, including its native minimize button.
+            // Keep the owner enabled and use its content overlay to block task interactions
+            // while leaving the native window controls available.
+            var closed = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            dialog.Closed += (_, _) => closed.TrySetResult(true);
+            var mainWindow = owner as ChatPulse.Desktop.MainWindow;
+            mainWindow?.ShowDialogOverlay();
+            try
+            {
+                dialog.Show();
+                await closed.Task;
+            }
+            finally
+            {
+                mainWindow?.HideDialogOverlay();
+            }
+        }
+        finally
+        {
+            IsBusy = false;
+            // Refresh from SQLite: tasks confirmed by Telegram have moved to Completed.
+            // A new run therefore begins with only the remaining pending tasks.
+            UpdateSelectedTasks();
+            NotifyTaskFilter();
+        }
+    }
+
     private async void StartBulkTaskVerification_OnClick(object sender, RoutedEventArgs args)
     {
         if (IsBusy || !IsCompletedTasksSelected || _reader is null ||
@@ -2248,7 +2293,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             return;
         }
 
-        var candidates = InstagramFollowTaskRules.GetProfileTargets(task.Text, task.PostUrl);
+        var candidates = InstagramFollowTaskRules.GetVerificationTargets(kind, task.Text, task.PostUrl);
         var owner = Window.GetWindow(this);
         var dialog = new VerifySubscriptionTaskDialog(kind,
             _mainInstagramBrowser, accounts.ReceivingUserName, candidates,
@@ -2543,6 +2588,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     private void NotifyTaskFilter()
     {
+        Notify(nameof(IsPendingTasksSelected));
         Notify(nameof(IsCompletedTasksSelected));
         Notify(nameof(HasTasks));
         Notify(nameof(HasNoTasks));
@@ -2695,6 +2741,25 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
         .Where(part => part.Url is not null)
         .Concat(WorkspaceTaskLinks.Split(task.PostUrl).Where(part => part.Url is not null))
         .DistinctBy(part => part.Url, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    // Linked posts in the task body are different from the Telegram message
+    // containing the task. The latter is exposed separately by SourceUrl.
+    public IReadOnlyList<WorkspaceTaskTextPart> AdditionalActionLinks => ActionLinks
+        .Where(part => part.Url is { } url &&
+            Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+            uri.Host is ("t.me" or "instagram.com" or "www.instagram.com") &&
+            !string.Equals(url, ReelUrl, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(url, FeedPostUrl, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(url, PostUrl, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(url, SourceUrl, StringComparison.OrdinalIgnoreCase))
+        .Select(part => new WorkspaceTaskTextPart(part.Text switch
+        {
+            "Открыть Telegram" => "↗  Пост",
+            "Открыть Instagram" => "↗  Instagram",
+            "Открыть ссылку" => "↗  Ссылка",
+            _ => "↗  " + part.Text.Replace("Открыть ", string.Empty, StringComparison.Ordinal)
+        }, part.Url))
         .ToArray();
 
     public string CustomEmojiJson => _presentation.CustomEmojiJson;

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using ChatPulse.Contracts.Telegram;
 
@@ -11,6 +11,13 @@ namespace ChatPulse.Desktop.Services;
 public sealed record WorkspaceTaskPresentation(
     string Text, string CustomEmojiJson, string ReelUrl, string FeedPostUrl)
 {
+    // All actionable HTTP(S) links have dedicated buttons; keep them out of the
+    // rendered task body. The original imported Telegram message is unchanged.
+    private static readonly Regex ACTION_URL = new(
+        @"https?://[^\s<>\[\]""']+",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(250));
+
     private static readonly Regex INSTAGRAM_POST_URL = new(
         @"https?://(?:www\.)?instagram\.com/(?<kind>reel|p)/[A-Za-z0-9_-]+/?(?:\?[^\s<>\[\]()]+)?",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
@@ -32,9 +39,17 @@ public sealed record WorkspaceTaskPresentation(
         // Every kept UTF-16 code unit remembers its original offset so that custom
         // emoji entities can be remapped after URL removal and whitespace cleanup.
         var removed = new bool[text.Length];
-        foreach (var match in matches)
-            for (var index = match.Index; index < match.Index + match.Length; index++)
+        foreach (Match match in ACTION_URL.Matches(text))
+        {
+            // Match exactly the same URL portion as WorkspaceTaskLinks.Split.
+            var candidate = match.Value.TrimEnd('.', ',', ';', ':', '!', '?', ')', '}', '»');
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri) ||
+                uri.Scheme is not ("https" or "http") ||
+                uri.Host is not ("t.me" or "instagram.com" or "www.instagram.com"))
+                continue;
+            for (var index = match.Index; index < match.Index + candidate.Length; index++)
                 removed[index] = true;
+        }
 
         // A standalone "или" between alternative Instagram Reel/Post URLs is
         // part of the links' presentation, not of the task's instructions.

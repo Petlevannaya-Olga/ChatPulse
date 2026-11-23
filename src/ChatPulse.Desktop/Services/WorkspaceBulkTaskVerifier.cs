@@ -10,6 +10,10 @@ public sealed class WorkspaceBulkTaskVerifier(
     WorkspaceTaskReader reader,
     InstagramBrowserService browser)
 {
+    // A single service instance is shared by every task in the batch.
+    // Chrome is closed only after the batch finishes or a soft stop completes.
+    public Task CloseBrowserAsync() => browser.CloseBrowserAsync();
+
     public async Task<IReadOnlyList<long>> GetSnapshotAsync(ConfiguredChat chat,
         bool oldestFirst, Func<bool> stopRequested)
     {
@@ -48,23 +52,27 @@ public sealed class WorkspaceBulkTaskVerifier(
         {
             if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE)
             {
-                var candidates = InstagramFollowTaskRules.GetProfileTargets(task.Text, task.PostUrl);
-                if (candidates.Count != 1)
-                    return await FailedAsync($"Не удалось однозначно определить участницу (профилей: {candidates.Count}).");
-                target = candidates[0];
-                stage?.Report($"{kindLabel}: @{target}");
-                var check = await browser.CheckOwnFollowingAsync(viewer, target,
-                    kind == WorkspaceTaskKind.SUBSCRIBE, CancellationToken.None);
-                var verification = new InstagramFollowTaskVerification(viewer, target, kind, check);
+                var candidates = InstagramFollowTaskRules.GetVerificationTargets(kind, task.Text, task.PostUrl);
+                if (candidates.Count == 0)
+                    return await FailedAsync("В задании нет Instagram-профилей для проверки.");
+                target = string.Join(", ", candidates.Select(name => $"@{name}"));
+                var verification = await InstagramFollowTaskRules.VerifyTargetsAsync(viewer, kind, candidates,
+                    (name, shouldFollow, token) => browser.CheckOwnFollowingAsync(viewer, name, shouldFollow, token),
+                    stage, CancellationToken.None);
                 if (!verification.CanHide)
                 {
                     await failedStore.SaveAsync(chat, messageId,
                         WorkspaceFailedTaskReport.FromFollow(verification));
-                    return new WorkspaceBulkTaskOutcome(messageId, false, check.Detail, false);
+                    var details = string.Join("; ", verification.Results
+                        .Where(item => item.Check.Status != InstagramTaskCheckStatus.CONFIRMED)
+                        .Select(item => $"@{item.TargetUserName}: {item.Check.Detail}"));
+                    return new WorkspaceBulkTaskOutcome(messageId, false,
+                        verification.Check.Detail + " " + details, false);
                 }
                 await new WorkspaceSubscriptionTaskVerificationStore(reader.DatabasePath)
                     .PublishAsync(chat, messageId, verification);
-                return new WorkspaceBulkTaskOutcome(messageId, true, $"{kindLabel} @{target}: подтверждено и скрыто.", false);
+                return new WorkspaceBulkTaskOutcome(messageId, true,
+                    $"{kindLabel}: проверено {candidates.Count} профилей, задание скрыто.", false);
             }
 
             var requested = WorkspaceBulkTaskVerificationPolicy.PostChecks(task.Text);
