@@ -124,9 +124,26 @@ public sealed record WorkspaceTaskPresentation(
                     builder.Append('\n');
             }
 
-            // Keep meaningful indentation and spacing within a content line.
-            foreach (var character in currentLine)
+            // Removing a URL may leave a dangling space after the label (e.g.
+            // "Подпишитесь: https://instagram.com/profile/"). Trim that space,
+            // but preserve original whitespace in messages without removed links.
+            var lineStart = text.LastIndexOf('\n', currentLine[0].OriginalOffset) + 1;
+            var lineEnd = text.IndexOf('\n', currentLine[^1].OriginalOffset);
+            if (lineEnd < 0) lineEnd = text.Length;
+            var hasRemovedUrl = false;
+            for (var index = lineStart; index < lineEnd; index++)
             {
+                if (!removed[index]) continue;
+                hasRemovedUrl = true;
+                break;
+            }
+
+            var lastContentIndex = hasRemovedUrl
+                ? currentLine.FindLastIndex(character => !char.IsWhiteSpace(character.Character))
+                : currentLine.Count - 1;
+            for (var index = 0; index <= lastContentIndex; index++)
+            {
+                var character = currentLine[index];
                 offsetMap[character.OriginalOffset] = builder.Length;
                 builder.Append(character.Character);
             }

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Settings;
@@ -205,15 +205,19 @@ public sealed class ParticipantListIntegrationTests
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "fourteenth-chat.db");
-        var registry = new ChatParticipantRegistry(database);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         var chat = Chat(101);
         Assert.Equal(ParticipantListApplyStatus.APPLIED,
             (await registry.UpdateDetailedAsync(chat,
                 [(1842L, FOURTEENTH_CHAT_REGISTER, (DateTime?)null)])).Status);
 
-        await using var connection = new SqliteConnection($"Data Source={database}");
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false
+        }.ToString());
         await connection.OpenAsync();
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT COUNT(*) FROM ChatParticipants
             WHERE TelegramUserId=123 AND PeerId=101 AND IsCurrent=1 AND Category='Обычный'
@@ -249,10 +253,14 @@ public sealed class ParticipantListIntegrationTests
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "history.db");
-        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false
+        }.ToString()))
         {
             await connection.OpenAsync();
-            var create = connection.CreateCommand();
+            using var create = connection.CreateCommand();
             create.CommandText = """
                 CREATE TABLE ImportedChatMessages (
                     TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -269,7 +277,7 @@ public sealed class ParticipantListIntegrationTests
                          (4, "✨Это наш ПОСТ ЧАТ✨\nПример https://www.instagram.com/p/abc123/")
                      })
             {
-                var insert = connection.CreateCommand();
+                using var insert = connection.CreateCommand();
                 insert.CommandText = "INSERT INTO ImportedChatMessages VALUES (123, 'Channel', 101, $id, $body)";
                 insert.Parameters.AddWithValue("$id", id);
                 insert.Parameters.AddWithValue("$body", content);
@@ -277,14 +285,25 @@ public sealed class ParticipantListIntegrationTests
             }
         }
 
-        var tasks = await new WorkspaceTaskReader(database).GetTasksAsync(Chat(101));
+        var tasks = await new WorkspaceTaskReader(database, pooling: false).GetTasksAsync(Chat(101));
         Assert.Equal(new long[] { 2, 3 }, tasks.Select(item => item.MessageId));
 
-        await using var check = new SqliteConnection($"Data Source={database}");
-        await check.OpenAsync();
-        var count = check.CreateCommand();
-        count.CommandText = "SELECT COUNT(*) FROM ImportedChatMessages";
-        Assert.Equal(4L, await count.ExecuteScalarAsync());
+        await using (var check = new SqliteConnection(new SqliteConnectionStringBuilder
+                     {
+                         DataSource = database,
+                         Pooling = false
+                     }.ToString()))
+        {
+            await check.OpenAsync();
+            using var count = check.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM ImportedChatMessages";
+            Assert.Equal(4L, await count.ExecuteScalarAsync());
+        }
+
+        // Read-only workspace queries must not leave an open SQLite file handle.
+        // Verify deletion before the temporary-directory cleanup runs.
+        File.Delete(database);
+        Assert.False(File.Exists(database));
     }
 
     [Fact]
@@ -554,7 +573,7 @@ public sealed class ParticipantListIntegrationTests
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "penalty.db");
         var chat = Chat(101);
-        var registry = new ChatParticipantRegistry(database);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         Assert.Equal(ParticipantListApplyStatus.APPLIED,
             (await registry.UpdateDetailedAsync(chat, [(1L, original, (DateTime?)null)])).Status);
         var pending = await registry.UpdateDetailedAsync(chat,
@@ -590,7 +609,7 @@ public sealed class ParticipantListIntegrationTests
         var withPenalty = original + "\n❌ ШТРАФНЫЕ ДНИ ❌\n4\nhttps://www.instagram.com/_mar_g.oХ";
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "participants.db");
-        var registry = new ChatParticipantRegistry(database);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         var chat = Chat(101);
         var earlier = new DateTime(2026, 11, 17, 17, 01, 0, DateTimeKind.Utc);
         var later = new DateTime(2026, 11, 18, 17, 00, 0, DateTimeKind.Utc);
@@ -606,9 +625,13 @@ public sealed class ParticipantListIntegrationTests
         Assert.Equal(1L, current.Position);
         Assert.Equal("https://www.instagram.com/mar_fozzz", current.Activity);
 
-        await using var connection = new SqliteConnection($"Data Source={database}");
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false
+        }.ToString());
         await connection.OpenAsync();
-        var query = connection.CreateCommand();
+        using var query = connection.CreateCommand();
         query.CommandText = """
             SELECT COUNT(*), MAX(Status) FROM ChatParticipants
             WHERE TelegramUserId=123 AND PeerId=101 AND IsCurrent=1
@@ -711,7 +734,7 @@ public sealed class ParticipantListIntegrationTests
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "history.db");
-        var registry = new ChatParticipantRegistry(database);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         var chat = Chat(101);
         Assert.Equal(1, await registry.UpdateAsync(chat, [(10, REGISTER)]));
         var first = await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_");
@@ -750,8 +773,8 @@ public sealed class ParticipantListIntegrationTests
         var sync = new ChatSynchronizationService(settings, telegram, database);
         var chat = Assert.Single((await settings.LoadAsync()).Chats);
         await sync.SynchronizeAsync(chat);
-        Assert.Equal(22L, Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat)).MessageId);
-        var registry = new ChatParticipantRegistry(database);
+        Assert.Equal(22L, Assert.Single(await new WorkspaceTaskReader(database, pooling: false).GetTasksAsync(chat)).MessageId);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         Assert.Null(await registry.ReadLatestSourceAsync(chat));
         await registry.UpdateAsync(chat, [(20L, REGISTER)]);
         Assert.Equal(1L, (await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_")).Position);
@@ -762,7 +785,7 @@ public sealed class ParticipantListIntegrationTests
         await sync.RefreshReactionsAsync(chat);
         Assert.Equal(1L, (await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_")).Position);
         Assert.Equal(20L, (await registry.ReadLatestSourceAsync(chat))?.MessageId);
-        Assert.Equal(22L, Assert.Single(await new WorkspaceTaskReader(database).GetTasksAsync(chat)).MessageId);
+        Assert.Equal(22L, Assert.Single(await new WorkspaceTaskReader(database, pooling: false).GetTasksAsync(chat)).MessageId);
     }
 
     [Fact]
@@ -770,10 +793,14 @@ public sealed class ParticipantListIntegrationTests
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "history.db");
-        await using (var connection = new SqliteConnection($"Data Source={database}"))
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false
+        }.ToString()))
         {
             await connection.OpenAsync();
-            var cmd = connection.CreateCommand();
+            using var cmd = connection.CreateCommand();
             cmd.CommandText = """
                 CREATE TABLE ImportedChatMessages (
                     TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -788,15 +815,19 @@ public sealed class ParticipantListIntegrationTests
                          (3, REGISTER), (4, "Лайки https://www.instagram.com/p/abc123/")
                      })
             {
-                var insert = connection.CreateCommand();
+                using var insert = connection.CreateCommand();
                 insert.CommandText = "INSERT INTO ImportedChatMessages VALUES (123, 'Channel', 101, $id, $body)";
                 insert.Parameters.AddWithValue("$id", id);
                 insert.Parameters.AddWithValue("$body", (object?)body ?? DBNull.Value);
                 await insert.ExecuteNonQueryAsync();
             }
         }
-        var result = await new WorkspaceTaskReader(database).GetTasksAsync(Chat(101));
+        var result = await new WorkspaceTaskReader(database, pooling: false).GetTasksAsync(Chat(101));
         Assert.Equal(4L, Assert.Single(result).MessageId);
+
+        // SQLite statements must be finalized before the temporary file is removed.
+        File.Delete(database);
+        Assert.False(File.Exists(database));
     }
 
     [Fact]
@@ -804,7 +835,7 @@ public sealed class ParticipantListIntegrationTests
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "history.db");
-        var registry = new ChatParticipantRegistry(database);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         await registry.UpdateAsync(Chat(101), [(10, REGISTER)]);
         await registry.UpdateAsync(Chat(202), [(20, REGISTER)]);
         Assert.Equal(1L, (await ReadAsync(database, 101, "https://www.instagram.com/q.r1s_")).Position);
@@ -864,20 +895,42 @@ public sealed class ParticipantListIntegrationTests
     {
         using var temp = new TempDirectory();
         var database = Path.Combine(temp.Path, "history.db");
-        var registry = new ChatParticipantRegistry(database);
+        var registry = new ChatParticipantRegistry(database, pooling: false);
         var chat = Chat(101);
         chat.SocialNetwork = "Telegram";
         Assert.Equal(1, await registry.UpdateAsync(chat, [(30, TELEGRAM_REGISTER)]));
         Assert.Equal(1, await registry.UpdateAsync(chat, [(31, TELEGRAM_REGISTER)]));
-        await using var connection = new SqliteConnection($"Data Source={database}");
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false
+        }.ToString());
         await connection.OpenAsync();
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT COUNT(DISTINCT ParticipantId) FROM ChatParticipants
             WHERE TelegramUserId=123 AND PeerId=101 AND IsCurrent=1
               AND SubscriptionProfileUrl='https://t.me/neuro_sofia_art'
             """;
         Assert.Equal(2L, (long)(await command.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
+    public async Task TelegramRegister_CompletedOperationsReleaseTemporaryDatabase()
+    {
+        using var temp = new TempDirectory();
+        var database = Path.Combine(temp.Path, "history.db");
+        var registry = new ChatParticipantRegistry(database, pooling: false);
+        var chat = Chat(101);
+        chat.SocialNetwork = "Telegram";
+
+        Assert.Equal(1, await registry.UpdateAsync(chat, [(30, TELEGRAM_REGISTER)]));
+        Assert.Equal(1, await registry.UpdateAsync(chat, [(31, TELEGRAM_REGISTER)]));
+        Assert.Equal(31L, (await registry.ReadLatestSourceAsync(chat))?.MessageId);
+
+        // Windows must be able to delete the file immediately after all operations complete.
+        SqliteTestDatabaseCleanup.DeleteFile(database);
+        Assert.False(File.Exists(database));
     }
 
     [Fact]
@@ -1194,9 +1247,13 @@ public sealed class ParticipantListIntegrationTests
     private static async Task<(long Id, long Position, string Activity, long Current)> ReadAsync(
         string database, long peer, string subscription)
     {
-        await using var connection = new SqliteConnection($"Data Source={database}");
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false
+        }.ToString());
         await connection.OpenAsync();
-        var cmd = connection.CreateCommand();
+        using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT ParticipantId, Position, ActivityProfileUrl, IsCurrent
             FROM ChatParticipants WHERE TelegramUserId=123 AND PeerId=$peer

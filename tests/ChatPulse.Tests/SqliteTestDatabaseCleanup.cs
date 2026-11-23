@@ -33,24 +33,33 @@ internal static class SqliteTestDatabaseCleanup
 
     private static void ClearDatabasePools(string databasePath)
     {
+        // Pool keys are the original connection-string text. A manually composed
+        // "Data Source=..." can own a different pool from a builder-produced string.
+        ClearPool($"Data Source={databasePath}");
+
         // The application and tests use both the implicit default mode and explicit
         // modes. These are distinct connection strings and may have separate pools.
-        ClearPool(new SqliteConnectionStringBuilder { DataSource = databasePath });
+        ClearPool(new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
         ClearPool(new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate
-        });
+        }.ToString());
+        ClearPool(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWrite
+        }.ToString());
         ClearPool(new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadOnly
-        });
+        }.ToString());
     }
 
-    private static void ClearPool(SqliteConnectionStringBuilder connectionString)
+    private static void ClearPool(string connectionString)
     {
-        using var connection = new SqliteConnection(connectionString.ToString());
+        using var connection = new SqliteConnection(connectionString);
         SqliteConnection.ClearPool(connection);
     }
 }

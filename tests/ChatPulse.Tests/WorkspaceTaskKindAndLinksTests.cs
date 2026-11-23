@@ -44,6 +44,21 @@ public sealed class WorkspaceTaskKindAndLinksTests
         Assert.True(card.IsRegularTask);
         Assert.False(card.IsSubscriptionAction);
         Assert.Equal(2, card.ActionLinks.Count);
+        Assert.Contains(card.ActionLinks, link => link.Url is not null &&
+            link.Url.Contains("/reel/Df9ollSMsmL/", StringComparison.Ordinal));
+        Assert.Contains(card.ActionLinks, link => link.Url is not null &&
+            link.Url.Contains("/p/Df9ollSMsmL/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalPostUrlDoesNotDuplicatePostUrlWithTrackingParameters()
+    {
+        const string link = "https://www.instagram.com/p/Df9ollSMsmL/?cnvx=tracking";
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new WorkspaceDetectedTask(11, $"Лайк {link}", "https://www.instagram.com/p/Df9ollSMsmL/"));
+
+        var action = Assert.Single(card.ActionLinks);
+        Assert.Equal(link, action.Url);
     }
 
     [Theory]

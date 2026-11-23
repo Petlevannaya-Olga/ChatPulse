@@ -88,6 +88,46 @@ public sealed class SqliteTestDatabaseCleanupTests
     }
 
     [Fact]
+    public async Task DeleteDirectory_ReleasesPoolOpenedWithExplicitReadWriteMode()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ChatPulse-Cleanup-ReadWrite-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var database = Path.Combine(directory, "history.db");
+
+        try
+        {
+            await using (var initial = new SqliteConnection($"Data Source={database}"))
+            {
+                await initial.OpenAsync();
+                using var create = initial.CreateCommand();
+                create.CommandText = "CREATE TABLE TestMessages (Id INTEGER PRIMARY KEY)";
+                await create.ExecuteNonQueryAsync();
+            }
+
+            // WorkspaceTaskVerificationStore.PublishAsync opens this explicit mode.
+            await using (var readWrite = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = database,
+                Mode = SqliteOpenMode.ReadWrite
+            }.ToString()))
+            {
+                await readWrite.OpenAsync();
+                using var command = readWrite.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM TestMessages";
+                Assert.Equal(0L, (long)(await command.ExecuteScalarAsync())!);
+            }
+
+            SqliteTestDatabaseCleanup.DeleteDirectory(directory);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                SqliteTestDatabaseCleanup.DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public async Task DeleteFile_ReleasesPoolOpenedWithExplicitReadWriteCreateMode()
     {
         var database = Path.Combine(Path.GetTempPath(), $"ChatPulse-Cleanup-ExplicitMode-{Guid.NewGuid():N}.db");
@@ -183,6 +223,34 @@ public sealed class SqliteTestDatabaseCleanupTests
         finally
         {
             SqliteTestDatabaseCleanup.DeleteDirectory(testDirectory);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteDirectory_ReleasesPoolFromLiteralDataSourceString()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ChatPulse-Cleanup-Literal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var database = Path.Combine(directory, "history.db");
+
+        try
+        {
+            // Match the literal connection strings historically used in integration tests.
+            await using (var connection = new SqliteConnection($"Data Source={database}"))
+            {
+                await connection.OpenAsync();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE TestMessages (Id INTEGER PRIMARY KEY)";
+                await command.ExecuteNonQueryAsync();
+            }
+
+            SqliteTestDatabaseCleanup.DeleteDirectory(directory);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                SqliteTestDatabaseCleanup.DeleteDirectory(directory);
         }
     }
 

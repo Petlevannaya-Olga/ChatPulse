@@ -34,8 +34,16 @@ public sealed record ParticipantListRefreshAttempt(long? MessageId, DateTime? Se
     DateTime AttemptedAtUtc, ParticipantListApplyStatus Status, string Description);
 
 /// <summary>Stores each recognized full participant register as a chat-local snapshot.</summary>
-public sealed class ChatParticipantRegistry(string databasePath)
+public sealed class ChatParticipantRegistry(string databasePath, bool pooling = true)
 {
+    private SqliteConnection CreateConnection()
+    {
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath };
+        if (!pooling)
+            connectionString.Pooling = false;
+        return new SqliteConnection(connectionString.ToString());
+    }
+
     public Task<int> UpdateAsync(ConfiguredChat chat,
         IEnumerable<(long MessageId, string? Text)> messages,
         CancellationToken cancellationToken = default)
@@ -80,12 +88,9 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 ? ParticipantListApplyStatus.PROFILE_CHECK_INCONCLUSIVE
                 : ParticipantListApplyStatus.NO_VALID_LIST);
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath
-        }.ToString());
+        await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ChatParticipantRegistryVersions (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL, PeerId INTEGER NOT NULL,
@@ -107,7 +112,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         // Existing installations have no timestamp column: migrate in place.
-        var schema = connection.CreateCommand();
+        using var schema = connection.CreateCommand();
         schema.CommandText = "PRAGMA table_info(ChatParticipantRegistryVersions)";
         var hasTimestamp = false;
         var hasLastSuccessfulSync = false;
@@ -123,13 +128,13 @@ public sealed class ChatParticipantRegistry(string databasePath)
         }
         if (!hasTimestamp)
         {
-            var migration = connection.CreateCommand();
+            using var migration = connection.CreateCommand();
             migration.CommandText = "ALTER TABLE ChatParticipantRegistryVersions ADD COLUMN SourceSentAtUnixSeconds INTEGER";
             await migration.ExecuteNonQueryAsync(cancellationToken);
         }
         if (!hasLastSuccessfulSync)
         {
-            var migration = connection.CreateCommand();
+            using var migration = connection.CreateCommand();
             migration.CommandText = "ALTER TABLE ChatParticipantRegistryVersions ADD COLUMN LastSuccessfulSyncAtUnixSeconds INTEGER";
             await migration.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -139,7 +144,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-            var version = connection.CreateCommand();
+            using var version = connection.CreateCommand();
             version.Transaction = transaction;
             version.CommandText = """
                 SELECT SourceMessageId FROM ChatParticipantRegistryVersions
@@ -153,7 +158,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 status = ParticipantListApplyStatus.OLDER_MESSAGE;
                 continue;
             }
-            var current = connection.CreateCommand();
+            using var current = connection.CreateCommand();
             current.Transaction = transaction;
             current.CommandText = """
                 SELECT ParticipantId, SubscriptionProfileUrl, ActivityProfileUrl, DisplayName,
@@ -178,7 +183,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
             if (prior is not null && Convert.ToInt64(prior) == snapshot.MessageId &&
                 SnapshotMatchesCurrent(snapshot.Parsed!.Participants, known))
             {
-                var markSynced = connection.CreateCommand();
+                using var markSynced = connection.CreateCommand();
                 markSynced.Transaction = transaction;
                 markSynced.CommandText = """
                     UPDATE ChatParticipantRegistryVersions
@@ -226,7 +231,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 status = ParticipantListApplyStatus.AMBIGUOUS_MATCH;
                 continue;
             }
-            var deactivate = connection.CreateCommand();
+            using var deactivate = connection.CreateCommand();
             deactivate.Transaction = transaction;
             deactivate.CommandText = """
                 UPDATE ChatParticipants SET IsCurrent=0
@@ -236,7 +241,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
             await deactivate.ExecuteNonQueryAsync(cancellationToken);
             foreach (var (participant, id) in matches)
             {
-                var command = connection.CreateCommand();
+                using var command = connection.CreateCommand();
                 command.Transaction = transaction;
                 command.CommandText = id.HasValue ? """
                     UPDATE ChatParticipants SET Position=$position, DisplayName=$name,
@@ -260,7 +265,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
                 if (id.HasValue) command.Parameters.AddWithValue("$id", id.Value);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
-            var saveVersion = connection.CreateCommand();
+            using var saveVersion = connection.CreateCommand();
             saveVersion.Transaction = transaction;
             saveVersion.CommandText = """
                 INSERT INTO ChatParticipantRegistryVersions
@@ -320,15 +325,12 @@ public sealed class ChatParticipantRegistry(string databasePath)
         CancellationToken cancellationToken = default)
     {
         if (!File.Exists(databasePath)) return null;
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath
-        }.ToString());
+        await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
-        var table = connection.CreateCommand();
+        using var table = connection.CreateCommand();
         table.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ChatParticipantRegistryVersions'";
         if (await table.ExecuteScalarAsync(cancellationToken) is null) return null;
-        var schema = connection.CreateCommand();
+        using var schema = connection.CreateCommand();
         schema.CommandText = "PRAGMA table_info(ChatParticipantRegistryVersions)";
         var hasTimestamp = false;
         var hasLastSuccessfulSync = false;
@@ -342,7 +344,7 @@ public sealed class ChatParticipantRegistry(string databasePath)
                     hasLastSuccessfulSync = true;
             }
         }
-        var query = connection.CreateCommand();
+        using var query = connection.CreateCommand();
         query.CommandText = $"""
             SELECT SourceMessageId, {(hasTimestamp ? "SourceSentAtUnixSeconds" : "NULL")},
                    {(hasLastSuccessfulSync ? "LastSuccessfulSyncAtUnixSeconds" : "NULL")}
@@ -368,12 +370,9 @@ public sealed class ChatParticipantRegistry(string databasePath)
         CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath
-        }.ToString());
+        await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS ChatParticipantRegistryRefreshAttempts (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL, PeerId INTEGER NOT NULL,
@@ -406,18 +405,15 @@ public sealed class ChatParticipantRegistry(string databasePath)
         CancellationToken cancellationToken = default)
     {
         if (!File.Exists(databasePath)) return null;
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath
-        }.ToString());
+        await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
-        var table = connection.CreateCommand();
+        using var table = connection.CreateCommand();
         table.CommandText = """
             SELECT 1 FROM sqlite_master
             WHERE type='table' AND name='ChatParticipantRegistryRefreshAttempts'
             """;
         if (await table.ExecuteScalarAsync(cancellationToken) is null) return null;
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT SourceMessageId, SourceSentAtUnixSeconds, AttemptedAtUnixSeconds,
                    Status, Description

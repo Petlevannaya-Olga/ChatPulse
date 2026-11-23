@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using ChatPulse.Application.Features.Chats.Analyze;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
@@ -9,7 +9,7 @@ namespace ChatPulse.Desktop.Services;
 /// Read-only preview of task-like messages from the imported Telegram history.
 /// Status is derived only from saved, verified reactions of the authorized account.
 /// </summary>
-public sealed class WorkspaceTaskReader(string databasePath)
+public sealed class WorkspaceTaskReader(string databasePath, bool pooling = true)
 {
     public string DatabasePath => databasePath;
     public async Task<IReadOnlyList<WorkspaceDetectedTask>> GetTasksAsync(
@@ -41,33 +41,36 @@ public sealed class WorkspaceTaskReader(string databasePath)
         ArgumentNullException.ThrowIfNull(chat);
         if (!File.Exists(databasePath)) return new WorkspaceTaskPage([], 0, 0);
 
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadOnly
-        }.ToString());
+        };
+        if (!pooling)
+            connectionString.Pooling = false;
+        await using var connection = new SqliteConnection(connectionString.ToString());
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-        var exists = connection.CreateCommand();
+        using var exists = connection.CreateCommand();
         exists.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedChatMessages'";
         if ((long)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) == 0) return new WorkspaceTaskPage([], 0, 0);
 
-        var stateTable = connection.CreateCommand();
+        using var stateTable = connection.CreateCommand();
         stateTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageReactionStates'";
         var hasReactionStates = (long)(await stateTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
-        var authorTable = connection.CreateCommand();
+        using var authorTable = connection.CreateCommand();
         authorTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageAuthors'";
         var hasAuthors = (long)(await authorTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
-        var emojiTable = connection.CreateCommand();
+        using var emojiTable = connection.CreateCommand();
         emojiTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageCustomEmoji'";
         var hasEmojis = (long)(await emojiTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
-        var datesTable = connection.CreateCommand();
+        using var datesTable = connection.CreateCommand();
         datesTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageDates'";
         var hasDates = (long)(await datesTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
-        var skipTable = connection.CreateCommand();
+        using var skipTable = connection.CreateCommand();
         skipTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageSkips'";
         var hasSkips = (long)(await skipTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
-        var hiddenTable = connection.CreateCommand();
+        using var hiddenTable = connection.CreateCommand();
         hiddenTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageHidden'";
         var hasHidden = (long)(await hiddenTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
         var hiddenPredicate = hasHidden ? """
@@ -78,7 +81,7 @@ public sealed class WorkspaceTaskReader(string databasePath)
                   AND hidden.PeerId = message.PeerId AND hidden.MessageId = message.MessageId
             )
             """ : string.Empty;
-        var command = connection.CreateCommand();
+        using var command = connection.CreateCommand();
         var ownReactionColumn = hasReactionStates ? "reaction.HasOwnReaction" : "NULL";
         var ownReactionJoin = hasReactionStates ? """
             LEFT JOIN ImportedMessageReactionStates AS reaction

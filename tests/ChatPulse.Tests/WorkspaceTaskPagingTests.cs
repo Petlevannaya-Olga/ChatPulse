@@ -52,9 +52,13 @@ public sealed class WorkspaceTaskPagingTests
         var second = await reader.ReadPageAsync(chat, WorkspaceTaskState.Completed, false, 7, 7);
         var skipped = await reader.ReadPageAsync(chat, WorkspaceTaskState.Skipped, false, 0, 5);
         var pending = await reader.ReadPageAsync(chat, WorkspaceTaskState.Pending, false, 0, 8);
-        var completedIds = Enumerable.Range(1, 65).Where(id => id % 3 == 0 && id % 5 != 0).ToArray();
+        var completedIds = Enumerable.Range(1, 66).Where(id => id % 3 == 0 && id % 5 != 0).ToArray();
 
         Assert.Equal(completedIds.Length, completed.Total);
+        // Message 66 has no date, but it is still completed and must be included.
+        var lastCompleted = await reader.ReadPageAsync(chat, WorkspaceTaskState.Completed,
+            false, completed.Total - 1, 1, includeTotals: false);
+        Assert.Equal(66L, lastCompleted.Tasks.Single().MessageId);
         Assert.Equal(7, completed.Tasks.Count);
         Assert.All(completed.Tasks.Concat(second.Tasks), item =>
             Assert.True(item.IsCompleted && !item.IsSkipped));

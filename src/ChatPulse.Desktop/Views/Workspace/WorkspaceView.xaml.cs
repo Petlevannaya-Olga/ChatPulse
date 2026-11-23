@@ -2737,10 +2737,29 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
         WorkspaceTaskKind.UNSUBSCRIBE => "#F3D9B9",
         _ => "#ECE4F5"
     };
+    // Instagram post/reel links with tracking query strings and their canonical
+    // counterparts identify the same action link. Keep /p/ and /reel/ separate:
+    // the UI deliberately provides both entry points when both are present.
+    private static string GetActionLinkIdentity(WorkspaceTaskTextPart part)
+    {
+        var url = part.Url ?? string.Empty;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Host is not ("instagram.com" or "www.instagram.com"))
+            return url;
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 2 &&
+            (string.Equals(segments[0], "p", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(segments[0], "reel", StringComparison.OrdinalIgnoreCase)))
+            return $"instagram.com/{segments[0].ToLowerInvariant()}/{segments[1]}";
+
+        return url;
+    }
+
     public IReadOnlyList<WorkspaceTaskTextPart> ActionLinks => WorkspaceTaskLinks.Split(task.Text)
         .Where(part => part.Url is not null)
         .Concat(WorkspaceTaskLinks.Split(task.PostUrl).Where(part => part.Url is not null))
-        .DistinctBy(part => part.Url, StringComparer.OrdinalIgnoreCase)
+        .DistinctBy(GetActionLinkIdentity, StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
     // Linked posts in the task body are different from the Telegram message

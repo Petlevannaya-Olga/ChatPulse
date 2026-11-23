@@ -1,3 +1,4 @@
+using System.IO;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;

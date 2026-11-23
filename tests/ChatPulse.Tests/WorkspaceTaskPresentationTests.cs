@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using ChatPulse.Contracts.Telegram;
 using ChatPulse.Desktop.Services;
+using ChatPulse.Desktop.Views.Workspace;
 using Xunit;
 
 namespace ChatPulse.Tests;
@@ -8,7 +9,7 @@ namespace ChatPulse.Tests;
 public sealed class WorkspaceTaskPresentationTests
 {
     [Fact]
-    public void ExtractsReelAndPostWithoutRemovingOtherTextOrLinks()
+    public void ExtractsReelAndPostAndKeepsTelegramLinkAsSeparateAction()
     {
         const string reel = "https://www.instagram.com/reel/abc123/?r=1";
         const string post = "https://www.instagram.com/p/def456/";
@@ -18,7 +19,11 @@ public sealed class WorkspaceTaskPresentationTests
         Assert.DoesNotContain(reel, result.Text);
         Assert.DoesNotContain(post, result.Text);
         Assert.Contains("Подписка 🩷", result.Text);
-        Assert.Contains("https://t.me/example", result.Text);
+        Assert.DoesNotContain("https://t.me/example", result.Text);
+        var card = new WorkspaceTaskCard(new WorkspaceDetectedTask(
+            1, $"VIP LITE\n{reel}\n{post}\nПодписка 🩷\nhttps://t.me/example", ""));
+        Assert.Contains(card.AdditionalActionLinks,
+            link => link.Url == "https://t.me/example" && link.Text == "↗  Пост");
     }
 
     [Fact]
@@ -36,13 +41,27 @@ public sealed class WorkspaceTaskPresentationTests
     }
 
     [Fact]
-    public void LeavesNonPostProfileAndMessagesWithoutLinksUntouched()
+    public void InstagramProfileIsExtractedFromBodyButRemainsAvailableAsAction()
     {
-        const string text = "Подпишитесь: https://www.instagram.com/someone/";
+        const string profileUrl = "https://www.instagram.com/someone/";
+        var text = $"Подпишитесь: {profileUrl}";
         var result = WorkspaceTaskPresentation.Create(text, "");
-        Assert.Equal(text, result.Text);
+        Assert.Equal("Подпишитесь:", result.Text);
         Assert.Empty(result.ReelUrl);
         Assert.Empty(result.FeedPostUrl);
+
+        var card = new WorkspaceTaskCard(new WorkspaceDetectedTask(1, text, ""));
+        Assert.Equal("Подпишитесь:", card.Description);
+        var action = Assert.Single(card.AdditionalActionLinks);
+        Assert.Equal(profileUrl, action.Url);
+        Assert.Equal("↗  Instagram", action.Text);
+    }
+
+    [Fact]
+    public void MessageWithoutLinksKeepsItsOriginalText()
+    {
+        const string text = "Подпишитесь: на участницу";
+        Assert.Equal(text, WorkspaceTaskPresentation.Create(text, "").Text);
     }
     [Fact]
     public void RemovesLeadingTrailingAndRepeatedBlankLinesInEveryMessage()

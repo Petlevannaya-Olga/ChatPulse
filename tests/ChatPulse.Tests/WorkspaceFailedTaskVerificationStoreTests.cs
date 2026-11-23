@@ -1,3 +1,4 @@
+using System.IO;
 using ChatPulse.Desktop.Services;
 using ChatPulse.Desktop.Settings;
 using Microsoft.Data.Sqlite;
@@ -67,7 +68,7 @@ public sealed class WorkspaceFailedTaskVerificationStoreTests
         }
         finally
         {
-            if (File.Exists(path)) File.Delete(path);
+            SqliteTestDatabaseCleanup.DeleteFile(path);
         }
     }
 }

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Xml.Linq;
 using System.Xml.XPath;
 using ChatPulse.Desktop.Services;
@@ -93,9 +93,10 @@ public sealed class InstagramTaskVerificationTests
     [InlineData("Лайк, комментарий, сохранение и репост", true, true, true, true)]
     [InlineData("Поставьте лайк и сохраните пост", true, false, true, false)]
     [InlineData("Комментарий не нужен, поставьте лайк", true, false, false, false)]
-    [InlineData("Без репоста, только сохранение", false, false, true, false)]
-    [InlineData("Задание без указания реакций", false, false, false, false)]
-    public void TaskTextSuggestsOnlyRequestedActions(string text, bool like,
+    [InlineData("Без репоста, только сохранение", true, false, true, false)]
+    [InlineData("Задание без указания реакций", true, false, false, false)]
+    [InlineData("", true, false, false, false)]
+    public void TaskTextSuggestsMandatoryLikeAndRequestedOtherActions(string text, bool like,
         bool comment, bool save, bool repost)
     {
         var selection = InstagramTaskVerificationRules.SuggestChecks(text);

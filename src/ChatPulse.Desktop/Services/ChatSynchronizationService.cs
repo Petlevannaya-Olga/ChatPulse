@@ -405,10 +405,10 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var table = connection.CreateCommand();
+        using var table = connection.CreateCommand();
         table.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageReactionStates'";
         if (Convert.ToInt64(await table.ExecuteScalarAsync(cancellationToken)) == 0) return null;
-        var query = connection.CreateCommand();
+        using var query = connection.CreateCommand();
         query.CommandText = """
             SELECT MAX(r.MessageId)
             FROM ImportedMessageReactionStates r
@@ -433,7 +433,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var query = connection.CreateCommand();
+        using var query = connection.CreateCommand();
         query.CommandText = """
             SELECT COUNT(*) FROM ImportedChatMessages
             WHERE TelegramUserId = $owner AND PeerType = $type AND PeerId = $peer
@@ -537,7 +537,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ImportedMessageDates (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -548,7 +548,7 @@ public sealed class ChatSynchronizationService(
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var upsert = connection.CreateCommand();
+        using var upsert = connection.CreateCommand();
         upsert.Transaction = transaction;
         upsert.CommandText = """
             INSERT INTO ImportedMessageDates
@@ -586,7 +586,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ImportedMessageCustomEmoji (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -597,7 +597,7 @@ public sealed class ChatSynchronizationService(
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var save = connection.CreateCommand();
+        using var save = connection.CreateCommand();
         save.Transaction = transaction;
         save.CommandText = """
             INSERT INTO ImportedMessageCustomEmoji
@@ -636,7 +636,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ImportedMessageAuthors (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -647,7 +647,7 @@ public sealed class ChatSynchronizationService(
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var save = connection.CreateCommand();
+        using var save = connection.CreateCommand();
         save.Transaction = transaction;
         save.CommandText = """
             INSERT INTO ImportedMessageAuthors
@@ -689,7 +689,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ImportedMessageReactionStates (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -700,7 +700,7 @@ public sealed class ChatSynchronizationService(
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var update = connection.CreateCommand();
+        using var update = connection.CreateCommand();
         update.Transaction = transaction;
         update.CommandText = """
             INSERT INTO ImportedMessageReactionStates
@@ -741,7 +741,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ImportedChatMessages (
                 TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
@@ -751,7 +751,7 @@ public sealed class ChatSynchronizationService(
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var delete = connection.CreateCommand();
+        using var delete = connection.CreateCommand();
         delete.Transaction = transaction;
         delete.CommandText = """
             DELETE FROM ImportedChatMessages
@@ -761,7 +761,7 @@ public sealed class ChatSynchronizationService(
         delete.Parameters.AddWithValue("$peerType", chat.PeerType);
         delete.Parameters.AddWithValue("$peerId", chat.PeerId);
         await delete.ExecuteNonQueryAsync(cancellationToken);
-        var insert = connection.CreateCommand();
+        using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText = """
             INSERT OR IGNORE INTO ImportedChatMessages
@@ -798,7 +798,7 @@ public sealed class ChatSynchronizationService(
             DataSource = databasePath,
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        var setup = connection.CreateCommand();
+        using var setup = connection.CreateCommand();
         setup.CommandText = """
             CREATE TABLE IF NOT EXISTS ImportedChatMessages (
                 TelegramUserId INTEGER NOT NULL,
@@ -811,7 +811,7 @@ public sealed class ChatSynchronizationService(
             """;
         await setup.ExecuteNonQueryAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var insert = connection.CreateCommand();
+        using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText = """
             INSERT OR IGNORE INTO ImportedChatMessages
