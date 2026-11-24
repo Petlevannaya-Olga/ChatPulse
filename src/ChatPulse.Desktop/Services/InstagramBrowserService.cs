@@ -222,14 +222,14 @@ public sealed class InstagramBrowserService : IDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            return await Task.Run(() =>
+            var result = await Task.Run(() =>
             {
                 try
                 {
                     var driver = GetDriver();
                     driver.Navigate().GoToUrl("https://www.instagram.com/");
                     if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
-                        return InstagramTaskCheckResult.Inconclusive($"Сессия @{viewer} не авторизована в Chrome.");
+                        throw new InstagramBrowserSessionException($"Сессия @{viewer} не авторизована в Chrome.");
 
                     var authenticated = false;
                     for (var attempt = 0; attempt < 18; attempt++)
@@ -245,7 +245,7 @@ public sealed class InstagramBrowserService : IDisposable
                     if (!authenticated)
                         authenticated = ConfirmAccountThroughProfileNavigation(driver, viewer, cancellationToken);
                     if (!authenticated)
-                        return InstagramTaskCheckResult.Inconclusive(
+                        throw new InstagramBrowserSessionException(
                             $"Не удалось подтвердить аккаунт @{viewer}. Проверка не выполнена.");
 
                     driver.Navigate().GoToUrl($"https://www.instagram.com/{target}/");
@@ -300,6 +300,7 @@ public sealed class InstagramBrowserService : IDisposable
                 catch (OperationCanceledException) { throw; }
                 catch (WebDriverException exception)
                 {
+                    InstagramBrowserFailure.ThrowIfFatal(exception, "Ошибка Chrome при проверке подписки");
                     return InstagramTaskCheckResult.Inconclusive($"Ошибка Instagram: {exception.Message}");
                 }
                 catch (InvalidOperationException exception)
@@ -307,6 +308,8 @@ public sealed class InstagramBrowserService : IDisposable
                     return InstagramTaskCheckResult.Inconclusive(exception.Message);
                 }
             }, cancellationToken);
+            EnsureActiveInstagramSession(_driver!);
+            return result;
         }
         finally { _gate.Release(); }
     }
@@ -330,12 +333,12 @@ public sealed class InstagramBrowserService : IDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            return await Task.Run(() =>
+            var result = await Task.Run(() =>
             {
                 var driver = GetDriver();
                 driver.Navigate().GoToUrl("https://www.instagram.com/");
                 if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
-                    throw new InvalidOperationException("В Chrome необходимо войти в Instagram.");
+                    throw new InstagramBrowserSessionException("Сессия Instagram отсутствует. Войдите в Chrome перед повторной проверкой.");
                 // Session cookie alone does not identify the account. Read the
                 // logged-in profile link in Instagram's navigation before trusting
                 // any state that would cause a task to be hidden.
@@ -354,13 +357,10 @@ public sealed class InstagramBrowserService : IDisposable
                     accountConfirmed = ConfirmAccountThroughProfileNavigation(driver, user, cancellationToken);
                 if (!accountConfirmed)
                 {
-                    var uncertain = InstagramTaskCheckResult.Inconclusive(
+                    throw new InstagramBrowserSessionException(
                         $"Не удалось подтвердить, что Chrome авторизован как @{user}. " +
                         "Откройте Instagram под основным аккаунтом и повторите проверку. " +
                         DescribeAccountNavigation(driver, user));
-                    return new InstagramTaskVerificationResult(user, url,
-                        checkLike ? uncertain : null, checkComment ? uncertain : null,
-                        checkSave ? uncertain : null, checkRepost ? uncertain : null);
                 }
 
                 InstagramTaskCheckResult? like = null;
@@ -417,6 +417,14 @@ public sealed class InstagramBrowserService : IDisposable
                 }
                 return new InstagramTaskVerificationResult(user, url, like, comment, save, repost);
             }, cancellationToken);
+            EnsureActiveInstagramSession(_driver!);
+            return result;
+        }
+        catch (WebDriverException exception)
+        {
+            // An unhandled driver failure is a browser failure, not a failed post.
+            throw new InstagramBrowserSessionException(
+                $"Ошибка Chrome во время проверки публикации: {exception.Message}", exception);
         }
         finally { _gate.Release(); }
     }
@@ -778,6 +786,7 @@ public sealed class InstagramBrowserService : IDisposable
         }
         catch (WebDriverException exception)
         {
+            InstagramBrowserFailure.ThrowIfFatal(exception, "Ошибка Chrome при чтении действий на публикации");
             return InstagramTaskCheckResult.Inconclusive(
                 $"{action}: ошибка чтения состояния Instagram: {exception.Message}");
         }
@@ -1073,7 +1082,11 @@ public sealed class InstagramBrowserService : IDisposable
                             action = "wheel-scrolled";
                         }
                         catch (StaleElementReferenceException) { action = "loading"; }
-                        catch (WebDriverException) { action = "loading"; }
+                        catch (WebDriverException exception)
+                        {
+                            InstagramBrowserFailure.ThrowIfFatal(exception, "Ошибка Chrome при прокрутке комментариев");
+                            action = "loading";
+                        }
                     }
                 }
                 progress?.Report($"Комментарии: для публикации {count}, всего видимых {visibleComments}, шаг {batch + 1}…");
@@ -1094,6 +1107,7 @@ public sealed class InstagramBrowserService : IDisposable
         catch (OperationCanceledException) { throw; }
         catch (WebDriverException exception)
         {
+            InstagramBrowserFailure.ThrowIfFatal(exception, "Ошибка Chrome при проверке комментария");
             return InstagramTaskCheckResult.Inconclusive(
                 $"Ошибка Instagram при проверке комментария: {exception.Message}");
         }
@@ -2942,12 +2956,42 @@ public sealed class InstagramBrowserService : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Verify the already-running driver. Never call GetDriver() here: starting a new
+    /// Chrome would mask a crash and incorrectly continue the bulk queue.
+    /// </summary>
+    private static void EnsureActiveInstagramSession(ChromeDriver driver)
+    {
+        try
+        {
+            if (driver.WindowHandles.Count == 0)
+                throw new InstagramBrowserSessionException("Все окна Chrome закрыты.");
+            if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
+                throw new InstagramBrowserSessionException("Сессия Instagram потеряна во время проверки.");
+            var url = driver.Url;
+            if (url.Contains("/accounts/login", StringComparison.OrdinalIgnoreCase) ||
+                url.Contains("/challenge/", StringComparison.OrdinalIgnoreCase))
+                throw new InstagramBrowserSessionException(
+                    "Instagram перенаправил на страницу входа или подтверждения сессии.");
+        }
+        catch (WebDriverException exception)
+        {
+            throw new InstagramBrowserSessionException(
+                $"Не удалось проверить состояние Chrome/Instagram: {exception.Message}", exception);
+        }
+    }
+
     private ChromeDriver GetDriver()
     {
         if (_driver is not null)
         {
             try { _ = _driver.WindowHandles; return _driver; }
-            catch (WebDriverException) { CloseDriver(); }
+            catch (WebDriverException exception)
+            {
+                CloseDriver();
+                throw new InstagramBrowserSessionException(
+                    "Окно Chrome закрылось или браузер перестал отвечать.", exception);
+            }
         }
         Directory.CreateDirectory(_profileDirectory);
         var options = new ChromeOptions();

@@ -9,7 +9,13 @@ public partial class HideCompletedTaskDialog : Window
         InitializeComponent();
     }
 
-    private void Cancel_OnClick(object sender, RoutedEventArgs e) => DialogResult = false;
+    public bool Accepted { get; private set; }
 
-    private void Hide_OnClick(object sender, RoutedEventArgs e) => DialogResult = true;
+    private void Cancel_OnClick(object sender, RoutedEventArgs e) => Close();
+
+    private void Hide_OnClick(object sender, RoutedEventArgs e)
+    {
+        Accepted = true;
+        Close();
+    }
 }

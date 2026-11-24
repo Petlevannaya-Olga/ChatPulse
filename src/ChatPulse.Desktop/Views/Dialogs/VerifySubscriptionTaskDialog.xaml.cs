@@ -18,6 +18,7 @@ public partial class VerifySubscriptionTaskDialog : Window
     private bool _running;
 
     public InstagramFollowTaskVerification? VerifiedResult { get; private set; }
+    public bool HideConfirmed { get; private set; }
 
     public VerifySubscriptionTaskDialog(
         WorkspaceTaskKind kind,
@@ -192,6 +193,7 @@ public partial class VerifySubscriptionTaskDialog : Window
     private void Close_OnClick(object sender, RoutedEventArgs args)
     {
         if (_running) return;
-        DialogResult = VerifiedResult?.CanHide == true;
+        HideConfirmed = VerifiedResult?.CanHide == true;
+        Close();
     }
 }

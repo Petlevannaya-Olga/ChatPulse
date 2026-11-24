@@ -142,6 +142,44 @@ public sealed class InstagramFollowTaskVerificationTests
     }
 
     [Fact]
+    public async Task MassUnsubscribe_BrowserSessionFailure_StopsImmediatelyWithoutCheckingRemainingProfiles()
+    {
+        var visited = new List<string>();
+        var exception = await Assert.ThrowsAsync<InstagramBrowserSessionException>(async () =>
+        {
+            await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+                ["first", "second", "third"], (name, _, _) =>
+                {
+                    visited.Add(name);
+                    if (name == "second")
+                        throw new InstagramBrowserSessionException("Сессия Instagram потеряна.");
+                    return Task.FromResult(InstagramTaskCheckResult.Confirmed("Отписка есть"));
+                });
+        });
+
+        Assert.Equal(new[] { "first", "second" }, visited);
+        Assert.Contains("Сессия", exception.Message);
+    }
+
+    [Fact]
+    public async Task MassUnsubscribe_UnhandledChromeError_AbortsAndDoesNotVisitLastProfile()
+    {
+        var visited = new List<string>();
+        await Assert.ThrowsAsync<InstagramBrowserSessionException>(async () =>
+        {
+            await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+                ["a", "b", "c"], (name, _, _) =>
+                {
+                    visited.Add(name);
+                    if (name == "b")
+                        throw new OpenQA.Selenium.WebDriverException("invalid session id");
+                    return Task.FromResult(InstagramTaskCheckResult.Confirmed("Отписка есть"));
+                });
+        });
+        Assert.Equal(new[] { "a", "b" }, visited);
+    }
+
+    [Fact]
     public async Task MassUnsubscribe_AllConfirmed_CanHideOnlyAfterLastProfile()
     {
         var visited = new List<string>();

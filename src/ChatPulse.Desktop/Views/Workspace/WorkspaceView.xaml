@@ -1054,33 +1054,7 @@
                                                                                     FontFamily="Segoe UI Emoji, Segoe UI Symbol, Segoe UI"
                                                                                     FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
                                                                                     Margin="0,0,12,0" />
-                                                                         <Button Content="↗  Reel" Tag="{Binding ReelUrl}"
-                                                                                 Visibility="{Binding HasReelUrl, Converter={StaticResource BoolVisible}}"
-                                                                                 Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
-                                                                                 Margin="0,0,8,0" />
-                                                                         <TextBlock Text="или" Foreground="#9280A7" VerticalAlignment="Center"
-                                                                                    Visibility="{Binding HasBothInstagramLinks, Converter={StaticResource BoolVisible}}"
-                                                                                    Margin="0,0,8,0" />
-                                                                         <Button Content="↗  Пост" Tag="{Binding FeedPostUrl}"
-                                                                                 Visibility="{Binding HasFeedPostUrl, Converter={StaticResource BoolVisible}}"
-                                                                                 Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}" />
-                                                                         <ItemsControl ItemsSource="{Binding AdditionalActionLinks, Mode=OneWay}"
-                                                                                       VerticalAlignment="Center">
-                                                                             <ItemsControl.ItemsPanel>
-                                                                                 <ItemsPanelTemplate>
-                                                                                     <WrapPanel Orientation="Horizontal" />
-                                                                                 </ItemsPanelTemplate>
-                                                                             </ItemsControl.ItemsPanel>
-                                                                             <ItemsControl.ItemTemplate>
-                                                                                 <DataTemplate>
-                                                                                     <Button Content="{Binding Text}" Tag="{Binding Url}"
-                                                                                             Margin="8,0,0,0"
-                                                                                             Click="OpenPostButton_OnClick"
-                                                                                             Style="{StaticResource WorkspaceActionButton}" />
-                                                                                 </DataTemplate>
-                                                                             </ItemsControl.ItemTemplate>
-                                                                         </ItemsControl>
-                                                                     </WrapPanel>
+                                                                    </WrapPanel>
                                                                     <TextBlock Grid.Column="1" Text="{Binding TimeLabel}" Foreground="#93849F"
                                                                                FontSize="12" Margin="12,0,0,0" />
                                                                 </Grid>
@@ -1091,6 +1065,41 @@
                                                                            FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0" />
                                                             </StackPanel>
                                                         </Grid>
+                                                        <!-- Ссылки публикации — в нижней левой части карточки, напротив действий. -->
+                                                        <WrapPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal"
+                                                                   VerticalAlignment="Center" Margin="0,0,12,0"
+                                                                   Visibility="{Binding IsRegularTask, Converter={StaticResource BoolVisible}}">
+                                                            <Button Content="↗  Reel" Tag="{Binding ReelUrl}"
+                                                                    Visibility="{Binding HasReelUrl, Converter={StaticResource BoolVisible}}"
+                                                                    Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                    Margin="0,0,8,0" />
+                                                            <TextBlock Text="или" Foreground="#9280A7" VerticalAlignment="Center"
+                                                                       Visibility="{Binding HasBothInstagramLinks, Converter={StaticResource BoolVisible}}"
+                                                                       Margin="0,0,8,0" />
+                                                            <Button Content="↗  Пост" Tag="{Binding FeedPostUrl}"
+                                                                    Visibility="{Binding HasFeedPostUrl, Converter={StaticResource BoolVisible}}"
+                                                                    Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}" />
+                                                            <Button Content="↗  Пост" Tag="{Binding PostUrl}"
+                                                                    Visibility="{Binding HasStandalonePostUrl, Converter={StaticResource BoolVisible}}"
+                                                                    Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
+                                                                    Margin="0,0,8,0" />
+                                                            <ItemsControl ItemsSource="{Binding AdditionalActionLinks, Mode=OneWay}"
+                                                                          VerticalAlignment="Center">
+                                                                <ItemsControl.ItemsPanel>
+                                                                    <ItemsPanelTemplate>
+                                                                        <WrapPanel Orientation="Horizontal" />
+                                                                    </ItemsPanelTemplate>
+                                                                </ItemsControl.ItemsPanel>
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate>
+                                                                        <Button Content="{Binding Text}" Tag="{Binding Url}"
+                                                                                Margin="8,0,0,0"
+                                                                                Click="OpenPostButton_OnClick"
+                                                                                Style="{StaticResource WorkspaceActionButton}" />
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </WrapPanel>
                                                         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
                                                                     VerticalAlignment="Center">
                                                             <StackPanel.Style>
@@ -1105,10 +1114,6 @@
                                                             </StackPanel.Style>
                                                             <Button Content="↗  Задание" Tag="{Binding SourceUrl}"
                                                                     IsEnabled="{Binding HasSourceUrl}"
-                                                                    Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
-                                                                    Margin="0,0,9,0" />
-                                                            <Button Content="↗  Пост" Tag="{Binding PostUrl}"
-                                                                    Visibility="{Binding HasStandalonePostUrl, Converter={StaticResource BoolVisible}}"
                                                                     Click="OpenPostButton_OnClick" Style="{StaticResource WorkspaceActionButton}"
                                                                     Margin="0,0,9,0" />
                                                             <Button Content="Пропустить" Tag="{Binding MessageId}"

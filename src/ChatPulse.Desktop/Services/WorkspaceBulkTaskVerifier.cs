@@ -1,4 +1,5 @@
 using ChatPulse.Desktop.Settings;
+using OpenQA.Selenium;
 
 namespace ChatPulse.Desktop.Services;
 
@@ -14,17 +15,33 @@ public sealed class WorkspaceBulkTaskVerifier(
     // Chrome is closed only after the batch finishes or a soft stop completes.
     public Task CloseBrowserAsync() => browser.CloseBrowserAsync();
 
+    public int ExcludedFailedPostCount { get; private set; }
+
     public async Task<IReadOnlyList<long>> GetSnapshotAsync(ConfiguredChat chat,
         bool oldestFirst, Func<bool> stopRequested)
     {
         const int PAGE_SIZE = 60;
+        ExcludedFailedPostCount = 0;
         var ids = new List<long>();
+        var failedStore = new WorkspaceFailedTaskVerificationStore(reader.DatabasePath);
         for (var offset = 0; ; offset += PAGE_SIZE)
         {
             if (stopRequested()) break;
             var page = await reader.ReadPageAsync(chat, WorkspaceTaskState.Completed,
                 oldestFirst, offset, PAGE_SIZE, includeTotals: false);
-            ids.AddRange(page.Tasks.Select(task => task.MessageId));
+            // Filter *after* reading each full page. Offsets still refer to the
+            // unfiltered completed-task stream, so later pages are never skipped.
+            var postIds = page.Tasks
+                .Where(task => WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl)
+                    is not (WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE))
+                .Select(task => task.MessageId).ToArray();
+            var previouslyFailed = await failedStore.FindWithReportsAsync(chat, postIds);
+            ExcludedFailedPostCount += previouslyFailed.Count;
+            ids.AddRange(page.Tasks.Where(task =>
+                !WorkspaceBulkTaskVerificationPolicy.ShouldExcludeFailedPost(
+                    WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl),
+                    previouslyFailed.Contains(task.MessageId)))
+                .Select(task => task.MessageId));
             if (page.Tasks.Count < PAGE_SIZE) break;
         }
         return ids;
@@ -41,6 +58,13 @@ public sealed class WorkspaceBulkTaskVerifier(
 
         var failedStore = new WorkspaceFailedTaskVerificationStore(reader.DatabasePath);
         var kind = WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl);
+        // Recheck immediately before opening Instagram. An error report may have
+        // appeared after the snapshot (e.g. from a different window or process).
+        if (kind is not (WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE) &&
+            (await failedStore.FindWithReportsAsync(chat, [messageId])).Contains(messageId))
+            return new WorkspaceBulkTaskOutcome(messageId, false,
+                "Публикация уже имеет отчёт об ошибке. Повторная проверка доступна вручную.", true);
+
         var kindLabel = kind switch
         {
             WorkspaceTaskKind.SUBSCRIBE => "Подписка",
@@ -96,6 +120,17 @@ public sealed class WorkspaceBulkTaskVerifier(
                 .PublishAsync(chat, messageId, result);
             return new WorkspaceBulkTaskOutcome(messageId, true,
                 FormatChecks(result) + ". Задание скрыто.", false);
+        }
+        catch (InstagramBrowserSessionException)
+        {
+            // The entire bulk run must stop. No failed-post report for a task
+            // whose check was interrupted by Chrome/Instagram session loss.
+            throw;
+        }
+        catch (WebDriverException exception) when (InstagramBrowserFailure.IsFatal(exception))
+        {
+            throw new InstagramBrowserSessionException(
+                $"Ошибка Chrome во время массовой проверки: {exception.Message}", exception);
         }
         catch (Exception exception)
         {

@@ -18,6 +18,7 @@ public partial class WorkspaceBulkTaskVerificationDialog : Window
     private bool _running;
     private bool _finished;
     private bool _stopRequested;
+    private bool _emergencyStopped;
     private int _total;
     private int _processed;
     private int _failed;
@@ -59,7 +60,12 @@ public partial class WorkspaceBulkTaskVerificationDialog : Window
             StageText.Text = "Чтение списка из SQLite";
             var ids = await _runner.GetSnapshotAsync(_chat, _oldestFirst, () => _stopRequested);
             _total = ids.Count;
+            var excluded = _runner.ExcludedFailedPostCount;
             UpdateCounters();
+            if (excluded > 0)
+                AppendEntry(new LogEntry("Ранее проверенные публикации", "Исключено",
+                    $"Не включено в массовую проверку: {excluded}. Повторная проверка — вручную.",
+                    Brushes.DimGray));
             for (var index = 0; index < ids.Count; index++)
             {
                 if (!WorkspaceBulkTaskVerificationPolicy.ShouldContinue(_stopRequested)) break;
@@ -72,10 +78,18 @@ public partial class WorkspaceBulkTaskVerificationDialog : Window
                 {
                     outcome = await _runner.VerifyOneAsync(_chat, id, _viewer, stage);
                 }
-                catch (Exception exception)
+                catch (InstagramBrowserSessionException exception)
                 {
-                    outcome = new WorkspaceBulkTaskOutcome(id, false,
-                        $"Не удалось закончить проверку: {exception.Message}", false);
+                    _emergencyStopped = true;
+                    CurrentTaskText.Text = $"Аварийное завершение · Telegram #{id}";
+                    StageText.Text = "Сбой Chrome или сессии Instagram. Очередь остановлена.";
+                    AppendEntry(new LogEntry($"Задание #{id}", "Аварийно остановлено",
+                        exception.Message, new SolidColorBrush(Color.FromRgb(0xA9, 0x46, 0x69))));
+                    FinalMessage.Text = "Проверка прервана из-за ошибки браузера или сессии. " +
+                        "Текущее и оставшиеся задания не проверены и не скрыты. " +
+                        $"Успешно обработано ранее: {_processed} из {_total}. " +
+                        "Chrome будет закрыт.";
+                    break;
                 }
                 _processed++;
                 if (outcome.Hidden) HiddenCount++;
@@ -88,12 +102,16 @@ public partial class WorkspaceBulkTaskVerificationDialog : Window
                         new SolidColorBrush(Color.FromRgb(0xA9, 0x46, 0x69))));
                 UpdateCounters();
             }
-            CurrentTaskText.Text = _stopRequested ? "Проверка остановлена" : "Проверка завершена";
-            StageText.Text = _stopRequested
-                ? "Новое задание не запущено; результат последнего обработанного сохранён."
-                : "Все задания из начального списка обработаны.";
-            FinalMessage.Text = $"Обработано {_processed} из {_total}. Скрыто {HiddenCount}, " +
-                $"с расхождениями {_failed}, пропущено {_skipped}.";
+            if (!_emergencyStopped)
+            {
+                CurrentTaskText.Text = _stopRequested ? "Проверка остановлена" : "Проверка завершена";
+                StageText.Text = _stopRequested
+                    ? "Новое задание не запущено; результат последнего обработанного сохранён."
+                    : "Все задания из начального списка обработаны.";
+                FinalMessage.Text = $"Обработано {_processed} из {_total}. Скрыто {HiddenCount}, " +
+                    $"с расхождениями {_failed}, пропущено {_skipped}. " +
+                    $"Ранее с ошибками (публикации): {excluded}.";
+            }
         }
         catch (Exception exception)
         {
@@ -122,6 +140,7 @@ public partial class WorkspaceBulkTaskVerificationDialog : Window
             finally
             {
                 StageText.Text = !browserClosed ? "Chrome не удалось закрыть автоматически."
+                    : _emergencyStopped ? "Аварийное завершение. Chrome закрыт."
                     : _stopRequested ? "Проверка остановлена. Chrome закрыт."
                     : "Проверка завершена. Chrome закрыт.";
                 _running = false;

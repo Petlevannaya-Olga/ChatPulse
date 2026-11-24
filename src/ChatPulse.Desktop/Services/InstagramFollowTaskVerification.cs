@@ -1,4 +1,5 @@
 using ChatPulse.Desktop.Settings;
+using OpenQA.Selenium;
 
 namespace ChatPulse.Desktop.Services;
 
@@ -80,9 +81,20 @@ public static class InstagramFollowTaskRules
             {
                 throw;
             }
+            catch (InstagramBrowserSessionException)
+            {
+                // A lost Chrome/Instagram session aborts the entire task and batch.
+                // Do not check further profiles or save a partial verification result.
+                throw;
+            }
+            catch (WebDriverException exception) when (InstagramBrowserFailure.IsFatal(exception))
+            {
+                throw new InstagramBrowserSessionException(
+                    $"Ошибка Chrome при проверке @{name}: {exception.Message}", exception);
+            }
             catch (Exception exception)
             {
-                // One failed page must not silently skip all remaining participants.
+                // A problem confined to this profile does not skip the remaining profiles.
                 result = InstagramTaskCheckResult.Inconclusive($"@{name}: техническая ошибка: {exception.Message}");
             }
             checks.Add(new InstagramFollowTargetCheck(name, result));

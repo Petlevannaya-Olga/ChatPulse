@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using ChatPulse.Desktop.Services;
@@ -16,6 +16,7 @@ public partial class VerifyCompletedTaskDialog : Window
     private bool _running;
 
     public InstagramTaskVerificationResult? VerifiedResult { get; private set; }
+    public bool HideConfirmed { get; private set; }
 
     public VerifyCompletedTaskDialog(InstagramBrowserService browser, string postUrl, string ownAccount, string taskText,
         Func<WorkspaceFailedTaskReport, Task> saveFailedReport)
@@ -248,6 +249,7 @@ public partial class VerifyCompletedTaskDialog : Window
             ShowNotice("Останавливаем проверку…");
             return;
         }
-        DialogResult = VerifiedResult is not null;
+        HideConfirmed = VerifiedResult?.CanHide == true;
+        Close();
     }
 }

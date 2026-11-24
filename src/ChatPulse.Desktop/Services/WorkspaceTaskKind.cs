@@ -5,7 +5,7 @@ namespace ChatPulse.Desktop.Services;
 
 public enum WorkspaceTaskKind { TASK, SUBSCRIBE, UNSUBSCRIBE }
 
-/// <summary>Display classification only; does not change Telegram content or task detection.</summary>
+/// <summary>Classifies Telegram tasks for display and verification routing.</summary>
 public static class WorkspaceTaskKindDetector
 {
     // Formatting and emoji may appear between letters, including custom emoji placeholders.
@@ -18,9 +18,14 @@ public static class WorkspaceTaskKindDetector
         if (string.IsNullOrWhiteSpace(message)) return WorkspaceTaskKind.TASK;
         var normalized = message.Normalize(NormalizationForm.FormKC);
 
+        // Post/Reel links take priority over follow/unfollow instructions, even if
+        // the same message explicitly asks to subscribe and contains a profile URL.
+        // The task is verified as engagement with the publication, not as a follow.
+        if (HasPublicationLink(message, postUrl)) return WorkspaceTaskKind.TASK;
+
         // Words such as «Подписка» may occur in ordinary engagement tasks (like,
         // comment, save, repost). Only an actual Instagram profile link can make
-        // a message a follow/unfollow task. /p/ and /reel/ links are not profiles.
+        // a message a follow/unfollow task.
         if (!UNSUBSCRIBE.IsMatch(normalized) && !SUBSCRIBE.IsMatch(normalized))
             return WorkspaceTaskKind.TASK;
         if (InstagramFollowTaskRules.GetProfileTargets(message, postUrl).Count == 0)
@@ -28,6 +33,24 @@ public static class WorkspaceTaskKindDetector
 
         if (UNSUBSCRIBE.IsMatch(normalized)) return WorkspaceTaskKind.UNSUBSCRIBE;
         return WorkspaceTaskKind.SUBSCRIBE;
+    }
+
+    private static bool HasPublicationLink(string message, string? postUrl) =>
+        IsPublicationUrl(postUrl) || WorkspaceTaskLinks.Split(message)
+            .Any(link => IsPublicationUrl(link.Url));
+
+    private static bool IsPublicationUrl(string? candidate)
+    {
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            (!string.Equals(uri.Host, "instagram.com", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(uri.Host, "www.instagram.com", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2 &&
+            (string.Equals(segments[0], "p", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(segments[0], "reel", StringComparison.OrdinalIgnoreCase));
     }
 
     private static Regex CreatePattern(string word)

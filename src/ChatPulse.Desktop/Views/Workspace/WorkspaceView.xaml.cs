@@ -1,4 +1,4 @@
-﻿using ChatPulse.Application.Services;
+using ChatPulse.Application.Services;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -683,7 +683,30 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         ShowSubscriptionCheckDialog(participant, InstagramCheckDirections.FOLLOWERS);
     }
 
-    private void ShowSubscriptionCheckDialog(InstagramSubscriptionRow? individual,
+    // ShowDialog() disables the owner window at the Win32 level, including the
+    // minimize button. A modeless owned window plus the existing content overlay
+    // prevents workspace actions without disabling the main window's title bar.
+    private static async Task ShowOverlayDialogAsync(Window dialog,
+        ChatPulse.Desktop.MainWindow? mainWindow)
+    {
+        var closed = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnClosed(object? sender, EventArgs args) => closed.TrySetResult(true);
+        dialog.Closed += OnClosed;
+        mainWindow?.ShowDialogOverlay();
+        try
+        {
+            dialog.Show();
+            await closed.Task;
+        }
+        finally
+        {
+            dialog.Closed -= OnClosed;
+            mainWindow?.HideDialogOverlay();
+        }
+    }
+
+    private async void ShowSubscriptionCheckDialog(InstagramSubscriptionRow? individual,
         InstagramCheckDirections direction)
     {
         if (_settings is null || _reader is null || _instagramBusy) return;
@@ -711,11 +734,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             }
         };
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        try { dialog.ShowDialog(); }
+        try { await ShowOverlayDialogAsync(dialog, mainWindow); }
         finally
         {
-            mainWindow?.HideDialogOverlay();
             // A user can cancel direction selection without starting Selenium.
             _instagramBatchCancellation = null;
             Notify(nameof(CanCancelInstagramBatch));
@@ -1822,7 +1843,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
-    private void RebuildParticipantHistoryButton_OnClick(object sender, RoutedEventArgs args)
+    private async void RebuildParticipantHistoryButton_OnClick(object sender, RoutedEventArgs args)
     {
         var selected = SelectedHistoryChat;
         if (!CanRebuildParticipantHistory || selected is null || _participantHistoryReader is null ||
@@ -1897,11 +1918,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var owner = Window.GetWindow(this);
         if (owner is { IsVisible: true }) dialog.Owner = owner;
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        try { dialog.ShowDialog(); }
+        try { await ShowOverlayDialogAsync(dialog, mainWindow); }
         finally
         {
-            mainWindow?.HideDialogOverlay();
             _historyImportCancellation = null;
             _historyImportRunning = false;
             SetInstagramBusy(false);
@@ -1936,17 +1955,15 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         => ShowSubscriptionInfoDialog(new SubscriptionInfoDialog(_latestParticipantListSource,
             _subscriptionTileCounts, _latestParticipantListAttempt));
 
-    private void ShowSubscriptionInfoDialog(SubscriptionInfoDialog dialog)
+    private async void ShowSubscriptionInfoDialog(SubscriptionInfoDialog dialog)
     {
         var owner = Window.GetWindow(this);
         if (owner is { IsVisible: true }) dialog.Owner = owner;
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        try { dialog.ShowDialog(); }
-        finally { mainWindow?.HideDialogOverlay(); }
+        await ShowOverlayDialogAsync(dialog, mainWindow);
     }
 
-    private void RefreshSubscriptionsButton_OnClick(object sender, RoutedEventArgs args)
+    private async void RefreshSubscriptionsButton_OnClick(object sender, RoutedEventArgs args)
     {
         if (IsBusy || _instagramBusy || _synchronization is null || SelectedChat is null) return;
         var selected = SelectedChat;
@@ -2033,11 +2050,9 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         };
 
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        try { dialog.ShowDialog(); }
+        try { await ShowOverlayDialogAsync(dialog, mainWindow); }
         finally
         {
-            mainWindow?.HideDialogOverlay();
             IsBusy = false;
         }
     }
@@ -2172,9 +2187,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             new WorkspaceBulkTaskVerifier(_reader, _mainInstagramBrowser),
             row.Chat, account, _oldestTasksFirst) { Owner = owner };
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        try { dialog.ShowDialog(); }
-        finally { mainWindow?.HideDialogOverlay(); }
+        await ShowOverlayDialogAsync(dialog, mainWindow);
 
         if (dialog.HiddenCount == 0 && dialog.ProcessedCount == 0) return;
         row.DetectedCount = Math.Max(0, row.DetectedCount - dialog.HiddenCount);
@@ -2236,13 +2249,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Owner = owner
         };
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        InstagramTaskVerificationResult? result;
-        try
-        {
-            result = dialog.ShowDialog() == true ? dialog.VerifiedResult : null;
-        }
-        finally { mainWindow?.HideDialogOverlay(); }
+        await ShowOverlayDialogAsync(dialog, mainWindow);
+        var result = dialog.HideConfirmed ? dialog.VerifiedResult : null;
         if (result is null || !result.CanHide)
         {
             await RefreshFailedVerificationIndicatorsAsync(row, _taskWindowVersion);
@@ -2303,13 +2311,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Owner = owner
         };
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        InstagramFollowTaskVerification? result;
-        try
-        {
-            result = dialog.ShowDialog() == true ? dialog.VerifiedResult : null;
-        }
-        finally { mainWindow?.HideDialogOverlay(); }
+        await ShowOverlayDialogAsync(dialog, mainWindow);
+        var result = dialog.HideConfirmed ? dialog.VerifiedResult : null;
         if (result?.CanHide != true)
         {
             await RefreshFailedVerificationIndicatorsAsync(row, _taskWindowVersion);
@@ -2353,9 +2356,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             var owner = Window.GetWindow(this);
             var dialog = new FailedTaskVerificationReportsDialog(reports) { Owner = owner };
             var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-            mainWindow?.ShowDialogOverlay();
-            try { dialog.ShowDialog(); }
-            finally { mainWindow?.HideDialogOverlay(); }
+            await ShowOverlayDialogAsync(dialog, mainWindow);
         }
         catch (Exception exception)
         {
@@ -2377,16 +2378,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var owner = Window.GetWindow(this);
         var dialog = new HideCompletedTaskDialog { Owner = owner };
         var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-        mainWindow?.ShowDialogOverlay();
-        bool confirmed;
-        try
-        {
-            confirmed = dialog.ShowDialog() == true;
-        }
-        finally
-        {
-            mainWindow?.HideDialogOverlay();
-        }
+        await ShowOverlayDialogAsync(dialog, mainWindow);
+        var confirmed = dialog.Accepted;
 
         if (!confirmed) return;
 
@@ -2551,9 +2544,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             };
 
             var mainWindow = owner as ChatPulse.Desktop.MainWindow;
-            mainWindow?.ShowDialogOverlay();
-            try { dialog.ShowDialog(); }
-            finally { mainWindow?.HideDialogOverlay(); }
+            await ShowOverlayDialogAsync(dialog, mainWindow);
         }
         catch (Exception exception)
         {
@@ -2705,8 +2696,22 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
     {
         WorkspaceTaskKind.SUBSCRIBE => "Подписка",
         WorkspaceTaskKind.UNSUBSCRIBE => "Отписка",
+        _ when HasReelUrl || HasFeedPostUrl || IsInstagramPublicationUrl(task.PostUrl) => "Публикация",
         _ => "Задание"
     };
+
+    private static bool IsInstagramPublicationUrl(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Host, "instagram.com", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(uri.Host, "www.instagram.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var path = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return path.Length >= 2 &&
+            (string.Equals(path[0], "p", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(path[0], "reel", StringComparison.OrdinalIgnoreCase));
+    }
     public string KindBackground => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#D9F1E0",

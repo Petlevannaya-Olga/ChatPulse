@@ -12,5 +12,10 @@ public static class WorkspaceBulkTaskVerificationPolicy
         return (true, suggested.Comment, suggested.Save, suggested.Repost);
     }
 
+    // A post/Reel with an unsuccessful report is handled by manual rechecking only.
+    // Subscription and unsubscription tasks keep their normal bulk behavior.
+    public static bool ShouldExcludeFailedPost(WorkspaceTaskKind kind, bool hasFailedReport) =>
+        hasFailedReport && kind is not (WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE);
+
     public static bool ShouldContinue(bool stopRequested) => !stopRequested;
 }

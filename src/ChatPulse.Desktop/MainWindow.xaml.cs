@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using ChatPulse.Desktop.Services;
 using System.IO;
 using System.Text.Json;
@@ -26,6 +26,8 @@ public partial class MainWindow : Window
     private bool _isOnboardingCompleted;
     private bool _hasInitialized;
     private bool _isFinishingOnboarding;
+    private int _dialogOverlayDepth;
+    private readonly Dictionary<UIElement, bool> _overlayOriginalHitTestVisible = new();
 
     public MainWindow(
         TelegramSetupViewModel telegramSetup,
@@ -320,13 +322,71 @@ public partial class MainWindow : Window
     }
 
     public void ShowDialogOverlay()
-        => DialogOverlay.Visibility = Visibility.Visible;
+    {
+        if (_dialogOverlayDepth++ != 0) return;
+
+        // Do not disable the view: disabled ListBox templates turn the dark
+        // chat list white under the dimmer. Block input without changing visuals.
+        _overlayOriginalHitTestVisible.Clear();
+        Keyboard.ClearFocus();
+        foreach (var content in OverlayContent())
+        {
+            _overlayOriginalHitTestVisible[content] = content.IsHitTestVisible;
+            content.IsHitTestVisible = false;
+        }
+        DialogOverlay.Visibility = Visibility.Visible;
+    }
 
     public void HideDialogOverlay()
-        => DialogOverlay.Visibility = Visibility.Collapsed;
+    {
+        if (_dialogOverlayDepth == 0 || --_dialogOverlayDepth != 0) return;
+        DialogOverlay.Visibility = Visibility.Collapsed;
+        foreach (var (content, wasHitTestVisible) in _overlayOriginalHitTestVisible)
+            content.IsHitTestVisible = wasHitTestVisible;
+        _overlayOriginalHitTestVisible.Clear();
+    }
+
+    private IEnumerable<UIElement> OverlayContent() =>
+    [
+        WelcomeScreen, FirstStepScreen, SecondStepScreen, ThirdStepScreen,
+        FourthStepScreen, WorkspaceScreen, ConnectionNotice
+    ];
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        // Prevent Tab and keyboard shortcuts from reaching the dimmed window
+        // while the owner remains active for native minimize controls.
+        if (_dialogOverlayDepth > 0)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
+    }
+
+    protected override void OnPreviewTextInput(TextCompositionEventArgs e)
+    {
+        if (_dialogOverlayDepth > 0)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewTextInput(e);
+    }
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        // With an owned modeless progress/verification dialog, allow minimizing
+        // the main window but do not let closing it terminate a running check.
+        if (_isOnboardingCompleted && _dialogOverlayDepth > 0)
+        {
+            e.Cancel = true;
+            base.OnClosing(e);
+            return;
+        }
+
         // During startup failure or application shutdown the main window may never
         // have been shown. Such a window cannot own a modal confirmation dialog.
         if (_isCloseConfirmed || _isOnboardingCompleted || !_hasInitialized || !IsLoaded || !IsVisible)
@@ -342,24 +402,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        // A modal ShowDialog disables the entire main window, including Minimize.
+        // Defer the close decision and keep the owner's native title bar enabled.
+        e.Cancel = true;
         _isExitDialogOpen = true;
         var dialog = new ExitOnboardingDialog { Owner = this };
-        ShowDialogOverlay();
-
-        try
-        {
-            if (dialog.ShowDialog() == true)
-                _isCloseConfirmed = true;
-            else
-                e.Cancel = true;
-        }
-        finally
+        dialog.Closed += (_, _) =>
         {
             HideDialogOverlay();
             _isExitDialogOpen = false;
             Keyboard.ClearFocus();
+            if (!dialog.ExitConfirmed) return;
+            _isCloseConfirmed = true;
+            Close();
+        };
+        ShowDialogOverlay();
+        try { dialog.Show(); }
+        catch
+        {
+            HideDialogOverlay();
+            _isExitDialogOpen = false;
+            throw;
         }
-
         base.OnClosing(e);
     }
 }

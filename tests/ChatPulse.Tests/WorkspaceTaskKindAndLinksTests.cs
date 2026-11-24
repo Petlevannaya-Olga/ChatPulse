@@ -1,4 +1,4 @@
-﻿using ChatPulse.Desktop.Services;
+using ChatPulse.Desktop.Services;
 using Xunit;
 
 namespace ChatPulse.Tests;
@@ -40,7 +40,7 @@ public sealed class WorkspaceTaskKindAndLinksTests
         Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(message, postUrl));
         var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
             new WorkspaceDetectedTask(10, message, postUrl));
-        Assert.Equal("Задание", card.KindLabel);
+        Assert.Equal("Публикация", card.KindLabel);
         Assert.True(card.IsRegularTask);
         Assert.False(card.IsSubscriptionAction);
         Assert.Equal(2, card.ActionLinks.Count);
@@ -67,9 +67,48 @@ public sealed class WorkspaceTaskKindAndLinksTests
     [InlineData("Подписка без URL", WorkspaceTaskKind.TASK)]
     [InlineData("ПОДПИСКА https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.SUBSCRIBE)]
     [InlineData("ОТПИСКА https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.UNSUBSCRIBE)]
-    [InlineData("Подписка https://www.instagram.com/reel/Df9ollSMsmL/ https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.SUBSCRIBE)]
+    [InlineData("Подписка https://www.instagram.com/reel/Df9ollSMsmL/ https://www.instagram.com/q.r1s_/", WorkspaceTaskKind.TASK)]
     public void FollowTasksRequireAnActualInstagramProfileUrl(string message, WorkspaceTaskKind expected)
         => Assert.Equal(expected, WorkspaceTaskKindDetector.Detect(message));
+
+    [Fact]
+    public void ReelAndFeedLinksOverrideSubscriptionWithProfileInSameMessage()
+    {
+        const string message = """
+            [https://www.instagram.com/reel/DgHXMqYxPoa/?knvt=MW15YmN3OGUzOHAyaA==](https://www.instagram.com/reel/DgHXMqYxPoa/?knvt=MW15YmN3OGUzOHAyaA==)
+            [https://www.instagram.com/p/DgHXMqYxPoa/?knvt=MW15YmN3OGUzOHAyaA==](https://www.instagram.com/p/DgHXMqYxPoa/?knvt=MW15YmN3OGUzOHAyaA==)
+            ❤️ Просмотр до конца и лайк после просмотра
+            ✨ Репост
+            💮 Комментарий по теме
+            ➕ ПОДПИСКА
+            🚩 Ссылка на аккаунт:
+            [https://www.instagram.com/bijou_kzn27](https://www.instagram.com/bijou_kzn27)
+            """;
+
+        Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(message));
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new WorkspaceDetectedTask(42, message, "https://www.instagram.com/p/DgHXMqYxPoa/"));
+        Assert.True(card.IsRegularTask);
+        Assert.False(card.IsSubscriptionAction);
+        Assert.Equal("Публикация", card.KindLabel);
+    }
+
+    [Theory]
+    [InlineData("https://www.instagram.com/reel/DgHXMqYxPoa/")]
+    [InlineData("https://www.instagram.com/p/DgHXMqYxPoa/")]
+    public void APostOrReelLinkAloneOverridesProfileAndSubscribeInstruction(string publicationUrl)
+    {
+        var message = $"ПОДПИСКА\n{publicationUrl}\nhttps://www.instagram.com/bijou_kzn27/";
+        Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(message));
+    }
+
+    [Fact]
+    public void LegacyPostUrlOverridesProfileSubscription()
+    {
+        Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(
+            "Подписка https://www.instagram.com/bijou_kzn27/",
+            "https://www.instagram.com/p/DgHXMqYxPoa/"));
+    }
 
     [Fact]
     public void SubscriptionCanUseLegacyProfileUrlButNotLegacyPostUrl()
@@ -78,6 +117,18 @@ public sealed class WorkspaceTaskKindAndLinksTests
             "Подписка", "https://www.instagram.com/q.r1s_/"));
         Assert.Equal(WorkspaceTaskKind.TASK, WorkspaceTaskKindDetector.Detect(
             "Подписка", "https://www.instagram.com/reel/Df9ollSMsmL/"));
+    }
+
+    [Theory]
+    [InlineData("https://www.instagram.com/p/DgHXMqYxPoa/", "Публикация")]
+    [InlineData("https://www.instagram.com/reel/DgHXMqYxPoa/", "Публикация")]
+    [InlineData("https://t.me/example/123", "Задание")]
+    public void CardBadgeDistinguishesInstagramPublicationsFromOtherTasks(string postUrl, string label)
+    {
+        var card = new ChatPulse.Desktop.Views.Workspace.WorkspaceTaskCard(
+            new WorkspaceDetectedTask(19, "Проверьте публикацию", postUrl));
+
+        Assert.Equal(label, card.KindLabel);
     }
 
     [Fact]
