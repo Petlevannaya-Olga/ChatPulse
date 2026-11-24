@@ -68,6 +68,35 @@ public sealed class WorkspaceTaskPagingTests
         Assert.Equal(66 - 13, completed.NonSkippedTotal);
     }
 
+    [Fact]
+    public async Task PendingBadgeCount_IsFullCount_RegardlessOfPageSizeAndSorting()
+    {
+        using var temp = new TemporaryDirectory();
+        var database = Path.Combine(temp.Path, "tasks.db");
+        await SeedAsync(database);
+        var reader = new WorkspaceTaskReader(database);
+        var chat = CreateChat();
+
+        // A badge must not use the count of cards materialized on the first page.
+        var badge = await reader.ReadPageAsync(chat, WorkspaceTaskState.Pending, false, 0, 0);
+        var firstPage = await reader.ReadPageAsync(chat, WorkspaceTaskState.Pending, false, 0, 8);
+        var reversed = await reader.ReadPageAsync(chat, WorkspaceTaskState.Pending, true, 0, 0);
+
+        Assert.Empty(badge.Tasks);
+        Assert.Equal(35, badge.Total); // 66 total - 13 skipped - 18 completed
+        Assert.Equal(8, firstPage.Tasks.Count);
+        Assert.Equal(badge.Total, firstPage.Total);
+        Assert.Equal(badge.Total, reversed.Total);
+
+        var row = new ChatPulse.Desktop.Views.Workspace.WorkspaceChatRow(chat);
+        var changed = new List<string?>();
+        row.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+        row.PendingCount = badge.Total;
+
+        Assert.Equal(35, row.PendingCount);
+        Assert.Contains(nameof(row.PendingCount), changed);
+    }
+
     private static async Task SeedAsync(string database)
     {
         await using var connection = new SqliteConnection($"Data Source={database}");

@@ -1499,6 +1499,11 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     false, 0, 0);
                 if (version != _loadVersion) return;
                 chat.DetectedCount = summary.NonSkippedTotal;
+                // The badge displays the full pending count, not the 30 cards on the current page.
+                var pending = await _reader.ReadPageAsync(chat.Chat, WorkspaceTaskState.Pending,
+                    false, 0, 0);
+                if (version != _loadVersion) return;
+                chat.PendingCount = pending.Total;
                 _totalDetected += chat.DetectedCount;
                 Notify(nameof(TotalDetected));
                 Notify(nameof(SelectedChatTaskCount));
@@ -1572,6 +1577,22 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         _ = LoadInitialTaskPageAsync(chat, version);
     }
 
+    private async Task RefreshPendingTaskCountAsync(WorkspaceChatRow chat)
+    {
+        if (_reader is null) return;
+        try
+        {
+            var page = await _reader.ReadPageAsync(chat.Chat, WorkspaceTaskState.Pending,
+                false, 0, 0);
+            // The row can have been replaced by a reload while the query was running.
+            if (Chats.Contains(chat)) chat.PendingCount = page.Total;
+        }
+        catch (Exception)
+        {
+            // A badge-refresh error must not undo a successful Telegram/SQLite operation.
+        }
+    }
+
     private async Task LoadInitialTaskPageAsync(WorkspaceChatRow chat, int version)
     {
         try
@@ -1581,6 +1602,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 _taskWindowCancellation!.Token);
             if (version != _taskWindowVersion || !ReferenceEquals(SelectedChat, chat)) return;
             _taskTotalCount = result.Total;
+            if (_taskFilter == TaskFilter.Pending) chat.PendingCount = result.Total;
             _taskPages[0] = result.Tasks;
             RenderTaskPages(chat);
             TaskListScroll.ScrollToTop();
@@ -2063,12 +2085,12 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         NotifyPageState();
     }
 
-    private void TaskDateSort_OnSelectionChanged(object sender, SelectionChangedEventArgs args)
+    public string TaskDateSortLabel => _oldestTasksFirst ? "↑ Сначала старые" : "↓ Сначала новые";
+
+    private void TaskDateSortButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (sender is not ComboBox { SelectedIndex: >= 0 } selector) return;
-        var oldestFirst = selector.SelectedIndex == 1;
-        if (_oldestTasksFirst == oldestFirst) return;
-        _oldestTasksFirst = oldestFirst;
+        _oldestTasksFirst = !_oldestTasksFirst;
+        Notify(nameof(TaskDateSortLabel));
         UpdateSelectedTasks();
     }
 
@@ -2431,6 +2453,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                 Notify(nameof(SelectedChatTaskCount));
             }
 
+            await RefreshPendingTaskCountAsync(row);
             UpdateSelectedTasks();
         }
         catch (Exception exception)
@@ -2627,6 +2650,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChanged
 {
     private int _detectedCount;
+    private int _pendingCount;
     public event PropertyChangedEventHandler? PropertyChanged;
     public ConfiguredChat Chat { get; } = chat;
     public string Title => Chat.DisplayName.Length > 0 ? Chat.DisplayName : Chat.TelegramTitle;
@@ -2642,6 +2666,17 @@ public sealed class WorkspaceChatRow(ConfiguredChat chat) : INotifyPropertyChang
             _detectedCount = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetectedCount)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DetectedLabel)));
+        }
+    }
+
+    public int PendingCount
+    {
+        get => _pendingCount;
+        set
+        {
+            if (_pendingCount == value) return;
+            _pendingCount = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PendingCount)));
         }
     }
 
