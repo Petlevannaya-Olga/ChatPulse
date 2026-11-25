@@ -14,6 +14,18 @@ public sealed class InstagramBrowserSessionException : Exception
         : base(message, innerException) { }
 }
 
+/// <summary>
+/// A technical fault interrupted the current bulk task. The remaining tasks must not run.
+/// Unlike an unconfirmed Instagram action, this is not a failed verification result.
+/// </summary>
+public sealed class WorkspaceBulkTechnicalFailureException : Exception
+{
+    public WorkspaceBulkTechnicalFailureException(string message) : base(message) { }
+
+    public WorkspaceBulkTechnicalFailureException(string message, Exception innerException)
+        : base(message, innerException) { }
+}
+
 public static class InstagramBrowserFailure
 {
     /// <summary>
@@ -29,5 +41,17 @@ public static class InstagramBrowserFailure
     {
         if (IsFatal(exception))
             throw new InstagramBrowserSessionException($"{context}: {exception.Message}", exception);
+    }
+
+    /// <summary>
+    /// Some Instagram checks return diagnostic text instead of throwing.
+    /// In a bulk run, those technical failures must also abort the queue.
+    /// A genuinely unconfirmed action is not a technical failure.
+    /// </summary>
+    public static void ThrowIfTechnicalResult(InstagramTaskCheckResult? result)
+    {
+        if (result is { Status: InstagramTaskCheckStatus.INCONCLUSIVE } &&
+            WorkspaceFailedTaskReport.IsTechnicalDiagnostic(result.Detail))
+            throw new WorkspaceBulkTechnicalFailureException(result.Detail);
     }
 }

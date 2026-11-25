@@ -2230,14 +2230,22 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var task = items.FirstOrDefault(item => item.MessageId == messageId);
         if (task is not { IsCompleted: true, IsSkipped: false }) return;
         var kind = WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl);
-        if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE)
+        if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE or WorkspaceTaskKind.MIXED)
         {
             await VerifySubscriptionTaskAsync(row, messageId, task, kind);
             return;
         }
-        if (!InstagramTaskVerificationRules.TryGetPostUrl(task.PostUrl, out var postUrl))
+        var isStoryTask = kind == WorkspaceTaskKind.STORY;
+        IReadOnlyList<string> storyUrls = isStoryTask
+            ? WorkspaceStoryTaskRules.GetStoryOnlyUrls(task.Text, task.PostUrl)
+            : Array.Empty<string>();
+        var hasPostUrl = InstagramTaskVerificationRules.TryGetVerificationPostUrl(
+            task.Text, task.PostUrl, out var postUrl);
+        if (isStoryTask && storyUrls.Count > 0)
+            postUrl = storyUrls[0];
+        if ((!isStoryTask && !hasPostUrl) || (isStoryTask && storyUrls.Count == 0))
         {
-            MessageBox.Show("Для этой проверки нужна прямая ссылка на публикацию или Reel Instagram.",
+            MessageBox.Show("Для этой проверки нужна прямая ссылка на сторис, публикацию или Reel Instagram.",
                 "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -2323,10 +2331,18 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             return;
         }
 
-        var candidates = InstagramFollowTaskRules.GetVerificationTargets(kind, task.Text, task.PostUrl);
+        var allActions = WorkspaceFollowActions.GetActions(task.Text, task.PostUrl);
+        var actions = WorkspaceFollowActions.WithoutOwnAccounts(
+            allActions, accounts, accounts.ReceivingUserName);
+        if (actions.Count == 0)
+        {
+            MessageBox.Show("В уведомлении нет чужих Instagram-профилей для проверки.",
+                "ChatPulse", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         var owner = Window.GetWindow(this);
-        var dialog = new VerifySubscriptionTaskDialog(kind,
-            _mainInstagramBrowser, accounts.ReceivingUserName, candidates,
+        var dialog = new VerifySubscriptionTaskDialog(
+            _mainInstagramBrowser, accounts.ReceivingUserName, actions,
             report => new WorkspaceFailedTaskVerificationStore(_reader.DatabasePath)
                 .SaveAsync(row.Chat, messageId, report))
         {
@@ -2731,6 +2747,8 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
     {
         WorkspaceTaskKind.SUBSCRIBE => "Подписка",
         WorkspaceTaskKind.UNSUBSCRIBE => "Отписка",
+        WorkspaceTaskKind.MIXED => "Подписка и отписка",
+        WorkspaceTaskKind.STORY => "Сторис",
         _ when HasReelUrl || HasFeedPostUrl || IsInstagramPublicationUrl(task.PostUrl) => "Публикация",
         _ => "Задание"
     };
@@ -2751,30 +2769,47 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
     {
         WorkspaceTaskKind.SUBSCRIBE => "#D9F1E0",
         WorkspaceTaskKind.UNSUBSCRIBE => "#FFE5CC",
+        WorkspaceTaskKind.MIXED => "#EAE1F9",
         _ => "#F0E5FF"
     };
     public string KindForeground => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#246F43",
         WorkspaceTaskKind.UNSUBSCRIBE => "#965219",
+        WorkspaceTaskKind.MIXED => "#6841A0",
         _ => "#6D3AAA"
     };
+
+    // An action's color is presentation-only; the verification direction still
+    // comes from WorkspaceFollowAction.Kind, not from the displayed label.
+    private IReadOnlyList<WorkspaceFollowActionLink>? _followActionLinks;
+    public IReadOnlyList<WorkspaceFollowActionLink> FollowActionLinks => _followActionLinks ??=
+        WorkspaceFollowActions.GetActions(task.Text, task.PostUrl)
+            .Select(action => new WorkspaceFollowActionLink(
+                $"@{action.TargetUserName}",
+                $"https://www.instagram.com/{action.TargetUserName}/",
+                action.ShouldFollow))
+            .ToArray();
+    public bool HasSubscribeActions => FollowActionLinks.Any(link => link.IsSubscription);
+    public bool HasUnsubscribeActions => FollowActionLinks.Any(link => !link.IsSubscription);
 
     // Subscription and unsubscription cards deliberately show only clickable targets.
     // The original Telegram text remains available in SQLite and in the source message.
     public bool IsSubscriptionAction => _kind is
-        WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE;
+        WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE or WorkspaceTaskKind.MIXED;
     public bool IsRegularTask => !IsSubscriptionAction;
     public string CardBackground => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#F2FBF5",
         WorkspaceTaskKind.UNSUBSCRIBE => "#FFF6EC",
+        WorkspaceTaskKind.MIXED => "#F8F4FF",
         _ => "#FCFAFF"
     };
     public string CardBorderBrush => _kind switch
     {
         WorkspaceTaskKind.SUBSCRIBE => "#CBE9D5",
         WorkspaceTaskKind.UNSUBSCRIBE => "#F3D9B9",
+        WorkspaceTaskKind.MIXED => "#DCCEF5",
         _ => "#ECE4F5"
     };
     // Instagram post/reel links with tracking query strings and their canonical
@@ -2793,14 +2828,27 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
              string.Equals(segments[0], "reel", StringComparison.OrdinalIgnoreCase)))
             return $"instagram.com/{segments[0].ToLowerInvariant()}/{segments[1]}";
 
+        if (WorkspaceStoryTaskRules.TryNormalizeStoryUrl(url, out var story))
+            return story;
         return url;
     }
 
-    public IReadOnlyList<WorkspaceTaskTextPart> ActionLinks => WorkspaceTaskLinks.Split(task.Text)
-        .Where(part => part.Url is not null)
-        .Concat(WorkspaceTaskLinks.Split(task.PostUrl).Where(part => part.Url is not null))
-        .DistinctBy(GetActionLinkIdentity, StringComparer.OrdinalIgnoreCase)
-        .ToArray();
+    public IReadOnlyList<WorkspaceTaskTextPart> ActionLinks
+    {
+        get
+        {
+            if (_kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE or WorkspaceTaskKind.MIXED &&
+                WorkspaceFollowActions.TryParseAnnouncement(task.Text, out var actions))
+                return actions.Select(action => new WorkspaceTaskTextPart(
+                    $"{(action.ShouldFollow ? "Подписка" : "Отписка")} @{action.TargetUserName}",
+                    $"https://www.instagram.com/{action.TargetUserName}/")).ToArray();
+            return WorkspaceTaskLinks.Split(task.Text)
+                .Where(part => part.Url is not null)
+                .Concat(WorkspaceTaskLinks.Split(task.PostUrl).Where(part => part.Url is not null))
+                .DistinctBy(GetActionLinkIdentity, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
 
     // Linked posts in the task body are different from the Telegram message
     // containing the task. The latter is exposed separately by SourceUrl.
@@ -2810,7 +2858,9 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
             uri.Host is ("t.me" or "instagram.com" or "www.instagram.com") &&
             !string.Equals(url, ReelUrl, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(url, FeedPostUrl, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(url, PostUrl, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(GetActionLinkIdentity(part),
+                GetActionLinkIdentity(new WorkspaceTaskTextPart(string.Empty, PostUrl)),
+                StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(url, SourceUrl, StringComparison.OrdinalIgnoreCase))
         .Select(part => new WorkspaceTaskTextPart(part.Text switch
         {
@@ -2830,6 +2880,7 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
     public string PostUrl => task.PostUrl;
     public bool HasPostUrl => !string.IsNullOrWhiteSpace(task.PostUrl);
     public bool HasStandalonePostUrl => HasPostUrl && !HasReelUrl && !HasFeedPostUrl;
+    public string StandalonePostUrlLabel => _kind == WorkspaceTaskKind.STORY ? "↗  Сторис" : "↗  Пост";
     public string SourceUrl => task.SourceUrl;
     public bool HasSourceUrl => !string.IsNullOrWhiteSpace(task.SourceUrl);
     public string Title => string.IsNullOrWhiteSpace(task.AuthorName) ? "Автор неизвестен" : task.AuthorName;
@@ -2837,4 +2888,11 @@ public sealed class WorkspaceTaskCard(WorkspaceDetectedTask task) : INotifyPrope
     public string Description => string.IsNullOrWhiteSpace(_presentation.Text)
         ? "Сообщение без текста (возможно, содержит медиа)"
         : _presentation.Text;
+}
+/// <summary>Visual representation of an Instagram follow/unfollow action link.</summary>
+public sealed record WorkspaceFollowActionLink(string Text, string Url, bool IsSubscription)
+{
+    public string Background => IsSubscription ? "#EAF8EF" : "#FFF2E4";
+    public string Foreground => IsSubscription ? "#246F43" : "#965219";
+    public string BorderBrush => IsSubscription ? "#CBE9D5" : "#F3D9B9";
 }

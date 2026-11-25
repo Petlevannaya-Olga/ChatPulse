@@ -87,6 +87,75 @@ public sealed class Chat14ParticipantHistoryParserTests
     }
 
     [Fact]
+    public async Task KeepsLastVipEntryWhenRegularHeadingPrecedesItsProfile()
+    {
+        // In the actual 14th-chat register the decorative heading «ВСЕ МЫ»
+        // appears after VIP #10's title, but BEFORE the VIP's Instagram link.
+        // It must not turn that VIP into an ordinary participant.
+        const string text = """
+            ***14 ЧАТ***
+            ⚡️Основатель чатов ОРИОН
+            Виктория
+            https://www.instagram.com/danilovavica
+            🌟VIP УЧАСТНИКИ 🌟
+            1 VIP INCLUSIVE LITE 🌟 🌟 🌟
+            https://www.instagram.com/alinavolta
+            2 VIP lite⭐️
+            ⚡️🦋 ВСЕ МЫ 🦋 ⚡️
+            https://www.instagram.com/ms.mulsanovna
+            1
+            https://www.instagram.com/tatianafrolova_psy
+            2
+            https://www.instagram.com/marinaburnt
+            Подписка сюда 👆🏼
+            Актив дает отсюда 👇🏼
+            https://www.instagram.com/marinamarina8048
+            """;
+
+        var result = await new Chat14ParticipantHistoryParser().ParseAsync(text, POST_DATE,
+            EMPTY_KNOWN, null, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(5, result.Entries!.Count);
+        Assert.Contains(result.Entries, item =>
+            item.SourceSection == "VIP УЧАСТНИКИ" && item.Position == 2 &&
+            item.SubscriptionProfileUrl == "https://www.instagram.com/ms.mulsanovna");
+        Assert.DoesNotContain(result.Entries, item =>
+            item.SourceSection == "ВСЕ МЫ" &&
+            item.SubscriptionProfileUrl == "https://www.instagram.com/ms.mulsanovna");
+        Assert.Contains(result.Entries, item =>
+            item.SourceSection == "ВСЕ МЫ" && item.Position == 1 &&
+            item.SubscriptionProfileUrl == "https://www.instagram.com/tatianafrolova_psy");
+        Assert.Contains(result.Entries, item =>
+            item.SourceSection == "ВСЕ МЫ" && item.Position == 2 &&
+            item.ActivityProfileUrl == "https://www.instagram.com/marinamarina8048");
+    }
+
+    [Fact]
+    public async Task StillRejectsMissingVipProfileBeforeTheRegularList()
+    {
+        const string text = """
+            🌟VIP УЧАСТНИКИ 🌟
+            1 VIP lite
+            https://www.instagram.com/alinavolta
+            2 VIP lite
+            ⚡️🦋 ВСЕ МЫ 🦋 ⚡️
+            1
+            https://www.instagram.com/tatianafrolova_psy
+            2
+            https://www.instagram.com/marinaburnt
+            """;
+
+        var result = await new Chat14ParticipantHistoryParser().ParseAsync(text, POST_DATE,
+            EMPTY_KNOWN, null, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("VIP УЧАСТНИКИ", result.Error, StringComparison.Ordinal);
+        Assert.Contains("запись №2", result.Error, StringComparison.Ordinal);
+        Assert.Contains("отсутствует ссылка", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RejectsDamagedNonPenaltyLinkWithSectionAndRecordNumber()
     {
         var text = LIST.Replace("https://www.instagram.com/another_user",

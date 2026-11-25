@@ -136,6 +136,12 @@ public static class ChatActivityAnalyzer
         if (!uri.Host.Equals("instagram.com", StringComparison.OrdinalIgnoreCase) &&
             !uri.Host.Equals("www.instagram.com", StringComparison.OrdinalIgnoreCase)) return false;
         var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 3 &&
+            segments[0].Equals("stories", StringComparison.OrdinalIgnoreCase) &&
+            segments[1].Length is >= 1 and <= 30 &&
+            segments[1].All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '.') &&
+            segments[2].Length is >= 8 and <= 32 && segments[2].All(char.IsAsciiDigit))
+            return true;
         return segments.Length >= 2 &&
                (segments[0].Equals("p", StringComparison.OrdinalIgnoreCase) ||
                 segments[0].Equals("reel", StringComparison.OrdinalIgnoreCase) ||

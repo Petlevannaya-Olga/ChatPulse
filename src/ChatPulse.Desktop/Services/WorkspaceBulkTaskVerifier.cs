@@ -16,12 +16,15 @@ public sealed class WorkspaceBulkTaskVerifier(
     public Task CloseBrowserAsync() => browser.CloseBrowserAsync();
 
     public int ExcludedFailedPostCount { get; private set; }
+    public int ExcludedFailedFollowCount { get; private set; }
 
     public async Task<IReadOnlyList<long>> GetSnapshotAsync(ConfiguredChat chat,
-        bool oldestFirst, Func<bool> stopRequested)
+        bool oldestFirst, Func<bool> stopRequested,
+        WorkspaceBulkVerificationMode mode = WorkspaceBulkVerificationMode.ExcludePreviouslyChecked)
     {
         const int PAGE_SIZE = 60;
         ExcludedFailedPostCount = 0;
+        ExcludedFailedFollowCount = 0;
         var ids = new List<long>();
         var failedStore = new WorkspaceFailedTaskVerificationStore(reader.DatabasePath);
         for (var offset = 0; ; offset += PAGE_SIZE)
@@ -31,17 +34,24 @@ public sealed class WorkspaceBulkTaskVerifier(
                 oldestFirst, offset, PAGE_SIZE, includeTotals: false);
             // Filter *after* reading each full page. Offsets still refer to the
             // unfiltered completed-task stream, so later pages are never skipped.
-            var postIds = page.Tasks
-                .Where(task => WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl)
-                    is not (WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE))
-                .Select(task => task.MessageId).ToArray();
-            var previouslyFailed = await failedStore.FindWithReportsAsync(chat, postIds);
-            ExcludedFailedPostCount += previouslyFailed.Count;
-            ids.AddRange(page.Tasks.Where(task =>
-                !WorkspaceBulkTaskVerificationPolicy.ShouldExcludeFailedPost(
-                    WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl),
-                    previouslyFailed.Contains(task.MessageId)))
-                .Select(task => task.MessageId));
+            var manualIds = mode == WorkspaceBulkVerificationMode.ExcludePreviouslyChecked
+                ? await failedStore.FindRequiringManualReviewAsync(chat,
+                    page.Tasks.Select(task => task.MessageId).ToArray())
+                : (IReadOnlySet<long>)new HashSet<long>();
+            foreach (var task in page.Tasks)
+            {
+                if (!WorkspaceBulkTaskVerificationPolicy.ShouldExcludeFromBulk(
+                        manualIds.Contains(task.MessageId), mode))
+                {
+                    ids.Add(task.MessageId);
+                    continue;
+                }
+                var kind = WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl);
+                if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE or WorkspaceTaskKind.MIXED)
+                    ExcludedFailedFollowCount++;
+                else
+                    ExcludedFailedPostCount++;
+            }
             if (page.Tasks.Count < PAGE_SIZE) break;
         }
         return ids;
@@ -49,7 +59,8 @@ public sealed class WorkspaceBulkTaskVerifier(
 
     public async Task<WorkspaceBulkTaskOutcome> VerifyOneAsync(
         ConfiguredChat chat, long messageId, string viewer,
-        IProgress<string>? stage = null)
+        IProgress<string>? stage = null,
+        WorkspaceBulkVerificationMode mode = WorkspaceBulkVerificationMode.ExcludePreviouslyChecked)
     {
         var task = await reader.ReadCompletedByIdAsync(chat, messageId);
         if (task is null)
@@ -58,35 +69,44 @@ public sealed class WorkspaceBulkTaskVerifier(
 
         var failedStore = new WorkspaceFailedTaskVerificationStore(reader.DatabasePath);
         var kind = WorkspaceTaskKindDetector.Detect(task.Text, task.PostUrl);
-        // Recheck immediately before opening Instagram. An error report may have
-        // appeared after the snapshot (e.g. from a different window or process).
-        if (kind is not (WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE) &&
-            (await failedStore.FindWithReportsAsync(chat, [messageId])).Contains(messageId))
+        // Recheck immediately before opening Instagram only for the default
+        // mode: explicit CheckAll permits rechecking earlier business failures.
+        if (mode == WorkspaceBulkVerificationMode.ExcludePreviouslyChecked &&
+            (await failedStore.FindRequiringManualReviewAsync(chat, [messageId])).Contains(messageId))
             return new WorkspaceBulkTaskOutcome(messageId, false,
-                "Публикация уже имеет отчёт об ошибке. Повторная проверка доступна вручную.", true);
+                "У задания уже есть неподтверждённая проверка. Повторная проверка доступна вручную.", true);
 
         var kindLabel = kind switch
         {
             WorkspaceTaskKind.SUBSCRIBE => "Подписка",
             WorkspaceTaskKind.UNSUBSCRIBE => "Отписка",
+            WorkspaceTaskKind.MIXED => "Подписка и отписка",
+            WorkspaceTaskKind.STORY => "Сторис",
             _ => "Публикация"
         };
         string target = task.PostUrl;
         try
         {
-            if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE)
+            if (kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE or WorkspaceTaskKind.MIXED)
             {
-                var candidates = InstagramFollowTaskRules.GetVerificationTargets(kind, task.Text, task.PostUrl);
-                if (candidates.Count == 0)
+                var allActions = WorkspaceFollowActions.GetActions(task.Text, task.PostUrl);
+                if (allActions.Count == 0)
                     return await FailedAsync("В задании нет Instagram-профилей для проверки.");
-                target = string.Join(", ", candidates.Select(name => $"@{name}"));
-                var verification = await InstagramFollowTaskRules.VerifyTargetsAsync(viewer, kind, candidates,
-                    (name, shouldFollow, token) => browser.CheckOwnFollowingAsync(viewer, name, shouldFollow, token),
-                    stage, CancellationToken.None);
+                var ownAccounts = await new InstagramOwnAccountStore(reader.DatabasePath).ReadAsync();
+                var actions = WorkspaceFollowActions.WithoutOwnAccounts(allActions, ownAccounts, viewer);
+                if (actions.Count == 0)
+                    return new WorkspaceBulkTaskOutcome(messageId, false,
+                        "Только собственные Instagram-аккаунты: проверка не требуется.", true);
+                target = string.Join(", ", actions.Select(action => $"@{action.TargetUserName}"));
+                var verification = await InstagramFollowTaskRules.VerifyActionsAsync(viewer, actions,
+                    (name, shouldFollow, token) => browser.CheckOwnFollowingAsync(viewer, name, shouldFollow,
+                        token, stopOnTechnicalFailure: true),
+                    stage, CancellationToken.None, stopOnTechnicalFailure: true);
                 if (!verification.CanHide)
                 {
-                    await failedStore.SaveAsync(chat, messageId,
-                        WorkspaceFailedTaskReport.FromFollow(verification));
+                    var report = WorkspaceFailedTaskReport.FromFollow(verification);
+                    ThrowIfTechnicalReport(report);
+                    await failedStore.SaveAsync(chat, messageId, report);
                     var details = string.Join("; ", verification.Results
                         .Where(item => item.Check.Status != InstagramTaskCheckStatus.CONFIRMED)
                         .Select(item => $"@{item.TargetUserName}: {item.Check.Detail}"));
@@ -96,20 +116,44 @@ public sealed class WorkspaceBulkTaskVerifier(
                 await new WorkspaceSubscriptionTaskVerificationStore(reader.DatabasePath)
                     .PublishAsync(chat, messageId, verification);
                 return new WorkspaceBulkTaskOutcome(messageId, true,
-                    $"{kindLabel}: проверено {candidates.Count} профилей, задание скрыто.", false);
+                    $"{kindLabel}: проверено {actions.Count} действий, задание скрыто.", false);
+            }
+
+            if (kind == WorkspaceTaskKind.STORY)
+            {
+                var stories = WorkspaceStoryTaskRules.GetStoryOnlyUrls(task.Text, task.PostUrl);
+                if (stories.Count == 0)
+                    return await FailedAsync("В сообщении нет корректной прямой ссылки на сторис.");
+                target = string.Join(", ", stories);
+                var storyResult = await browser.CheckStoryLikesAsync(stories, viewer,
+                    stage, CancellationToken.None, stopOnTechnicalFailure: true);
+                if (!storyResult.CanHide)
+                {
+                    var storyReport = WorkspaceFailedTaskReport.FromPost(storyResult);
+                    ThrowIfTechnicalReport(storyReport);
+                    await failedStore.SaveAsync(chat, messageId, storyReport);
+                    return new WorkspaceBulkTaskOutcome(messageId, false,
+                        "Лайк сторис: не подтверждено. " + storyResult.Like?.Detail, false);
+                }
+                await new WorkspaceTaskVerificationStore(reader.DatabasePath)
+                    .PublishAsync(chat, messageId, storyResult);
+                return new WorkspaceBulkTaskOutcome(messageId, true,
+                    $"Лайки всех слайдов Stories подтверждены. Задание скрыто.", false);
             }
 
             var requested = WorkspaceBulkTaskVerificationPolicy.PostChecks(task.Text);
-            if (!InstagramTaskVerificationRules.TryGetPostUrl(task.PostUrl, out var url))
+            if (!InstagramTaskVerificationRules.TryGetVerificationPostUrl(task.Text, task.PostUrl, out var url))
                 return await FailedAsync("В задании нет корректной ссылки на публикацию или Reels.");
             target = url;
             stage?.Report($"Проверяем публикацию: {url}");
             var result = await browser.CheckTaskActivityAsync(url, viewer,
                 requested.Like, requested.Comment, stage, CancellationToken.None,
-                null, requested.Save, requested.Repost);
+                null, requested.Save, requested.Repost, stopOnTechnicalFailure: true);
             if (!result.CanHide)
             {
-                await failedStore.SaveAsync(chat, messageId, WorkspaceFailedTaskReport.FromPost(result));
+                var report = WorkspaceFailedTaskReport.FromPost(result);
+                ThrowIfTechnicalReport(report);
+                await failedStore.SaveAsync(chat, messageId, report);
                 var details = new[] { result.Like, result.Comment, result.Save, result.Repost }
                     .Where(check => check is { Status: not InstagramTaskCheckStatus.CONFIRMED })
                     .Select(check => check!.Detail);
@@ -123,8 +167,11 @@ public sealed class WorkspaceBulkTaskVerifier(
         }
         catch (InstagramBrowserSessionException)
         {
-            // The entire bulk run must stop. No failed-post report for a task
-            // whose check was interrupted by Chrome/Instagram session loss.
+            // An interrupted task is neither confirmed nor a business failure.
+            throw;
+        }
+        catch (WorkspaceBulkTechnicalFailureException)
+        {
             throw;
         }
         catch (WebDriverException exception) when (InstagramBrowserFailure.IsFatal(exception))
@@ -134,7 +181,10 @@ public sealed class WorkspaceBulkTaskVerifier(
         }
         catch (Exception exception)
         {
-            return await FailedAsync($"Техническая ошибка: {exception.Message}");
+            // Do not turn a technical failure (including a SQLite write failure)
+            // into "not confirmed" and advance to the next Telegram message.
+            throw new WorkspaceBulkTechnicalFailureException(
+                $"Техническая ошибка при проверке задания #{messageId}: {exception.Message}", exception);
         }
 
         async Task<WorkspaceBulkTaskOutcome> FailedAsync(string detail)
@@ -145,15 +195,30 @@ public sealed class WorkspaceBulkTaskVerifier(
             {
                 await failedStore.SaveAsync(chat, messageId,
                     WorkspaceFailedTaskReport.FromError(kindLabel, viewer, target,
-                        kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE
-                            ? [kindLabel] : SelectedChecks(task.Text), detail));
+                        kind is WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE or WorkspaceTaskKind.MIXED
+                            ? [kindLabel] : kind == WorkspaceTaskKind.STORY ? new[] { "Лайк" } : SelectedChecks(task.Text), detail));
             }
             catch (Exception exception)
             {
-                detail += $" Отчёт не сохранён: {exception.Message}";
+                // A persistence failure is technical. Do not continue the batch
+                // without recording the result of this task.
+                throw new WorkspaceBulkTechnicalFailureException(
+                    $"Не удалось сохранить отчёт задания #{messageId}: {exception.Message}", exception);
             }
             return new WorkspaceBulkTaskOutcome(messageId, false, detail, false);
         }
+    }
+
+    private static void ThrowIfTechnicalReport(WorkspaceFailedTaskReport report)
+    {
+        if (report.FailureCategory != WorkspaceVerificationFailureCategory.TECHNICAL)
+            return;
+        // Defensive check: a browser method may return a technical diagnostic
+        // rather than throw. Never persist it as a failed Instagram action.
+        var detail = report.Checks.FirstOrDefault(check =>
+            !check.Confirmed && WorkspaceFailedTaskReport.IsTechnicalDiagnostic(check.Detail))?.Detail;
+        throw new WorkspaceBulkTechnicalFailureException(detail ??
+            "Техническая ошибка во время проверки задания.");
     }
 
     private static string FormatChecks(InstagramTaskVerificationResult result)

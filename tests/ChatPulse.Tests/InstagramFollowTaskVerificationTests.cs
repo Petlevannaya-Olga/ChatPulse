@@ -1,4 +1,4 @@
-using ChatPulse.Desktop.Services;
+﻿using ChatPulse.Desktop.Services;
 using Xunit;
 
 namespace ChatPulse.Tests;
@@ -139,6 +139,58 @@ public sealed class InstagramFollowTaskVerificationTests
         Assert.Equal(new[] { "a", "b", "c" }, visited);
         Assert.False(result.CanHide);
         Assert.Contains("network", result.Results[1].Check.Detail);
+    }
+
+    [Fact]
+    public async Task BulkUnsubscribe_TechnicalException_StopsBeforeNextProfile()
+    {
+        var visited = new List<string>();
+        var exception = await Assert.ThrowsAsync<WorkspaceBulkTechnicalFailureException>(async () =>
+        {
+            await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+                ["first", "second", "third"], (name, _, _) =>
+                {
+                    visited.Add(name);
+                    if (name == "second") throw new InvalidOperationException("database unavailable");
+                    return Task.FromResult(InstagramTaskCheckResult.Confirmed("Нет подписки"));
+                }, stopOnTechnicalFailure: true);
+        });
+        Assert.Equal(new[] { "first", "second" }, visited);
+        Assert.Contains("database unavailable", exception.Message);
+    }
+
+    [Fact]
+    public async Task BulkUnsubscribe_TechnicalResult_StopsBeforeNextProfile()
+    {
+        var visited = new List<string>();
+        await Assert.ThrowsAsync<WorkspaceBulkTechnicalFailureException>(async () =>
+        {
+            await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+                ["first", "second", "third"], (name, _, _) =>
+                {
+                    visited.Add(name);
+                    return Task.FromResult(name == "second"
+                        ? InstagramTaskCheckResult.Inconclusive("Ошибка Instagram: invalid session id")
+                        : InstagramTaskCheckResult.Confirmed("Нет подписки"));
+                }, stopOnTechnicalFailure: true);
+        });
+        Assert.Equal(new[] { "first", "second" }, visited);
+    }
+
+    [Fact]
+    public async Task BulkUnsubscribe_UnconfirmedAction_DoesNotStopTheBatch()
+    {
+        var visited = new List<string>();
+        var result = await InstagramFollowTaskRules.VerifyTargetsAsync("owner", WorkspaceTaskKind.UNSUBSCRIBE,
+            ["first", "second", "third"], (name, _, _) =>
+            {
+                visited.Add(name);
+                return Task.FromResult(name == "second"
+                    ? InstagramTaskCheckResult.Inconclusive("Отписка не подтверждена")
+                    : InstagramTaskCheckResult.Confirmed("Нет подписки"));
+            }, stopOnTechnicalFailure: true);
+        Assert.Equal(new[] { "first", "second", "third" }, visited);
+        Assert.False(result.CanHide);
     }
 
     [Fact]

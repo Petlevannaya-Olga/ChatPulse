@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.IO;
 using System.Diagnostics;
 using ChatPulse.Desktop.Settings;
@@ -212,7 +212,7 @@ public sealed class InstagramBrowserService : IDisposable
     /// </summary>
     public async Task<InstagramTaskCheckResult> CheckOwnFollowingAsync(
         string viewerUserName, string targetUserName, bool shouldFollow,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool stopOnTechnicalFailure = false)
     {
         var viewer = InstagramUserName.Normalize(viewerUserName);
         var target = InstagramUserName.Normalize(targetUserName);
@@ -301,15 +301,104 @@ public sealed class InstagramBrowserService : IDisposable
                 catch (WebDriverException exception)
                 {
                     InstagramBrowserFailure.ThrowIfFatal(exception, "Ошибка Chrome при проверке подписки");
+                    if (stopOnTechnicalFailure)
+                        throw new WorkspaceBulkTechnicalFailureException(
+                            $"Ошибка Chrome при проверке подписки: {exception.Message}", exception);
                     return InstagramTaskCheckResult.Inconclusive($"Ошибка Instagram: {exception.Message}");
                 }
                 catch (InvalidOperationException exception)
                 {
+                    if (stopOnTechnicalFailure)
+                        throw new WorkspaceBulkTechnicalFailureException(
+                            $"Техническая ошибка при проверке подписки: {exception.Message}", exception);
                     return InstagramTaskCheckResult.Inconclusive(exception.Message);
                 }
             }, cancellationToken);
             EnsureActiveInstagramSession(_driver!);
             return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Checks likes on every active slide of each author's Stories. A direct
+    /// link may open on any slide; the viewer is paused, rewound to the first
+    /// slide and traversed to the last. Hearts are never clicked. A missing
+    /// like or any unverifiable slide prevents hiding the Telegram task.
+    /// </summary>
+    public async Task<InstagramTaskVerificationResult> CheckStoryLikesAsync(
+        IReadOnlyList<string> storyUrls, string userName,
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        bool stopOnTechnicalFailure = false)
+    {
+        if (storyUrls is null || storyUrls.Count == 0 ||
+            storyUrls.Any(url => !WorkspaceStoryTaskRules.TryNormalizeStoryUrl(url, out _)))
+            throw new ArgumentException("Нужны прямые ссылки на сторис Instagram.", nameof(storyUrls));
+
+        var normalizedUrls = storyUrls
+            .Select(url => { WorkspaceStoryTaskRules.TryNormalizeStoryUrl(url, out var clean); return clean; })
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        // Multiple direct links from the same author describe ONE sequence.
+        // A separate author (if present in the Telegram message) is checked
+        // independently, without leaving that author's viewer mid-sequence.
+        var authors = normalizedUrls.GroupBy(url =>
+                new Uri(url).AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)[1],
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => (Author: group.Key, Url: group.First())).ToArray();
+        var user = InstagramUserName.Normalize(userName);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var verification = await Task.Run(() =>
+            {
+                var driver = GetDriver();
+                driver.Navigate().GoToUrl("https://www.instagram.com/");
+                if (driver.Manage().Cookies.GetCookieNamed("sessionid") is null)
+                    throw new InstagramBrowserSessionException(
+                        "Сессия Instagram отсутствует. Войдите в Chrome перед повторной проверкой.");
+
+                var accountConfirmed = false;
+                for (var attempt = 0; attempt < 20; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!IsCurrentInstagramAccount(driver, user))
+                    {
+                        WaitWithCancellation(250, cancellationToken);
+                        continue;
+                    }
+                    accountConfirmed = true;
+                    break;
+                }
+                if (!accountConfirmed)
+                    accountConfirmed = ConfirmAccountThroughProfileNavigation(driver, user, cancellationToken);
+                if (!accountConfirmed)
+                    throw new InstagramBrowserSessionException(
+                        $"Не удалось подтвердить, что Chrome авторизован как @{user}. " +
+                        DescribeAccountNavigation(driver, user));
+
+                var like = InstagramTaskCheckResult.Inconclusive("Проверка сторис не началась.");
+                foreach (var (author, url) in authors)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report($"Открываем все Stories @{author}…");
+                    like = InstagramStoryViewer.CheckAllSlides(driver, url, author, progress, cancellationToken);
+                    if (stopOnTechnicalFailure)
+                        InstagramBrowserFailure.ThrowIfTechnicalResult(like);
+                    if (like.Status != InstagramTaskCheckStatus.CONFIRMED) break;
+                }
+                if (like.Status == InstagramTaskCheckStatus.CONFIRMED && authors.Length > 1)
+                    like = InstagramTaskCheckResult.Confirmed(
+                        $"Лайки всех Stories подтверждены у {authors.Length} аккаунтов.");
+                return new InstagramTaskVerificationResult(user, normalizedUrls[0], like, null);
+            }, cancellationToken);
+            EnsureActiveInstagramSession(_driver!);
+            return verification;
+        }
+        catch (WebDriverException exception)
+        {
+            throw new InstagramBrowserSessionException(
+                $"Ошибка Chrome во время проверки сторис: {exception.Message}", exception);
         }
         finally { _gate.Release(); }
     }
@@ -322,7 +411,8 @@ public sealed class InstagramBrowserService : IDisposable
     public async Task<InstagramTaskVerificationResult> CheckTaskActivityAsync(
         string postUrl, string userName, bool checkLike, bool checkComment,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
-        string? postAuthorUserName = null, bool checkSave = false, bool checkRepost = false)
+        string? postAuthorUserName = null, bool checkSave = false, bool checkRepost = false,
+        bool stopOnTechnicalFailure = false)
     {
         if (!checkLike && !checkComment && !checkSave && !checkRepost)
             throw new ArgumentException("Выберите хотя бы один вид проверки.");
@@ -384,6 +474,8 @@ public sealed class InstagramBrowserService : IDisposable
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             like = CheckOwnPostAction(driver, "like", user);
+                            if (stopOnTechnicalFailure)
+                                InstagramBrowserFailure.ThrowIfTechnicalResult(like);
                             if (like.Status == InstagramTaskCheckStatus.CONFIRMED) break;
                             WaitWithCancellation(250, cancellationToken);
                         }
@@ -394,6 +486,8 @@ public sealed class InstagramBrowserService : IDisposable
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             save = CheckOwnPostAction(driver, "save", user);
+                            if (stopOnTechnicalFailure)
+                                InstagramBrowserFailure.ThrowIfTechnicalResult(save);
                             if (save.Status == InstagramTaskCheckStatus.CONFIRMED) break;
                             WaitWithCancellation(250, cancellationToken);
                         }
@@ -404,6 +498,8 @@ public sealed class InstagramBrowserService : IDisposable
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             repost = CheckOwnPostAction(driver, "repost", user);
+                            if (stopOnTechnicalFailure)
+                                InstagramBrowserFailure.ThrowIfTechnicalResult(repost);
                             if (repost.Status == InstagramTaskCheckStatus.CONFIRMED) break;
                             WaitWithCancellation(250, cancellationToken);
                         }
@@ -414,6 +510,8 @@ public sealed class InstagramBrowserService : IDisposable
                     cancellationToken.ThrowIfCancellationRequested();
                     progress?.Report("Ищем ваш комментарий под публикацией…");
                     comment = CheckDirectPostComment(driver, url, user, progress, cancellationToken);
+                    if (stopOnTechnicalFailure)
+                        InstagramBrowserFailure.ThrowIfTechnicalResult(comment);
                 }
                 return new InstagramTaskVerificationResult(user, url, like, comment, save, repost);
             }, cancellationToken);
@@ -666,6 +764,119 @@ public sealed class InstagramBrowserService : IDisposable
                     const actionIcons = [...document.querySelectorAll('svg[aria-label]')]
                         .filter(svg => visible(svg) && accepted.has(svg.getAttribute('aria-label')) &&
                             !svg.closest('nav, aside, header, [role="navigation"]'));
+                    // A direct post can render the video, its cover and several
+                    // thumbnails as equally large media elements. In that case
+                    // media proximity alone cannot distinguish the post heart
+                    // from the small hearts beside comments. The post toolbar
+                    // uses a full-sized (normally 24px) heart inside a button;
+                    // comment/reply hearts are normally smaller. Trust this
+                    // fallback only on an unwrapped direct-post page and only
+                    // when exactly one such control is close to visible media.
+                    if (action === 'like' && !articles.length && !dialogs.length) {
+                        const postLikeControls = actionIcons.filter(svg => {
+                            const r = rectOf(svg);
+                            return r.width >= 22 && r.height >= 22 &&
+                                r.width <= 40 && r.height <= 40 &&
+                                !!svg.closest('button, [role="button"]');
+                        });
+                        if (postLikeControls.length === 1) {
+                            const heart = postLikeControls[0];
+                            const hr = rectOf(heart);
+                            const hx = hr.left + hr.width / 2;
+                            const hy = hr.top + hr.height / 2;
+                            const nearLargeMedia = media.some(item => {
+                                const r = item.rect;
+                                const dx = Math.max(r.left - hx, 0, hx - r.right);
+                                const dy = Math.max(r.top - hy, 0, hy - r.bottom);
+                                return Math.hypot(dx, dy) <= 300;
+                            });
+                            if (nearLargeMedia) return [observedState(heart)];
+                        }
+                        // Zero post-sized hearts can mean only comment hearts
+                        // are visible. More than one can indicate several posts.
+                        // Neither case can prove the state of the requested post.
+                        return ['__NO_SCOPE__|articles=0, dialogs=0, visibleActions=' +
+                            actionIcons.length + ', visibleMedia=' + media.length +
+                            ', primaryLikeButtons=' + postLikeControls.length +
+                            ', scope=ambiguous-post-like'];
+                    }
+                    // A directly opened Reel/post may have no article/dialog,
+                    // several media layers and several repost controls (for
+                    // example from surrounding UI). The real post toolbar uses
+                    // a full-sized (usually 24px) button. Prefer its unique
+                    // control instead of treating all visible repost SVGs as
+                    // equally plausible. Verify its proximity to post media;
+                    // if multiple full-sized controls exist, anchor to the
+                    // single full-sized post Like button in the same toolbar.
+                    if (action === 'repost' && !articles.length && !dialogs.length) {
+                        const isToolbarButton = svg => {
+                            const r = rectOf(svg);
+                            return r.width >= 22 && r.height >= 22 &&
+                                r.width <= 40 && r.height <= 40 &&
+                                svg.getAttribute('viewBox') === '0 0 24 24' &&
+                                !!svg.closest('button, [role="button"]');
+                        };
+                        const nearPostMedia = svg => {
+                            const r = rectOf(svg);
+                            const x = r.left + r.width / 2;
+                            const y = r.top + r.height / 2;
+                            return media.some(item => {
+                                const m = item.rect;
+                                const dx = Math.max(m.left - x, 0, x - m.right);
+                                const dy = Math.max(m.top - y, 0, y - m.bottom);
+                                return Math.hypot(dx, dy) <= 300;
+                            });
+                        };
+                        const mainRepostControls = actionIcons
+                            .filter(isToolbarButton).filter(nearPostMedia);
+                        // This also covers a page with comment/suggestion repost
+                        // icons: smaller icons must not increase the count.
+                        if (mainRepostControls.length === 1)
+                            return [observedState(mainRepostControls[0])];
+                        if (mainRepostControls.length > 1) {
+                            const postLikeControls = [...document.querySelectorAll('svg[aria-label]')]
+                                .filter(svg => visible(svg) &&
+                                    ['Нравится', 'Не нравится', 'Like', 'Unlike',
+                                     'Больше не нравится'].includes(svg.getAttribute('aria-label')) &&
+                                    !svg.closest('nav, aside, header, [role="navigation"]'))
+                                .filter(svg => {
+                                    const r = rectOf(svg);
+                                    return r.width >= 22 && r.height >= 22 &&
+                                        r.width <= 40 && r.height <= 40 &&
+                                        !!svg.closest('button, [role="button"]');
+                                });
+                            if (postLikeControls.length === 1 &&
+                                nearPostMedia(postLikeControls[0])) {
+                                const heart = postLikeControls[0];
+                                const hr = rectOf(heart);
+                                const hx = hr.left + hr.width / 2;
+                                const hy = hr.top + hr.height / 2;
+                                const inSameToolbar = mainRepostControls.filter(svg => {
+                                    const r = rectOf(svg);
+                                    const dx = Math.abs(r.left + r.width / 2 - hx);
+                                    const dy = Math.abs(r.top + r.height / 2 - hy);
+                                    // Compact horizontal toolbar or Reel action rail.
+                                    if (!((dy <= 36 && dx <= 320) ||
+                                          (dx <= 56 && dy <= 240))) return false;
+                                    let common = heart.parentElement;
+                                    while (common && !common.contains(svg))
+                                        common = common.parentElement;
+                                    if (!common || common === document.body ||
+                                        common === document.documentElement) return false;
+                                    const cr = rectOf(common);
+                                    return cr.width <= 760 && cr.height <= 260;
+                                });
+                                if (inSameToolbar.length === 1)
+                                    return [observedState(inSameToolbar[0])];
+                            }
+                        }
+                        // Do not fall back to the nearest *small* icon: it might
+                        // be a comment or an unrelated recommendation.
+                        return ['__NO_SCOPE__|articles=0, dialogs=0, visibleActions=' +
+                            actionIcons.length + ', visibleMedia=' + media.length +
+                            ', primaryRepostButtons=' + mainRepostControls.length +
+                            ', scope=ambiguous-post-repost'];
+                    }
                     if (media.length && actionIcons.length) {
                         const mainMedia = media[0].rect;
                         const cx = mainMedia.left + mainMedia.width / 2;
@@ -947,20 +1158,59 @@ public sealed class InstagramBrowserService : IDisposable
             if (string.IsNullOrWhiteSpace(shortcode))
                 return InstagramTaskCheckResult.Inconclusive("Не удалось определить публикацию для проверки комментариев.");
 
-            // A direct post/Reel URL does not necessarily open its comments panel.
-            // First open the comment control, then look for comments and scroll.
-            var openingError = EnsureDirectPostCommentsOpened(driver, shortcode, cancellationToken);
-            if (openingError is not null)
-                return InstagramTaskCheckResult.Inconclusive(openingError);
+            // The Reels viewer may switch to a neighbouring video while React
+            // renders the page. Never inspect a comment button unless the current
+            // URL still identifies the requested shortcode. A /p/ fallback is used
+            // once if a Reel cannot be opened or its toolbar becomes ambiguous.
+            var commentPanelReady = false;
+            for (var navigationAttempt = 0; navigationAttempt < 2; navigationAttempt++)
+            {
+                if (WaitForTargetPublication(driver, shortcode, cancellationToken))
+                {
+                    // /p/ normally renders its comments at the right. A Reel may
+                    // still require opening its comments panel explicitly.
+                    if (InstagramTaskVerificationRules.ShouldReadCommentsWithoutOpening(driver.Url))
+                    {
+                        commentPanelReady = true;
+                        break;
+                    }
+                    var openingError = EnsureDirectPostCommentsOpened(driver, shortcode, cancellationToken);
+                    if (openingError is null)
+                    {
+                        commentPanelReady = true;
+                        break;
+                    }
+                    if (navigationAttempt == 1)
+                        return InstagramTaskCheckResult.Inconclusive(openingError);
+                }
+                else if (navigationAttempt == 1)
+                {
+                    return InstagramTaskCheckResult.Inconclusive(
+                        $"Instagram открыл другую публикацию вместо /p/{shortcode}/ " +
+                        $"(адрес: {driver.Url}). Проверка комментария не выполнена.");
+                }
+
+                // No click or comment check on an unverified Reel. Retry via a
+                // canonical post URL with the SAME shortcode, not an adjacent Reel.
+                driver.Navigate().GoToUrl($"https://www.instagram.com/p/{shortcode}/");
+            }
+            if (!commentPanelReady)
+                return InstagramTaskCheckResult.Inconclusive(
+                    "Не удалось открыть комментарии нужной публикации.");
 
             // Instagram's comment rows are divs, not necessarily ul/li. Their time links
             // contain /p/<shortcode>/c/<comment-id>/ even when the post was opened as a Reel.
             // Observe each DOM iteration atomically: React may replace the entire list.
             var stalled = 0;
             string? previousSignature = null;
+            string lastScrollDiagnostic = "";
             for (var batch = 0; batch < 100; batch++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!InstagramTaskVerificationRules.IsSamePublicationUrl(driver.Url, shortcode))
+                    return InstagramTaskCheckResult.Inconclusive(
+                        $"Instagram переключил публикацию во время поиска комментария: {driver.Url}. " +
+                        "Проверка не подтверждена.");
                 var snapshot = ((IJavaScriptExecutor)driver).ExecuteScript("""
                     const shortcode = arguments[0];
                     const expected = arguments[1].toLowerCase();
@@ -980,6 +1230,11 @@ public sealed class InstagramBrowserService : IDisposable
                     const allCommentLinks = [...document.querySelectorAll('a[href]')]
                         .filter(a => visible(a) && /^\/(?:p|reel)\/[^/]+\/c\/[^/]+\/?$/i.test(path(a)));
                     const links = allCommentLinks.filter(a => commentPath.test(path(a)));
+                    // Do not scroll another publication's comments, even if
+                    // stale comment panels are still mounted by Instagram.
+                    if (!links.length && allCommentLinks.length)
+                        return [false, 0, 'foreign-comments', '', allCommentLinks.length,
+                            '', 'comment-links-for-another-publication'];
                     const profilePath = '/' + expected + '/';
                     const isProfile = a => path(a).toLowerCase() === profilePath;
                     // A user profile elsewhere on the page cannot confirm a comment.
@@ -998,51 +1253,120 @@ public sealed class InstagramBrowserService : IDisposable
                     const heading = [...document.querySelectorAll('span, h1, h2, h3')]
                         .find(el => visible(el) && /^(Комментарии|Comments)$/i.test(
                             (el.textContent || '').trim()));
-                    // On the supplied Instagram DOM the comments panel is a div,
-                    // not an article/dialog, and comment links may not match the
-                    // requested shortcode if Instagram redirected to another post.
-                    // Never treat those links as positive matches.
                     const first = links[0] || allCommentLinks[0];
+                    if (!first && !heading)
+                        return [false, 0, 'loading', '', allCommentLinks.length, '', 'no-comment-anchors'];
+
+                    // The comments may live in a narrow, independently scrolling panel.
+                    // Its 14 loaded rows must not be mistaken for the end of the list.
+                    // Use the last ON-SCREEN permalink as the scrolling anchor; a
+                    // wheel gesture on the first (off-screen) row can scroll back up.
+                    const inViewport = el => {
+                        if (!visible(el)) return false;
+                        const r = el.getBoundingClientRect();
+                        let top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
+                        let left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
+                        for (let parent = el.parentElement; parent && parent !== document.body;
+                             parent = parent.parentElement) {
+                            const style = getComputedStyle(parent);
+                            if (/auto|scroll|hidden|clip|overlay/.test(style.overflowY)) {
+                                const clip = parent.getBoundingClientRect();
+                                top = Math.max(top, clip.top);
+                                bottom = Math.min(bottom, clip.bottom);
+                            }
+                            if (/auto|scroll|hidden|clip|overlay/.test(style.overflowX)) {
+                                const clip = parent.getBoundingClientRect();
+                                left = Math.max(left, clip.left);
+                                right = Math.min(right, clip.right);
+                            }
+                            if (bottom - top <= 2 || right - left <= 2) return false;
+                        }
+                        return bottom - top > 2 && right - left > 2;
+                    };
+                    const relevant = links.length ? links : allCommentLinks;
+                    const onScreen = relevant.filter(inViewport).sort((a, b) =>
+                        b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+                    const lastOnScreen = onScreen[0] || null;
+
+                    // Determine the comment-list root from the common ancestor of
+                    // its permalinks, not from the first row's grandparent (which
+                    // often contains no scroll controls or "load more" button).
+                    let common = relevant[0] || null;
+                    for (const link of relevant.slice(1, 12)) {
+                        while (common && !common.contains(link)) common = common.parentElement;
+                    }
+                    if (common === document.body || common === document.documentElement)
+                        common = null; // Do not click controls from the whole page.
                     let panel = null;
                     if (heading) {
                         for (let el = heading.parentElement; el && el !== document.body;
                              el = el.parentElement) {
-                            if (el.querySelectorAll('a[href*="/c/"]').length > 0) {
+                            if ([...el.querySelectorAll('a[href]')]
+                                .filter(a => commentPath.test(path(a))).length >= 2) {
                                 panel = el;
                                 break;
                             }
                         }
                     }
-                    const root = panel || first?.parentElement?.parentElement || heading?.parentElement;
-                    if (!root) return [false, 0, 'loading', '', allCommentLinks.length];
+                    const root = panel || common || first?.parentElement?.parentElement ||
+                        heading?.parentElement;
+                    if (!root)
+                        return [false, links.length, 'loading', '', allCommentLinks.length, '', 'no-comment-root'];
 
-                    let scrolling = null;
-                    const anchors = [first, root, heading].filter(Boolean);
-                    for (const anchor of anchors) {
-                        for (let el = anchor; el && el !== document.body; el = el.parentElement) {
-                            if (!visible(el)) continue;
-                            if (el.scrollHeight > el.clientHeight + 12 && el.clientHeight > 90) {
-                                if (!scrolling || (el.clientHeight < scrolling.clientHeight))
-                                    scrolling = el;
-                            }
-                        }
-                    }
-                    const expand = [...(panel || root).querySelectorAll('button, [role="button"]')]
-                        .find(el => visible(el) &&
-                            /^(?:смотреть все ответы|посмотреть ответы|показать ответы|view (?:all )?replies|view more replies|view more comments|load more comments|показать ещё комментарии|показать еще комментарии)/i
+                    const expand = [...root.querySelectorAll('button, [role="button"]')]
+                        .find(el => inViewport(el) &&
+                            /^(?:смотреть все ответы|посмотреть ответы|показать ответы|показать (?:ещ[её]|больше) комментариев|view (?:all |more )?replies|view more comments|load more comments|view (?:all )?\d+ comments)/i
                                 .test((el.textContent || el.getAttribute('aria-label') || '').trim()));
                     if (expand) {
                         expand.click();
-                        return [false, links.length, 'expanded', links.at(-1)?.href || '', allCommentLinks.length];
+                        return [false, links.length, 'expanded', links.at(-1)?.href || '',
+                            allCommentLinks.length, '', 'expanded-comments'];
                     }
+
+                    // The smallest scrollable ancestor is NOT necessarily the list:
+                    // it may belong to a single reply or a media carousel. Prefer
+                    // overflow-y:auto/scroll containers containing comment rows.
+                    const candidates = new Map();
+                    for (const anchor of [lastOnScreen, ...relevant.slice(-3), first, heading]) {
+                        if (!anchor) continue;
+                        let distance = 0;
+                        for (let el = anchor; el && el !== document.body &&
+                             el !== document.documentElement; el = el.parentElement, distance++) {
+                            if (!visible(el) || el.clientHeight < 90 ||
+                                el.scrollHeight <= el.clientHeight + 12) continue;
+                            const overflow = getComputedStyle(el).overflowY;
+                            const explicit = /^(?:auto|scroll|overlay)$/.test(overflow);
+                            const matches = [...el.querySelectorAll('a[href]')]
+                                .filter(a => commentPath.test(path(a))).length;
+                            if (!matches) continue;
+                            const score = (explicit ? 1000 : 0) +
+                                Math.min(matches, 30) * 10 - distance;
+                            const previous = candidates.get(el);
+                            if (!previous || score > previous.score)
+                                candidates.set(el, {score, matches, explicit});
+                        }
+                    }
+                    const ranked = [...candidates.entries()].sort((a,b) => b[1].score - a[1].score);
+                    const scrolling = ranked[0]?.[0] || null;
+                    const diagnostics = `scrollables=${ranked.length};` +
+                        `onscreen=${onScreen.length};` +
+                        `overflow=${ranked[0]?.[1].explicit ?? false};` +
+                        `height=${scrolling?.clientHeight || 0};` +
+                        `top=${Math.round(scrolling?.scrollTop || 0)}`;
                     if (scrolling) {
                         const before = scrolling.scrollTop;
-                        scrolling.scrollTop = Math.min(scrolling.scrollHeight,
-                            before + Math.max(200, Math.floor(scrolling.clientHeight * 0.8)));
+                        scrolling.scrollTop = Math.min(
+                            scrolling.scrollHeight - scrolling.clientHeight,
+                            before + Math.max(250, Math.floor(scrolling.clientHeight * 0.8)));
                         if (scrolling.scrollTop > before + 1)
-                            return [false, links.length, 'scrolled', links.at(-1)?.href || '', allCommentLinks.length, scrolling.scrollTop];
+                            return [false, links.length, 'scrolled', links.at(-1)?.href || '',
+                                allCommentLinks.length, scrolling.scrollTop, diagnostics];
                     }
-                    return [false, links.length, (first || heading) ? 'wheel' : 'loading', links.at(-1)?.href || '', allCommentLinks.length];
+                    // A React virtualized list may only respond to trusted pointer
+                    // wheel events. Never scroll the window as a fallback.
+                    return [false, links.length,
+                        lastOnScreen ? 'wheel' : 'loading', links.at(-1)?.href || '',
+                        allCommentLinks.length, scrolling?.scrollTop ?? '', diagnostics];
                     """, shortcode, user) as System.Collections.ObjectModel.ReadOnlyCollection<object>;
 
                 if (snapshot is null || snapshot.Count < 3)
@@ -1055,6 +1379,12 @@ public sealed class InstagramBrowserService : IDisposable
                 var action = Convert.ToString(snapshot[2]);
                 var visibleComments = snapshot.Count > 4 ? Convert.ToInt32(snapshot[4]) : count;
                 var position = snapshot.Count > 5 ? Convert.ToString(snapshot[5]) : string.Empty;
+                lastScrollDiagnostic = snapshot.Count > 6
+                    ? Convert.ToString(snapshot[6]) ?? string.Empty : string.Empty;
+                if (action == "foreign-comments")
+                    return InstagramTaskCheckResult.Inconclusive(
+                        "Instagram отображает комментарии другой публикации; " +
+                        "проверка нужного комментария не завершена.");
                 var signature = $"{count}:{visibleComments}:{position}:{(snapshot.Count > 3 ? snapshot[3] : string.Empty)}";
                 if (action == "wheel")
                 {
@@ -1062,16 +1392,40 @@ public sealed class InstagramBrowserService : IDisposable
                     // real wheel gesture over a fresh comment anchor, not the page.
                     var originElement = ((IJavaScriptExecutor)driver).ExecuteScript("""
                         const code = arguments[0];
-                        const commentLinks = [...document.querySelectorAll('a[href]')]
-                            .filter(a => {
-                                try { return /^\/(?:p|reel)\/[^/]+\/c\/[^/]+\/?$/i.test(new URL(a.href).pathname); }
-                                catch { return false; }
-                            });
-                        return commentLinks.find(a => {
-                            try { return new URL(a.href).pathname.includes('/' + code + '/c/'); }
-                            catch { return false; }
-                        }) || commentLinks[0] || [...document.querySelectorAll('span, h1, h2, h3')]
-                            .find(el => /^(Комментарии|Comments)$/i.test((el.textContent || '').trim())) || null;
+                        const links = [...document.querySelectorAll('a[href]')].filter(a => {
+                            try {
+                                const path = new URL(a.href, location.href).pathname;
+                                const match = path.match(/^\/(?:p|reel)\/([^/]+)\/c\/[^/]+\/?$/i);
+                                if (!match || match[1].toLowerCase() !== code.toLowerCase())
+                                    return false;
+                            } catch { return false; }
+                            const r = a.getBoundingClientRect();
+                            const style = getComputedStyle(a);
+                            if (!a.isConnected || r.width <= 0 || r.height <= 0 ||
+                                style.display === 'none' || style.visibility === 'hidden')
+                                return false;
+                            let top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
+                            let left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
+                            for (let parent = a.parentElement; parent && parent !== document.body;
+                                 parent = parent.parentElement) {
+                                const overflow = getComputedStyle(parent);
+                                if (/auto|scroll|hidden|clip|overlay/.test(overflow.overflowY)) {
+                                    const clip = parent.getBoundingClientRect();
+                                    top = Math.max(top, clip.top);
+                                    bottom = Math.min(bottom, clip.bottom);
+                                }
+                                if (/auto|scroll|hidden|clip|overlay/.test(overflow.overflowX)) {
+                                    const clip = parent.getBoundingClientRect();
+                                    left = Math.max(left, clip.left);
+                                    right = Math.min(right, clip.right);
+                                }
+                                if (bottom - top <= 2 || right - left <= 2) return false;
+                            }
+                            return bottom - top > 2 && right - left > 2;
+                        });
+                        links.sort((a,b) => b.getBoundingClientRect().bottom -
+                            a.getBoundingClientRect().bottom);
+                        return links[0] || null;
                         """, shortcode) as IWebElement;
                     if (originElement is not null)
                     {
@@ -1095,7 +1449,8 @@ public sealed class InstagramBrowserService : IDisposable
                 if (stalled >= 8)
                     return InstagramTaskCheckResult.Inconclusive(
                         $"Комментарии не удалось подгрузить дальше (для публикации {count}, " +
-                        $"всего видимых {visibleComments}); полнота списка не подтверждена. " +
+                        $"в DOM {visibleComments}); полнота списка не подтверждена. " +
+                        $"Прокрутка: {lastScrollDiagnostic}. " +
                         (count == 0 && visibleComments > 0
                             ? "Ссылки комментариев относятся к другому shortcode — проверьте адрес публикации."
                             : ""));
@@ -1118,6 +1473,19 @@ public sealed class InstagramBrowserService : IDisposable
         }
     }
 
+    private static bool WaitForTargetPublication(ChromeDriver driver, string shortcode,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (InstagramTaskVerificationRules.IsSamePublicationUrl(driver.Url, shortcode))
+                return true;
+            WaitWithCancellation(250, cancellationToken);
+        }
+        return false;
+    }
+
     /// <summary>
     /// Open the comments area of a directly navigated post/Reel before inspecting rows.
     /// We only click a uniquely identified comment control, never a reaction button.
@@ -1130,6 +1498,8 @@ public sealed class InstagramBrowserService : IDisposable
         for (var attempt = 0; attempt < 15; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!InstagramTaskVerificationRules.IsSamePublicationUrl(driver.Url, expectedShortcode))
+                return $"Instagram переключил публикацию при открытии комментариев: {driver.Url}";
             var state = executor.ExecuteScript("""
                 const visible = e => {
                     if (!e?.isConnected) return false;
@@ -1201,10 +1571,24 @@ public sealed class InstagramBrowserService : IDisposable
             // Do not click a feed control unless the target post is identifiable.
             if (!currentMatches && !matchingLinks.length)
                 return [null, comments.length, numbered.length,
-                    'post-unverified; path=' + location.pathname + '; targetLinks=0'];
+                    'post-unverified; expected=' + expectedCode +
+                    '; path=' + location.pathname + '; targetLinks=0'];
             if (currentPost && !currentMatches)
                 return [null, comments.length, numbered.length,
-                    'wrong-post; path=' + location.pathname];
+                    'wrong-post; expected=' + expectedCode + '; path=' + location.pathname];
+            // In the direct target Reels viewer the primary comments button may
+            // be the only visible numbered action, even alongside several media
+            // elements. The supplied DOM uses a 24px "Комментировать" SVG and
+            // a "45" count inside the same button. Do not require a unique video
+            // or a nearby heart in this unambiguous case.
+            if (currentMatches && comments.length === 1 && numbered.length === 1) {
+                const icon = numbered[0].querySelector('svg[aria-label]');
+                const r = icon?.getBoundingClientRect();
+                if (r && r.width >= 20 && r.width <= 32 &&
+                    r.height >= 20 && r.height <= 32)
+                    return [numbered[0], comments.length, numbered.length,
+                        'single-numbered-on-target-publication'];
+            }
             const media = [...document.querySelectorAll('video, img')]
                 .filter(visible)
                 .map(e => ({e, r:e.getBoundingClientRect()}))

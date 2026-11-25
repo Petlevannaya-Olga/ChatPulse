@@ -86,6 +86,10 @@ public sealed class Chat14ParticipantHistoryParser : IChatParticipantHistoryPars
         var section = Section.NONE;
         var vipHeading = false;
         var regularHeading = false;
+        // Some chat-14 registers print «ВСЕ МЫ» before the final VIP's URL.
+        // Keep that incomplete VIP entry open until its profile is read, then
+        // move to the regular section. A missing VIP URL must still be rejected.
+        var regularHeadingBeforeVipLink = false;
         RawEntry? current = null;
         string? error = null;
 
@@ -118,9 +122,16 @@ public sealed class Chat14ParticipantHistoryParser : IChatParticipantHistoryPars
                 }
                 if (line.Contains("ВСЕ МЫ", StringComparison.OrdinalIgnoreCase))
                 {
+                    regularHeading = true;
+                    if (section == Section.VIP && current is { SubscriptionLink: null })
+                    {
+                        // The header is visually placed inside the last VIP row;
+                        // the next profile URL still belongs to that VIP.
+                        regularHeadingBeforeVipLink = true;
+                        continue;
+                    }
                     if (!FinishEntry()) return Failed(error!);
                     section = Section.REGULAR;
-                    regularHeading = true;
                     continue;
                 }
                 if (line.Contains("ШТРАФНЫЕ ДНИ", StringComparison.OrdinalIgnoreCase))
@@ -193,6 +204,15 @@ public sealed class Chat14ParticipantHistoryParser : IChatParticipantHistoryPars
                              !current.SubscriptionLink.Equals(url, StringComparison.OrdinalIgnoreCase))
                         return Failed($"{Location(current)}: обнаружена дополнительная неизвестная ссылка.");
                     current.NextLinkIsActivity = false;
+                }
+                if (regularHeadingBeforeVipLink && current.SubscriptionLink is not null)
+                {
+                    // Finish the pending VIP only after seeing its Instagram URL;
+                    // the following numbered records are ordinary participants.
+                    if (!FinishEntry()) return Failed(error!);
+                    regularHeadingBeforeVipLink = false;
+                    section = Section.REGULAR;
+                    continue;
                 }
                 if (section == Section.ADMIN && current.DisplayName is null && urls.Length == 0 &&
                     !line.Contains("Подписка", StringComparison.OrdinalIgnoreCase))

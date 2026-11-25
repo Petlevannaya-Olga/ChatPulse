@@ -20,6 +20,52 @@ public sealed class InstagramTaskVerificationTests
     }
 
     [Theory]
+    [InlineData("https://www.instagram.com/p/ABCde0123/", true)]
+    [InlineData("https://www.instagram.com/p/ABCde0123/?igsh=tracking", true)]
+    [InlineData("https://www.instagram.com/reel/ABCde0123/", false)]
+    [InlineData("https://www.instagram.com/tv/ABCde0123/", false)]
+    [InlineData("https://www.instagram.com/example/", false)]
+    public void DirectPosts_ReadRightHandCommentsWithoutOpeningButton(string url, bool expected)
+        => Assert.Equal(expected, InstagramTaskVerificationRules.ShouldReadCommentsWithoutOpening(url));
+
+    [Theory]
+    [InlineData(
+        "https://www.instagram.com/reel/ABCde0123/ и https://www.instagram.com/p/ABCde0123/?knvt=tracking",
+        "https://www.instagram.com/reel/ABCde0123/",
+        "https://www.instagram.com/p/ABCde0123/")]
+    [InlineData(
+        "https://www.instagram.com/reel/ABCde0123/ и https://www.instagram.com/p/DIFFERENT/",
+        "https://www.instagram.com/reel/ABCde0123/",
+        "https://www.instagram.com/reel/ABCde0123/")]
+    [InlineData(
+        "https://www.instagram.com/reel/ABCde0123/",
+        "https://www.instagram.com/reel/ABCde0123/",
+        "https://www.instagram.com/reel/ABCde0123/")]
+    [InlineData(
+        "https://www.instagram.com/p/ABCde0123/",
+        "",
+        "https://www.instagram.com/p/ABCde0123/")]
+    public void VerificationPrefersDirectPostOnlyForMatchingPublication(
+        string taskText, string storedPostUrl, string expected)
+    {
+        Assert.True(InstagramTaskVerificationRules.TryGetVerificationPostUrl(
+            taskText, storedPostUrl, out var selected));
+        Assert.Equal(expected, selected);
+    }
+
+    [Theory]
+    [InlineData("https://www.instagram.com/reels/ABCde0123/", "ABCde0123", true)]
+    [InlineData("https://www.instagram.com/reel/ABCde0123/", "ABCde0123", true)]
+    [InlineData("https://www.instagram.com/p/ABCde0123/?igsh=foo", "ABCde0123", true)]
+    [InlineData("https://www.instagram.com/reels/OTHER1234/", "ABCde0123", false)]
+    [InlineData("https://www.instagram.com/", "ABCde0123", false)]
+    [InlineData("https://example.com/p/ABCde0123/", "ABCde0123", false)]
+    public void PublicationIdentity_DoesNotConfuseReelsViewerWithAnotherPost(
+        string actualUrl, string targetCode, bool expected)
+        => Assert.Equal(expected,
+            InstagramTaskVerificationRules.IsSamePublicationUrl(actualUrl, targetCode));
+
+    [Theory]
     [InlineData("https://www.instagram.com/example/", "example", true)]
     [InlineData("https://www.instagram.com/EXAMPLE/?hl=ru", "example", true)]
     [InlineData("https://www.instagram.com/example.fake/", "example", false)]

@@ -9,6 +9,7 @@ namespace ChatPulse.Desktop.Views.Dialogs;
 public partial class VerifyCompletedTaskDialog : Window
 {
     private readonly string _postUrl;
+    private readonly IReadOnlyList<string> _storyUrls;
     private readonly string _ownAccount;
     private readonly InstagramBrowserService _browser;
     private readonly Func<WorkspaceFailedTaskReport, Task> _saveFailedReport;
@@ -24,6 +25,7 @@ public partial class VerifyCompletedTaskDialog : Window
         _browser = browser;
         _saveFailedReport = saveFailedReport;
         _postUrl = postUrl;
+        _storyUrls = WorkspaceStoryTaskRules.GetStoryOnlyUrls(taskText, postUrl);
         _ownAccount = ownAccount;
         InitializeComponent();
         var suggested = InstagramTaskVerificationRules.SuggestChecks(taskText);
@@ -32,6 +34,18 @@ public partial class VerifyCompletedTaskDialog : Window
         CheckCommentBox.IsChecked = suggested.Comment;
         CheckSaveBox.IsChecked = suggested.Save;
         CheckRepostBox.IsChecked = suggested.Repost;
+        if (_storyUrls.Count > 0)
+        {
+            DialogTitle.Text = "Проверить лайк сторис";
+            CheckCommentBox.IsChecked = false;
+            CheckSaveBox.IsChecked = false;
+            CheckRepostBox.IsChecked = false;
+            CommentRow.Visibility = Visibility.Collapsed;
+            SaveRow.Visibility = Visibility.Collapsed;
+            RepostRow.Visibility = Visibility.Collapsed;
+            CheckLikeBox.Content = "Лайк сторис";
+            LikeLabel.Text = "Лайк сторис";
+        }
         Loaded += (_, _) => UpdateWindowHeightLimits();
         Closed += (_, _) => _cancellation.Dispose();
     }
@@ -139,10 +153,12 @@ public partial class VerifyCompletedTaskDialog : Window
         try
         {
             var progress = new Progress<string>(stage => ProgressText.Text = stage);
-            var result = await _browser.CheckTaskActivityAsync(_postUrl, account,
-                true, CheckCommentBox.IsChecked == true,
-                progress, _cancellation.Token, null,
-                CheckSaveBox.IsChecked == true, CheckRepostBox.IsChecked == true);
+            var result = _storyUrls.Count > 0
+                ? await _browser.CheckStoryLikesAsync(_storyUrls, account, progress, _cancellation.Token)
+                : await _browser.CheckTaskActivityAsync(_postUrl, account,
+                    true, CheckCommentBox.IsChecked == true,
+                    progress, _cancellation.Token, null,
+                    CheckSaveBox.IsChecked == true, CheckRepostBox.IsChecked == true);
             ShowResults(result);
             if (!result.CanHide)
                 await SaveFailedReportAsync(WorkspaceFailedTaskReport.FromPost(result));
@@ -158,7 +174,8 @@ public partial class VerifyCompletedTaskDialog : Window
         {
             var detail = $"Проверка не завершена: {exception.Message}";
             ShowNotice(detail);
-            await SaveFailedReportAsync(WorkspaceFailedTaskReport.FromError("Публикация", account,
+            await SaveFailedReportAsync(WorkspaceFailedTaskReport.FromError(
+                _storyUrls.Count > 0 ? "Сторис" : "Публикация", account,
                 _postUrl, SelectedChecks(), detail));
         }
         finally
@@ -219,7 +236,8 @@ public partial class VerifyCompletedTaskDialog : Window
 
     private void RestoreSelectionView()
     {
-        DialogTitle.Text = "Проверить выполненное задание";
+        DialogTitle.Text = _storyUrls.Count > 0
+            ? "Проверить лайк сторис" : "Проверить выполненное задание";
         ErrorsPanel.Visibility = Visibility.Collapsed;
         SuccessHint.Visibility = Visibility.Collapsed;
         ConfigureResultButtons(false);
@@ -229,6 +247,15 @@ public partial class VerifyCompletedTaskDialog : Window
         RestoreCheckRow(CommentRow, CheckCommentBox, CommentLabel, CommentStatus);
         RestoreCheckRow(SaveRow, CheckSaveBox, SaveLabel, SaveStatus);
         RestoreCheckRow(RepostRow, CheckRepostBox, RepostLabel, RepostStatus);
+        if (_storyUrls.Count > 0)
+        {
+            CommentRow.Visibility = Visibility.Collapsed;
+            SaveRow.Visibility = Visibility.Collapsed;
+            RepostRow.Visibility = Visibility.Collapsed;
+            CheckCommentBox.IsChecked = false;
+            CheckSaveBox.IsChecked = false;
+            CheckRepostBox.IsChecked = false;
+        }
     }
 
     private static void RestoreCheckRow(FrameworkElement row, System.Windows.Controls.CheckBox checkBox,

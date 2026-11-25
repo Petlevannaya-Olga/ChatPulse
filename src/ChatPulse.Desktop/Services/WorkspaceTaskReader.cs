@@ -73,6 +73,21 @@ public sealed class WorkspaceTaskReader(string databasePath, bool pooling = true
         using var hiddenTable = connection.CreateCommand();
         hiddenTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageHidden'";
         var hasHidden = (long)(await hiddenTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        using var ownershipTable = connection.CreateCommand();
+        ownershipTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ImportedMessageAuthorUsernames'";
+        var hasOwnership = (long)(await ownershipTable.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != 0;
+        // Own posts are retained in ImportedChatMessages, but are never task cards,
+        // pending counters or entries in manual/bulk verification queues.
+        var ownPostPredicate = hasOwnership ? """
+            AND NOT EXISTS (
+                SELECT 1 FROM ImportedMessageAuthorUsernames AS identity
+                WHERE identity.TelegramUserId = message.TelegramUserId
+                  AND identity.PeerType = message.PeerType
+                  AND identity.PeerId = message.PeerId
+                  AND identity.MessageId = message.MessageId
+                  AND identity.IsOwnAuthor = 1
+            )
+            """ : string.Empty;
         var hiddenPredicate = hasHidden ? """
             AND NOT EXISTS (
                 SELECT 1 FROM ImportedMessageHidden AS hidden
@@ -127,6 +142,7 @@ public sealed class WorkspaceTaskReader(string databasePath, bool pooling = true
             {skipJoin}
             WHERE message.TelegramUserId = $owner AND message.PeerType = $peerType AND message.PeerId = $peerId
             {hiddenPredicate}
+            {ownPostPredicate}
             {(onlyMessageId.HasValue ? "AND message.MessageId = $onlyMessageId" : string.Empty)}
             ORDER BY CASE WHEN {timestampColumn} IS NULL THEN 1 ELSE 0 END ASC,
                      {timestampColumn} {(oldestFirst ? "ASC" : "DESC")},
@@ -152,9 +168,12 @@ public sealed class WorkspaceTaskReader(string databasePath, bool pooling = true
         {
             var messageId = reader.GetInt64(0);
             var messageText = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-            // URL-less messages, participant registers and post-chat rules are not task cards.
+            // Administrator join/leave announcements can contain many numbered URLs.
+            // Such messages may look like participant registers by sheer link count,
+            // but they remain task notifications rather than complete registers.
+            var isFollowAnnouncement = WorkspaceFollowActions.TryParseAnnouncement(messageText, out _);
             if (!ParticipantListParser.HasAnyLink(messageText) ||
-                listRecognizer.IsCandidate(messageText) ||
+                (listRecognizer.IsCandidate(messageText) && !isFollowAnnouncement) ||
                 ChatRulesMessageClassifier.IsChatRules(messageText)) continue;
             var evidence = ChatActivityAnalyzer.AnalyzeMessage(new ChatActivityMessage(messageId, messageText));
             var postUrl = evidence.PostLinks.FirstOrDefault() ?? string.Empty;

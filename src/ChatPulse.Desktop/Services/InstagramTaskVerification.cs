@@ -147,6 +147,61 @@ public static class InstagramTaskVerificationRules
         "/following-sibling::div[@role='button'][1]";
 
 
+    // A direct /p/ publication displays comments alongside the media.
+    // Do not require a click on the comment counter before looking for
+    // comment rows; Instagram may render multiple large media elements.
+    // Reels and other layouts keep the explicit open-panel path.
+    public static bool ShouldReadCommentsWithoutOpening(string? postUrl) =>
+        TryGetPostUrl(postUrl, out var normalized) &&
+        new Uri(normalized).AbsolutePath.StartsWith("/p/", StringComparison.OrdinalIgnoreCase);
+
+    // Telegram may supply both /reel/ and /p/ links to the same publication.
+    // Prefer /p/ for verification: desktop Instagram normally shows its comments
+    // in the right-hand panel, without opening the scrolling Reels viewer.
+    // A /p/ link to a DIFFERENT shortcode must not replace the saved target.
+    // Instagram may display the same Reel as /reel/, /reels/, or /p/.
+    // The shortcode must still match exactly; a neighbouring Reel is not proof.
+    public static bool IsSamePublicationUrl(string? actualUrl, string expectedShortcode)
+    {
+        if (string.IsNullOrWhiteSpace(expectedShortcode) ||
+            !Uri.TryCreate(actualUrl, UriKind.Absolute, out var uri) ||
+            uri.Host is not ("instagram.com" or "www.instagram.com"))
+            return false;
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2 &&
+            (segments[0].Equals("p", StringComparison.OrdinalIgnoreCase) ||
+             segments[0].Equals("reel", StringComparison.OrdinalIgnoreCase) ||
+             segments[0].Equals("reels", StringComparison.OrdinalIgnoreCase) ||
+             segments[0].Equals("tv", StringComparison.OrdinalIgnoreCase)) &&
+            string.Equals(segments[1], expectedShortcode, StringComparison.Ordinal);
+    }
+
+    public static bool TryGetVerificationPostUrl(string? taskText, string? storedPostUrl,
+        out string postUrl)
+    {
+        var hasStored = TryGetPostUrl(storedPostUrl, out var stored);
+        var presentation = WorkspaceTaskPresentation.Create(taskText, string.Empty);
+        if (TryGetPostUrl(presentation.FeedPostUrl, out var feedPost))
+        {
+            var storedCode = hasStored ? new Uri(stored).Segments.Last().Trim('/') : null;
+            var feedCode = new Uri(feedPost).Segments.Last().Trim('/');
+            if (!hasStored || string.Equals(storedCode, feedCode, StringComparison.Ordinal))
+            {
+                postUrl = feedPost;
+                return true;
+            }
+        }
+
+        if (hasStored)
+        {
+            postUrl = stored;
+            return true;
+        }
+
+        return TryGetPostUrl(presentation.ReelUrl, out postUrl);
+    }
+
     public static bool TryGetPostUrl(string? input, out string postUrl)
     {
         postUrl = string.Empty;

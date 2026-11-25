@@ -52,6 +52,27 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
                     VerifiedAtUtc TEXT NOT NULL,
                     PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId, TargetUserName)
                 );
+                -- Mixed join/leave announcements are stored separately so older
+                -- single-kind records and CHECK constraints remain compatible.
+                CREATE TABLE IF NOT EXISTS ImportedMessageMixedFollowVerified (
+                    TelegramUserId INTEGER NOT NULL,
+                    PeerType TEXT NOT NULL,
+                    PeerId INTEGER NOT NULL,
+                    MessageId INTEGER NOT NULL,
+                    InstagramUserName TEXT NOT NULL,
+                    VerifiedAtUtc TEXT NOT NULL,
+                    PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
+                );
+                CREATE TABLE IF NOT EXISTS ImportedMessageMixedFollowVerifiedActions (
+                    TelegramUserId INTEGER NOT NULL,
+                    PeerType TEXT NOT NULL,
+                    PeerId INTEGER NOT NULL,
+                    MessageId INTEGER NOT NULL,
+                    TargetUserName TEXT NOT NULL COLLATE NOCASE,
+                    ActionKind TEXT NOT NULL CHECK (ActionKind IN ('SUBSCRIBE','UNSUBSCRIBE')),
+                    VerifiedAtUtc TEXT NOT NULL,
+                    PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId, ActionKind, TargetUserName)
+                );
                 CREATE TABLE IF NOT EXISTS ImportedMessageHidden (
                     TelegramUserId INTEGER NOT NULL,
                     PeerType TEXT NOT NULL,
@@ -62,14 +83,14 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
                 """;
             await create.ExecuteNonQueryAsync(cancellationToken);
         }
-        using (var command = connection.CreateCommand())
+        if (verification.TaskKind == WorkspaceTaskKind.MIXED)
         {
+            using var command = connection.CreateCommand();
             command.Transaction = (SqliteTransaction)transaction;
             command.CommandText = """
-                INSERT INTO ImportedMessageSubscriptionVerified (
-                    TelegramUserId, PeerType, PeerId, MessageId,
-                    InstagramUserName, TargetUserName, VerificationKind, VerifiedAtUtc)
-                SELECT $owner, $type, $peer, $message, $viewer, $target, $kind, $at
+                INSERT INTO ImportedMessageMixedFollowVerified
+                    (TelegramUserId, PeerType, PeerId, MessageId, InstagramUserName, VerifiedAtUtc)
+                SELECT $owner, $type, $peer, $message, $viewer, $at
                 WHERE EXISTS (
                     SELECT 1 FROM ImportedChatMessages AS message
                     INNER JOIN ImportedMessageReactionStates AS reaction
@@ -83,8 +104,6 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
                 )
                 ON CONFLICT(TelegramUserId, PeerType, PeerId, MessageId) DO UPDATE SET
                     InstagramUserName = excluded.InstagramUserName,
-                    TargetUserName = excluded.TargetUserName,
-                    VerificationKind = excluded.VerificationKind,
                     VerifiedAtUtc = excluded.VerifiedAtUtc;
                 """;
             command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
@@ -92,11 +111,48 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
             command.Parameters.AddWithValue("$peer", chat.PeerId);
             command.Parameters.AddWithValue("$message", messageId);
             command.Parameters.AddWithValue("$viewer", verification.ViewerUserName);
-            command.Parameters.AddWithValue("$target", verification.TargetUserName);
-            command.Parameters.AddWithValue("$kind", verification.TaskKind.ToString());
             command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
             if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
                 throw new InvalidOperationException("Можно скрыть только выполненное задание выбранного чата.");
+        }
+        else
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = (SqliteTransaction)transaction;
+                command.CommandText = """
+                    INSERT INTO ImportedMessageSubscriptionVerified (
+                        TelegramUserId, PeerType, PeerId, MessageId,
+                        InstagramUserName, TargetUserName, VerificationKind, VerifiedAtUtc)
+                    SELECT $owner, $type, $peer, $message, $viewer, $target, $kind, $at
+                    WHERE EXISTS (
+                        SELECT 1 FROM ImportedChatMessages AS message
+                        INNER JOIN ImportedMessageReactionStates AS reaction
+                            ON reaction.TelegramUserId = message.TelegramUserId
+                           AND reaction.PeerType = message.PeerType
+                           AND reaction.PeerId = message.PeerId
+                           AND reaction.MessageId = message.MessageId
+                        WHERE message.TelegramUserId = $owner AND message.PeerType = $type
+                          AND message.PeerId = $peer AND message.MessageId = $message
+                          AND reaction.HasOwnReaction = 1
+                    )
+                    ON CONFLICT(TelegramUserId, PeerType, PeerId, MessageId) DO UPDATE SET
+                        InstagramUserName = excluded.InstagramUserName,
+                        TargetUserName = excluded.TargetUserName,
+                        VerificationKind = excluded.VerificationKind,
+                        VerifiedAtUtc = excluded.VerifiedAtUtc;
+                    """;
+                command.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+                command.Parameters.AddWithValue("$type", chat.PeerType);
+                command.Parameters.AddWithValue("$peer", chat.PeerId);
+                command.Parameters.AddWithValue("$message", messageId);
+                command.Parameters.AddWithValue("$viewer", verification.ViewerUserName);
+                command.Parameters.AddWithValue("$target", verification.TargetUserName);
+                command.Parameters.AddWithValue("$kind", verification.TaskKind.ToString());
+                command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
+                if (await command.ExecuteNonQueryAsync(cancellationToken) == 0)
+                    throw new InvalidOperationException("Можно скрыть только выполненное задание выбранного чата.");
+            }
         }
         // Persist every confirmed profile in the SAME transaction as hiding the task.
         // If any insert fails, neither the confirmation nor the hide is published.
@@ -129,6 +185,42 @@ public sealed class WorkspaceSubscriptionTaskVerificationStore(string databasePa
             add.Parameters.AddWithValue("$target", InstagramUserName.Normalize(target.TargetUserName));
             add.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
             await add.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (verification.TaskKind == WorkspaceTaskKind.MIXED)
+        {
+            using var clear = connection.CreateCommand();
+            clear.Transaction = (SqliteTransaction)transaction;
+            clear.CommandText = """
+                DELETE FROM ImportedMessageMixedFollowVerifiedActions
+                WHERE TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer AND MessageId=$message
+                """;
+            clear.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+            clear.Parameters.AddWithValue("$type", chat.PeerType);
+            clear.Parameters.AddWithValue("$peer", chat.PeerId);
+            clear.Parameters.AddWithValue("$message", messageId);
+            await clear.ExecuteNonQueryAsync(cancellationToken);
+            foreach (var target in verification.Results)
+            {
+                var actionKind = target.ActionKind;
+                if (actionKind is not (WorkspaceTaskKind.SUBSCRIBE or WorkspaceTaskKind.UNSUBSCRIBE))
+                    throw new InvalidOperationException("У действия отсутствует тип подписки или отписки.");
+                using var insert = connection.CreateCommand();
+                insert.Transaction = (SqliteTransaction)transaction;
+                insert.CommandText = """
+                    INSERT INTO ImportedMessageMixedFollowVerifiedActions
+                        (TelegramUserId, PeerType, PeerId, MessageId,
+                         TargetUserName, ActionKind, VerifiedAtUtc)
+                    VALUES ($owner, $type, $peer, $message, $target, $kind, $at)
+                    """;
+                insert.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+                insert.Parameters.AddWithValue("$type", chat.PeerType);
+                insert.Parameters.AddWithValue("$peer", chat.PeerId);
+                insert.Parameters.AddWithValue("$message", messageId);
+                insert.Parameters.AddWithValue("$target", InstagramUserName.Normalize(target.TargetUserName));
+                insert.Parameters.AddWithValue("$kind", actionKind.ToString());
+                insert.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
+                await insert.ExecuteNonQueryAsync(cancellationToken);
+            }
         }
         using (var hide = connection.CreateCommand())
         {

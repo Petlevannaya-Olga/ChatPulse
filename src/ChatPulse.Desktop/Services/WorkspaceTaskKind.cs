@@ -1,9 +1,9 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ChatPulse.Desktop.Services;
 
-public enum WorkspaceTaskKind { TASK, SUBSCRIBE, UNSUBSCRIBE }
+public enum WorkspaceTaskKind { TASK, SUBSCRIBE, UNSUBSCRIBE, MIXED, STORY }
 
 /// <summary>Classifies Telegram tasks for display and verification routing.</summary>
 public static class WorkspaceTaskKindDetector
@@ -15,13 +15,25 @@ public static class WorkspaceTaskKindDetector
 
     public static WorkspaceTaskKind Detect(string? message, string? postUrl = null)
     {
-        if (string.IsNullOrWhiteSpace(message)) return WorkspaceTaskKind.TASK;
+        if (string.IsNullOrWhiteSpace(message))
+            return WorkspaceStoryTaskRules.IsStoryOnlyTask(message, postUrl)
+                ? WorkspaceTaskKind.STORY : WorkspaceTaskKind.TASK;
         var normalized = message.Normalize(NormalizationForm.FormKC);
 
         // Post/Reel links take priority over follow/unfollow instructions, even if
         // the same message explicitly asks to subscribe and contains a profile URL.
         // The task is verified as engagement with the publication, not as a follow.
         if (HasPublicationLink(message, postUrl)) return WorkspaceTaskKind.TASK;
+
+        // Only direct Stories links (and optional profile links): check likes only.
+        if (WorkspaceStoryTaskRules.IsStoryOnlyTask(message, postUrl))
+            return WorkspaceTaskKind.STORY;
+
+        if (WorkspaceFollowActions.TryParseAnnouncement(message, out var actions))
+        {
+            var first = actions[0].Kind;
+            return actions.Any(action => action.Kind != first) ? WorkspaceTaskKind.MIXED : first;
+        }
 
         // Words such as «Подписка» may occur in ordinary engagement tasks (like,
         // comment, save, repost). Only an actual Instagram profile link can make

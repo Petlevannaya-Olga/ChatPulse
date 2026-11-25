@@ -26,7 +26,8 @@ public static class WorkspaceTaskLinks
             var label = uri.Host.EndsWith("instagram.com", StringComparison.OrdinalIgnoreCase)
                 ? (uri.AbsolutePath.StartsWith("/reel/", StringComparison.OrdinalIgnoreCase)
                     ? "Открыть Reel" : uri.AbsolutePath.StartsWith("/p/", StringComparison.OrdinalIgnoreCase)
-                        ? "Открыть публикацию" : "Открыть Instagram")
+                        ? "Открыть публикацию" : uri.AbsolutePath.StartsWith("/stories/", StringComparison.OrdinalIgnoreCase)
+                            ? "Открыть сторис" : "Открыть Instagram")
                 : uri.Host.EndsWith("t.me", StringComparison.OrdinalIgnoreCase) ? "Открыть Telegram" : "Открыть ссылку";
             parts.Add(new WorkspaceTaskTextPart(label, candidate));
             position = match.Index + candidate.Length;

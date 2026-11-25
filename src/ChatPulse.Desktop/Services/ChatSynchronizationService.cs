@@ -178,7 +178,8 @@ public sealed class ChatSynchronizationService(
                 progress?.Invoke("Сохраняем сообщения в SQLite…");
                 await SaveHistoryAsync(current, messages, cancellationToken);
                 await SaveAuthorsAsync(current, messages, cancellationToken);
-            await SaveMessageDatesAsync(current, messages, cancellationToken);
+                await SaveOwnPostAuthorsAsync(current, messages, cancellationToken);
+                await SaveMessageDatesAsync(current, messages, cancellationToken);
                 await SaveCustomEmojiAsync(current, messages, cancellationToken);
                 await SaveReactionStatesAsync(current, messages, cancellationToken);
                 // SQLite is committed before the success flag. Crash/retry is safe because
@@ -244,6 +245,7 @@ public sealed class ChatSynchronizationService(
             progress?.Invoke($"Получено сообщений: {fetched.Count}. Сохраняем историю в SQLite…");
             await SaveHistoryAsync(current, fetched, cancellationToken);
             await SaveAuthorsAsync(current, fetched, cancellationToken);
+            await SaveOwnPostAuthorsAsync(current, fetched, cancellationToken);
             await SaveMessageDatesAsync(current, fetched, cancellationToken);
             await SaveCustomEmojiAsync(current, fetched, cancellationToken);
             await SaveReactionStatesAsync(current, fetched, cancellationToken);
@@ -254,6 +256,7 @@ public sealed class ChatSynchronizationService(
             var recent = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
             progress?.Invoke($"Получено для перепроверки: {recent.Count}. Сохраняем реакции и данные участников…");
             await SaveAuthorsAsync(current, recent, cancellationToken);
+            await SaveOwnPostAuthorsAsync(current, recent, cancellationToken);
             await SaveMessageDatesAsync(current, recent, cancellationToken);
             await SaveCustomEmojiAsync(current, recent, cancellationToken);
             await SaveReactionStatesAsync(current, recent, cancellationToken);
@@ -472,8 +475,9 @@ public sealed class ChatSynchronizationService(
             progress?.Invoke("Заменяем историю чата в SQLite…");
             await ReplaceHistoryAsync(current, messages, cancellationToken);
             await SaveAuthorsAsync(current, messages, cancellationToken);
+            await SaveOwnPostAuthorsAsync(current, messages, cancellationToken);
             await SaveMessageDatesAsync(current, messages, cancellationToken);
-                await SaveCustomEmojiAsync(current, messages, cancellationToken);
+            await SaveCustomEmojiAsync(current, messages, cancellationToken);
             await SaveReactionStatesAsync(current, messages, cancellationToken);
             var lastId = messages.Count == 0 ? current.LastProcessedMessageId :
                 Math.Max(current.LastProcessedMessageId ?? 0, messages.Max(message => message.MessageId));
@@ -511,6 +515,7 @@ public sealed class ChatSynchronizationService(
             progress?.Invoke("Проверяем реакции на задания…");
             var messages = await telegram.GetRecentChatMessagesAsync(chat, current.HistoryDays, cancellationToken);
             await SaveAuthorsAsync(current, messages, cancellationToken);
+            await SaveOwnPostAuthorsAsync(current, messages, cancellationToken);
             await SaveMessageDatesAsync(current, messages, cancellationToken);
             await SaveCustomEmojiAsync(current, messages, cancellationToken);
             return await SaveReactionStatesAsync(current, messages, cancellationToken);
@@ -674,6 +679,67 @@ public sealed class ChatSynchronizationService(
                 continue;
             id.Value = message.MessageId;
             author.Value = message.AuthorName;
+            await save.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Saves verified Telegram sender usernames without modifying imported messages.
+    /// Unknown identities are never interpreted as proof that a post is our own.
+    /// </summary>
+    private async Task SaveOwnPostAuthorsAsync(ConfiguredChat chat,
+        IReadOnlyList<TelegramChatMessage> messages, CancellationToken cancellationToken)
+    {
+        if (!messages.Any(message => message.IsOwnAuthor.HasValue &&
+            !string.IsNullOrWhiteSpace(message.AuthorUsername))) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        using var setup = connection.CreateCommand();
+        setup.CommandText = """
+            CREATE TABLE IF NOT EXISTS ImportedMessageAuthorUsernames (
+                TelegramUserId INTEGER NOT NULL, PeerType TEXT NOT NULL,
+                PeerId INTEGER NOT NULL, MessageId INTEGER NOT NULL,
+                AuthorUsername TEXT NOT NULL,
+                IsOwnAuthor INTEGER NOT NULL CHECK (IsOwnAuthor IN (0, 1)),
+                PRIMARY KEY (TelegramUserId, PeerType, PeerId, MessageId)
+            );
+            """;
+        await setup.ExecuteNonQueryAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        using var save = connection.CreateCommand();
+        save.Transaction = transaction;
+        save.CommandText = """
+            INSERT INTO ImportedMessageAuthorUsernames
+                (TelegramUserId, PeerType, PeerId, MessageId, AuthorUsername, IsOwnAuthor)
+            SELECT $owner, $type, $peer, $id, $username, $isOwn
+            WHERE EXISTS (
+                SELECT 1 FROM ImportedChatMessages
+                WHERE TelegramUserId = $owner AND PeerType = $type
+                  AND PeerId = $peer AND MessageId = $id
+            )
+            ON CONFLICT(TelegramUserId, PeerType, PeerId, MessageId)
+            DO UPDATE SET AuthorUsername = excluded.AuthorUsername,
+                          IsOwnAuthor = excluded.IsOwnAuthor
+            """;
+        save.Parameters.AddWithValue("$owner", chat.TelegramUserId);
+        save.Parameters.AddWithValue("$type", chat.PeerType);
+        save.Parameters.AddWithValue("$peer", chat.PeerId);
+        var id = save.Parameters.Add("$id", SqliteType.Integer);
+        var username = save.Parameters.Add("$username", SqliteType.Text);
+        var isOwn = save.Parameters.Add("$isOwn", SqliteType.Integer);
+        foreach (var message in messages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (message.IsOwnAuthor is not { } authorMatches ||
+                string.IsNullOrWhiteSpace(message.AuthorUsername)) continue;
+            id.Value = message.MessageId;
+            username.Value = message.AuthorUsername;
+            isOwn.Value = authorMatches ? 1 : 0;
             await save.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);

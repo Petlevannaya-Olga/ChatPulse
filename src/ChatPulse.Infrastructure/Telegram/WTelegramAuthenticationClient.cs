@@ -907,8 +907,13 @@ public sealed class WTelegramAuthenticationClient(
                         .Where(entity => entity.document_id > 0 && entity.offset >= 0 && entity.length > 0)
                         .Select(entity => new TelegramCustomEmoji(entity.offset, entity.length, entity.document_id))
                         .ToArray() ?? [];
+                    // Only the real Telegram sender's @username can identify our own posts.
+                    // A display name, post text or Instagram link is not proof of authorship.
+                    var authorUsername = ResolveMessageAuthorUsername(message, history, dialogs, _client.User);
+                    var isOwnAuthor = TelegramOwnPostMatch.Compare(authorUsername, _client.User?.username);
                     collected.Add(new TelegramChatMessage(message.ID, message.message,
-                        TelegramOwnReactionEvidence.Read(message), author, customEmojis, message.date.ToUniversalTime()));
+                        TelegramOwnReactionEvidence.Read(message), author, customEmojis,
+                        message.date.ToUniversalTime(), authorUsername, isOwnAuthor));
                 }
                 if (reachedCutoff || history.Messages.Length < PAGE_LIMIT) { historyComplete = true; break; }
                 var nextOffset = history.Messages[^1].ID;
@@ -1021,6 +1026,19 @@ public sealed class WTelegramAuthenticationClient(
                 "Telegram не подключён. Вернитесь к шагу авторизации.");
         }
         return user.id;
+    }
+
+    private static string? ResolveMessageAuthorUsername(TL.Message message,
+        TL.Messages_MessagesBase history, TL.IPeerResolver dialogs, TL.User? authorizedUser)
+    {
+        // This is the sender, not the origin of a forwarded post or an anonymous
+        // administrator's signature. Channel posts cannot be attributed to a person.
+        if (message.from_id is not TL.PeerUser sender) return null;
+        if (authorizedUser is not null && sender.user_id == authorizedUser.id)
+            return authorizedUser.username;
+        var user = history.UserOrChat(sender) as TL.User
+            ?? dialogs.UserOrChat(sender) as TL.User;
+        return user?.username;
     }
 
     private static string ResolveMessageAuthor(TL.Message message, TL.Messages_MessagesBase history,
