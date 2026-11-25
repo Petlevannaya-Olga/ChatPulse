@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS ChatParticipantListEntries (
     WeekendFromDate         TEXT,
     WeekendToDate           TEXT,
     WeekendSourceText       TEXT,
+    ResolutionNote          TEXT,
     UNIQUE (SnapshotId, SourceOrdinal)
 );
 CREATE INDEX IF NOT EXISTS IX_ChatParticipantListEntries_SnapshotUsername

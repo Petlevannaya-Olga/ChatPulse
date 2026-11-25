@@ -24,7 +24,8 @@ public sealed record ParticipantHistoryEntry(
     string? SourceProfileUrl = null,
     DateOnly? WeekendFromDate = null,
     DateOnly? WeekendToDate = null,
-    string? WeekendSourceText = null);
+    string? WeekendSourceText = null,
+    string? ResolutionNote = null);
 
 /// <summary>
 /// The caller discovers *candidate* Telegram messages and validates them under
@@ -543,19 +544,41 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
         => section.Contains("ШТРАФНЫ", StringComparison.OrdinalIgnoreCase) ||
            section.Contains("ВЫХОДНЫ", StringComparison.OrdinalIgnoreCase);
 
-    private static bool TryNormalizeProfile(string? input, out string username, out string url)
+    // Instagram identities retain their original keys for backwards compatibility.
+    // Telegram identities are prefixed to avoid collisions. Invite tokens are
+    // case-sensitive: hexadecimal encoding prevents OrdIgnoreCase conflation.
+    internal static bool TryNormalizeProfile(string? input, out string username, out string url)
     {
         username = string.Empty;
         url = string.Empty;
         if (!Uri.TryCreate(input, UriKind.Absolute, out var uri) ||
             uri.Scheme != Uri.UriSchemeHttps ||
-            uri.Host is not "instagram.com" and not "www.instagram.com" ||
             !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment)) return false;
         var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length != 1) return false;
-        try { username = InstagramUserName.Normalize(Uri.UnescapeDataString(segments[0])); }
-        catch (ArgumentException) { return false; }
-        url = $"https://www.instagram.com/{username}";
+        var raw = Uri.UnescapeDataString(segments[0]);
+        if (uri.Host is "instagram.com" or "www.instagram.com")
+        {
+            try { username = InstagramUserName.Normalize(raw); }
+            catch (ArgumentException) { return false; }
+            url = $"https://www.instagram.com/{username}";
+            return true;
+        }
+        if (uri.Host is not ("t.me" or "www.t.me")) return false;
+        if (raw.StartsWith('+'))
+        {
+            var token = raw[1..];
+            if (token.Length is < 8 or > 128 ||
+                token.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not ('_' or '-')))
+                return false;
+            username = "tgi:" + Convert.ToHexString(Encoding.UTF8.GetBytes(token));
+            url = "https://t.me/+" + token;
+            return true;
+        }
+        if (raw.Length is < 5 or > 32 ||
+            raw.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '_')) return false;
+        username = "tg:" + raw.ToLowerInvariant();
+        url = "https://t.me/" + raw.ToLowerInvariant();
         return true;
     }
 
@@ -602,6 +625,20 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        // Additive migration: existing installations already have the history table.
+        using var pragma = connection.CreateCommand();
+        pragma.CommandText = "PRAGMA table_info(ChatParticipantListEntries)";
+        var hasNote = false;
+        await using (var columns = await pragma.ExecuteReaderAsync(cancellationToken))
+            while (await columns.ReadAsync(cancellationToken))
+                if (string.Equals(columns.GetString(1), "ResolutionNote", StringComparison.OrdinalIgnoreCase))
+                    hasNote = true;
+        if (!hasNote)
+        {
+            using var migration = connection.CreateCommand();
+            migration.CommandText = "ALTER TABLE ChatParticipantListEntries ADD COLUMN ResolutionNote TEXT";
+            await migration.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private static SqliteCommand NewCommand(SqliteConnection connection, SqliteTransaction? transaction, string sql)
@@ -708,10 +745,10 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
                 (SnapshotId, SourceOrdinal, SourcePosition, SourceSection,
                  InstagramUsername, SourceProfileUrl, SubscriptionProfileUrl, ActivityProfileUrl,
                  DisplayName, Category, IsWeekend, IsPenalty,
-                 WeekendFromDate, WeekendToDate, WeekendSourceText)
+                 WeekendFromDate, WeekendToDate, WeekendSourceText, ResolutionNote)
             VALUES ($snapshot, $ordinal, $position, $section, $username, $source,
                     $subscription, $activity, $name, $category, $weekend, $penalty,
-                    $from, $to, $note)
+                    $from, $to, $note, $resolution)
             """);
         var raw = entry.Raw;
         command.Parameters.AddWithValue("$snapshot", snapshotId);
@@ -729,6 +766,7 @@ public sealed class ChatParticipantHistoryStore(string databasePath)
         command.Parameters.AddWithValue("$from", (object?)raw.WeekendFromDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? DBNull.Value);
         command.Parameters.AddWithValue("$to", (object?)raw.WeekendToDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? DBNull.Value);
         command.Parameters.AddWithValue("$note", (object?)raw.WeekendSourceText ?? DBNull.Value);
+        command.Parameters.AddWithValue("$resolution", (object?)raw.ResolutionNote ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

@@ -119,20 +119,21 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!TryUsername(participant.SubscriptionProfileUrl, out var username))
-                    throw new InvalidOperationException("Недопустимый Instagram username в проверенном списке.");
+                    throw new InvalidOperationException("Недопустимая ссылка на профиль в проверенном списке.");
                 var hasExisting = existing.TryGetValue(username, out var id);
                 using var command = Command(connection, transaction, hasExisting ? """
                     UPDATE ChatParticipants SET Position=$position, DisplayName=$name,
                         SubscriptionProfileUrl=$subscription, ActivityProfileUrl=$activity,
-                        Category=$category, Status=$status, IsCurrent=1, SourceMessageId=$source
+                        Category=$category, Status=$status, ResolutionNote=$resolution,
+                        IsCurrent=1, SourceMessageId=$source
                     WHERE ParticipantId=$id AND TelegramUserId=$owner AND PeerType=$type AND PeerId=$peer
                     """ : """
                     INSERT INTO ChatParticipants
                         (TelegramUserId, PeerType, PeerId, Position, DisplayName,
                          SubscriptionProfileUrl, ActivityProfileUrl, Category,
-                         Status, IsCurrent, SourceMessageId)
+                         Status, ResolutionNote, IsCurrent, SourceMessageId)
                     VALUES ($owner, $type, $peer, $position, $name,
-                            $subscription, $activity, $category, $status, 1, $source)
+                            $subscription, $activity, $category, $status, $resolution, 1, $source)
                     """);
                 AddChat(command, chat);
                 if (hasExisting) command.Parameters.AddWithValue("$id", id);
@@ -144,6 +145,7 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
                 command.Parameters.AddWithValue("$status", participant.IsPenalty ? "PENALTY" :
                     participant.IsWeekend ? "WEEKEND" : "ACTIVE");
                 command.Parameters.AddWithValue("$source", latest.MessageId);
+                command.Parameters.AddWithValue("$resolution", (object?)participant.ResolutionNote ?? DBNull.Value);
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
             using (var cursor = Command(connection, transaction, """
@@ -202,16 +204,7 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
     }
 
     private static bool TryUsername(string profile, out string username)
-    {
-        username = string.Empty;
-        if (!Uri.TryCreate(profile, UriKind.Absolute, out var uri) ||
-            uri.Host is not ("instagram.com" or "www.instagram.com")) return false;
-        var path = uri.AbsolutePath.Trim('/');
-        if (path.Contains('/') || path.Length == 0) return false;
-        try { username = InstagramUserName.Normalize(Uri.UnescapeDataString(path)); }
-        catch (ArgumentException) { return false; }
-        return true;
-    }
+        => ChatParticipantHistoryStore.TryNormalizeProfile(profile, out username, out _);
 
     private static async Task EnsureLiveSchemaAsync(SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -229,7 +222,7 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
                 Position INTEGER, DisplayName TEXT, SubscriptionProfileUrl TEXT NOT NULL,
                 ActivityProfileUrl TEXT NOT NULL, Category TEXT NOT NULL,
                 Status TEXT NOT NULL, IsCurrent INTEGER NOT NULL CHECK (IsCurrent IN (0, 1)),
-                SourceMessageId INTEGER NOT NULL
+                SourceMessageId INTEGER NOT NULL, ResolutionNote TEXT
             );
             CREATE INDEX IF NOT EXISTS IX_ChatParticipants_Chat
                 ON ChatParticipants(TelegramUserId, PeerType, PeerId);
@@ -252,6 +245,18 @@ public sealed class ChatParticipantDailySyncStore(string databasePath)
             if (columns.Contains(column)) continue;
             using var migration = Command(connection, null,
                 $"ALTER TABLE ChatParticipantRegistryVersions ADD COLUMN {column} INTEGER");
+            await migration.ExecuteNonQueryAsync(cancellationToken);
+        }
+        // Existing ChatParticipants tables need the optional provenance field.
+        using var participantPragma = Command(connection, null, "PRAGMA table_info(ChatParticipants)");
+        var participantColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var reader = await participantPragma.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                participantColumns.Add(reader.GetString(1));
+        if (!participantColumns.Contains("ResolutionNote"))
+        {
+            using var migration = Command(connection, null,
+                "ALTER TABLE ChatParticipants ADD COLUMN ResolutionNote TEXT");
             await migration.ExecuteNonQueryAsync(cancellationToken);
         }
     }

@@ -1,4 +1,4 @@
-<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
+﻿<UserControl x:Class="ChatPulse.Desktop.Views.Workspace.WorkspaceView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:ChatPulse.Desktop.Views.Workspace"
@@ -1232,6 +1232,38 @@
                                 <Border Grid.Column="0" Margin="0,0,7,0" MinHeight="142"
                                         Background="#FAF7FE" BorderBrush="#E8DBF5"
                                         BorderThickness="1" CornerRadius="12" Padding="14,12">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsTelegramParticipantChat}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock Text="Участницы Telegram" FontSize="14" FontWeight="SemiBold"
+                                                   Foreground="#39295F" />
+                                        <TextBlock Text="Список участников чата, штрафные дни и история изменений."
+                                                   Foreground="#827393" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0" />
+                                        <TextBlock Text="Проверка подписок Instagram здесь не применяется."
+                                                   Foreground="#827393" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Grid.Column="0" Margin="0,0,7,0" MinHeight="142"
+                                        Background="#FAF7FE" BorderBrush="#E8DBF5"
+                                        BorderThickness="1" CornerRadius="12" Padding="14,12">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsTelegramParticipantChat}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="*" />
@@ -1330,7 +1362,17 @@
                                           IsChecked="{Binding ShowOnlySubscriptionDiscrepancies, Mode=TwoWay}"
                                           Foreground="#39295F" FontSize="12" FontWeight="SemiBold"
                                           VerticalAlignment="Center" Margin="0,0,18,0"
-                                          ToolTip="Показать только участниц с расхождениями; без отметки — всех" />
+                                          ToolTip="Показать только участниц с расхождениями; без отметки — всех">
+                                    <CheckBox.Style>
+                                        <Style TargetType="CheckBox">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsTelegramParticipantChat}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </CheckBox.Style>
+                                </CheckBox>
                                 <Border Grid.Column="1" MinWidth="180"
                                         HorizontalAlignment="Stretch" Background="#FCFAFF" BorderBrush="#DED0EE"
                                         BorderThickness="1" CornerRadius="10" Padding="11,4" MinHeight="44">
@@ -1417,6 +1459,15 @@
                                               BorderThickness="0" Background="Transparent"
                                               AlternatingRowBackground="#FCFAFF" RowBackground="White"
                                               SelectionMode="Single" SelectionUnit="FullRow">
+                                    <DataGrid.Style>
+                                        <Style TargetType="DataGrid">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsTelegramParticipantChat}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </DataGrid.Style>
                                     <DataGrid.Resources>
                                         <!-- Use the Mnemora-style fixed-length thumb in this table only. -->
                                         <Style TargetType="{x:Type ScrollBar}"
@@ -1566,13 +1617,70 @@
                                     </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                                     </DataGrid>
+                                    <DataGrid ItemsSource="{Binding TelegramParticipantRowsView}"
+                                              AutoGenerateColumns="False" IsReadOnly="True"
+                                              CanUserAddRows="False" CanUserDeleteRows="False"
+                                              GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E8DEF1"
+                                              AlternatingRowBackground="#FCFAFF" RowBackground="White"
+                                              BorderThickness="0" Background="White"
+                                              ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                        <DataGrid.Style>
+                                            <Style TargetType="DataGrid">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsTelegramParticipantChat}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </DataGrid.Style>
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="№" Width="65" Binding="{Binding PositionLabel}" />
+                                            <DataGridTextColumn Header="Участница / тематика" Width="3*" Binding="{Binding DisplayName}" />
+                                            <DataGridTextColumn Header="Категория" Width="1.5*" Binding="{Binding Category}" />
+                                            <DataGridTemplateColumn Header="Telegram" Width="2*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Margin="8,5" TextWrapping="Wrap">
+                                                            <Hyperlink NavigateUri="{Binding ProfileUrl}"
+                                                                       RequestNavigate="OpenTelegramProfileLink_OnRequestNavigate">
+                                                                <Run Text="{Binding ProfileLabel, Mode=OneWay}" />
+                                                            </Hyperlink>
+                                                        </TextBlock>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTextColumn Header="Статус" Width="1.5*" Binding="{Binding StatusLabel}" />
+                                            <DataGridTemplateColumn Header="Примечание" Width="2.5*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding ResolutionNote}"
+                                                                   ToolTip="{Binding ResolutionNote}"
+                                                                   Foreground="#827393" FontSize="11"
+                                                                   Margin="8,5" TextTrimming="CharacterEllipsis"
+                                                                   TextWrapping="NoWrap" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
                                     <!-- Same 24px top-right filler used by Mnemora's library tables. -->
                                     <Border Panel.ZIndex="20"
                                             Width="24" Height="48"
                                             HorizontalAlignment="Right" VerticalAlignment="Top"
                                             Background="#F8F4FD" BorderBrush="#E8DEF1"
                                             BorderThickness="0,0,0,1" CornerRadius="0,11,0,0"
-                                            IsHitTestVisible="False" />
+                                            IsHitTestVisible="False">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsTelegramParticipantChat}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                    </Border>
                                 </Grid>
                             </Border>
                         </Grid>

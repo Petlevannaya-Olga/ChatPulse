@@ -307,9 +307,9 @@ public sealed class ChatSynchronizationService(
 
             var registry = new ChatParticipantRegistry(databasePath);
             var previous = await registry.ReadLatestSourceAsync(current, cancellationToken);
-            var parser = ChatParticipantHistoryRuleSelection.SupportsChat14(current)
-                ? (IChatParticipantHistoryParser)new Chat14ParticipantHistoryParser()
-                : new StandardParticipantHistoryParser(
+            IChatParticipantHistoryParser parser =
+                ChatParticipantHistoryRuleSelection.CreateConfiguredParser(current) ??
+                new StandardParticipantHistoryParser(
                     current.SocialNetwork.Equals("Instagram", StringComparison.OrdinalIgnoreCase));
             var telegramChat = new TelegramChatOption(current.PeerId, current.PeerType,
                 current.TelegramTitle, current.PeerType == "Chat" ? "Группа" : "Канал");
@@ -349,9 +349,12 @@ public sealed class ChatSynchronizationService(
                 progress?.Invoke(new(ParticipantListSyncStage.SEARCH,
                     $"Проверяем список Telegram №{item.MessageId}…",
                     SourceMessageSentAtUtc: item.SentAtUtc));
-                Func<string, CancellationToken, Task<bool?>>? browserCheck = profileOpens is null
-                    ? null : (url, _) => Task.FromResult(profileOpens(url));
-                var parsed = profileOpens is null
+                // Telegram participant links are never sent to the Instagram browser.
+                var instagramCheck = current.SocialNetwork.Equals("Instagram",
+                    StringComparison.OrdinalIgnoreCase) ? profileOpens : null;
+                Func<string, CancellationToken, Task<bool?>>? browserCheck = instagramCheck is null
+                    ? null : (url, _) => Task.FromResult(instagramCheck(url));
+                var parsed = instagramCheck is null
                     ? await parser.ParseAsync(item.Text, item.SentAtUtc, known,
                         browserCheck, cancellationToken)
                     : await Task.Run(() => parser.ParseAsync(item.Text, item.SentAtUtc,

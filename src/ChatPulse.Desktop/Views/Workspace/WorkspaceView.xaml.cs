@@ -86,6 +86,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
     private bool _failedTaskPagePrepend;
     private bool _isRebuildingChatList;
     private readonly ICollectionView _subscriptionRowsView;
+    private readonly ICollectionView _telegramParticipantRowsView;
     private bool _showOnlySubscriptionDiscrepancies;
     private InstagramParticipantCategoryCounts? _subscriptionTileCounts;
     private int _subscriptionTileLoadVersion;
@@ -129,6 +130,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             widthDescriptor?.AddValueChanged(column, SubscriptionColumnWidth_OnChanged);
         _subscriptionRowsView = CollectionViewSource.GetDefaultView(SubscriptionRows);
         _subscriptionRowsView.Filter = FilterSubscriptionRow;
+        _telegramParticipantRowsView = CollectionViewSource.GetDefaultView(TelegramParticipantRows);
+        _telegramParticipantRowsView.Filter = FilterTelegramParticipantRow;
         DataContext = this;
         CollectionViewSource.GetDefaultView(Tasks).GroupDescriptions.Add(
             new PropertyGroupDescription(nameof(WorkspaceTaskCard.DateGroupLabel)));
@@ -161,6 +164,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             Notify();
             Notify(nameof(SelectedChatTitle));
             Notify(nameof(SelectedChatNetwork));
+            Notify(nameof(IsTelegramParticipantChat));
             Notify(nameof(SelectedChatTaskCount));
             Notify(nameof(IsCompletedTasksSelected));
             Notify(nameof(IsPendingTasksSelected));
@@ -170,6 +174,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     public string SelectedChatTitle => SelectedChat?.Title ?? "Выберите чат";
     public string SelectedChatNetwork => SelectedChat?.Network ?? string.Empty;
+    public bool IsTelegramParticipantChat =>
+        ChatParticipantHistoryRuleSelection.SupportsChat16Telegram(SelectedChat?.Chat);
     public string SelectedChatTaskCount => SelectedChat is null ? "—" : SelectedChat.DetectedCount.ToString();
     public string TotalDetected => _totalDetected.ToString();
     public string ConnectedChatCount => Chats.Count.ToString();
@@ -275,14 +281,16 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     public bool CanRebuildParticipantHistory => !IsBusy && !_instagramBusy &&
         !_historyImportRunning && _participantHistoryReader is not null &&
-        ChatParticipantHistoryRuleSelection.SupportsChat14(SelectedHistoryChat?.Chat);
+        ChatParticipantHistoryRuleSelection.CreateConfiguredParser(SelectedHistoryChat?.Chat) is not null;
 
     public string ParticipantHistoryRulesHint => SelectedHistoryChat is null
         ? "Выберите подключённый чат."
         : ChatParticipantHistoryRuleSelection.SupportsChat14(SelectedHistoryChat.Chat)
             ? "Для этого чата настроены правила 14-го чата. Будут проверены все доступные списки Telegram."
-            : "Исторический парсер для выбранного чата пока не настроен. " +
-              "Правила 14-го чата не будут применяться к чужим спискам.";
+            : ChatParticipantHistoryRuleSelection.SupportsChat16Telegram(SelectedHistoryChat.Chat)
+                ? "Для этого Telegram-чата настроен разбор полного списка с руководством, штрафными днями и повторными блоками."
+                : "Исторический парсер для выбранного чата пока не настроен. " +
+                  "Правила других чатов применяться не будут.";
 
     public string ParticipantHistoryLastReport
     {
@@ -326,6 +334,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
     public ObservableCollection<InstagramParticipantOption> InstagramParticipants { get; } = [];
     public ObservableCollection<InstagramSubscriptionRow> SubscriptionRows { get; } = [];
+    public ObservableCollection<TelegramParticipantRow> TelegramParticipantRows { get; } = [];
+    public ICollectionView TelegramParticipantRowsView => _telegramParticipantRowsView;
     public ICollectionView SubscriptionRowsView => _subscriptionRowsView;
     public string SubscriptionCountLabel => FormatSubscriptionCount(_subscriptionTileCounts?.Total);
 
@@ -354,6 +364,17 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         var request = ++_subscriptionTileLoadVersion;
         try
         {
+            if (ChatParticipantHistoryRuleSelection.SupportsChat16Telegram(chat.Chat))
+            {
+                var telegramRows = await new TelegramParticipantReadStore(_reader.DatabasePath)
+                    .ReadCurrentAsync(chat.Chat);
+                if (request == _subscriptionTileLoadVersion && ReferenceEquals(chat, SelectedChat))
+                    SetSubscriptionTileCounts(new InstagramParticipantCategoryCounts(
+                        telegramRows.Count(row => InstagramBatchEligibility.IsExcluded(row.Category)),
+                        0,
+                        telegramRows.Count(row => !InstagramBatchEligibility.IsExcluded(row.Category))));
+                return;
+            }
             var lookup = new InstagramParticipantLookup(_reader.DatabasePath);
             var participants = await lookup.ReadAllCurrentAsync([chat.Chat]);
             // The participant-list tile shows the full Telegram register. Own accounts
@@ -480,6 +501,7 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             _subscriptionQuery = value;
             Notify();
             _subscriptionRowsView.Refresh();
+            _telegramParticipantRowsView.Refresh();
         }
     }
 
@@ -562,6 +584,35 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
 
         try
         {
+            if (ChatParticipantHistoryRuleSelection.SupportsChat16Telegram(currentChat.Chat))
+            {
+                var telegramRegistry = new ChatParticipantRegistry(_reader.DatabasePath);
+                var latest = await telegramRegistry.ReadLatestSourceAsync(currentChat.Chat);
+                var attempt = await telegramRegistry.ReadLastAttemptAsync(currentChat.Chat);
+                var telegram = await new TelegramParticipantReadStore(_reader.DatabasePath)
+                    .ReadCurrentAsync(currentChat.Chat);
+                if (request != _subscriptionRowsLoadVersion ||
+                    !ReferenceEquals(currentChat, SelectedChat)) return;
+                TelegramParticipantRows.Clear();
+                foreach (var row in telegram) TelegramParticipantRows.Add(row);
+                SubscriptionRows.Clear();
+                _subscriptionRowsView.Refresh();
+                LatestSubscriptionBatch = null;
+                IsSubscriptionReviewRequired = false;
+                SetLatestParticipantListSource(latest);
+                _latestParticipantListAttempt = attempt;
+                var administration = telegram.Count(row =>
+                    InstagramBatchEligibility.IsExcluded(row.Category));
+                SetSubscriptionTileCounts(new InstagramParticipantCategoryCounts(
+                    administration, 0, telegram.Count - administration));
+                SubscriptionsSummary = $"В списке Telegram: {telegram.Count}. " +
+                    $"Штрафных дней: {telegram.Count(row => row.Status == "PENALTY")}. " +
+                    "Проверка Instagram-подписок для этого чата не применяется.";
+                SubscriptionsSyncMessage = attempt?.Status == ParticipantListApplyStatus.UNPARSEABLE_MESSAGE
+                    ? attempt.Description : string.Empty;
+                return;
+            }
+            TelegramParticipantRows.Clear();
             // Read everything before changing the visible rows or last successful batch.
             // A transient database error must not leave the screen empty.
             var settings = await _settings.LoadAsync();
@@ -641,6 +692,17 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private bool FilterTelegramParticipantRow(object value)
+    {
+        if (value is not TelegramParticipantRow row) return false;
+        var query = _subscriptionQuery.Trim().TrimStart('@');
+        return query.Length == 0 ||
+               row.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               row.Category.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               row.ProfileLabel.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               row.StatusLabel.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
     private bool FilterSubscriptionRow(object value)
     {
         if (value is not InstagramSubscriptionRow row) return false;
@@ -667,18 +729,38 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
         }
     }
 
+    private void OpenTelegramProfileLink_OnRequestNavigate(object sender,
+        RequestNavigateEventArgs args)
+    {
+        args.Handled = true;
+        if (args.Uri is not { IsAbsoluteUri: true } uri ||
+            uri.Scheme != Uri.UriSchemeHttps || uri.Host is not ("t.me" or "www.t.me"))
+            return;
+        try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
+        catch (Exception)
+        {
+            MessageBox.Show("Не удалось открыть Telegram-ссылку.", "ChatPulse",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void CheckAllInstagramParticipantsButton_OnClick(object sender, RoutedEventArgs args)
-        => ShowSubscriptionCheckDialog(null, InstagramCheckDirections.BOTH);
+    {
+        if (!IsTelegramParticipantChat)
+            ShowSubscriptionCheckDialog(null, InstagramCheckDirections.BOTH);
+    }
 
     private void CheckRowIFollowButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (sender is Button { Tag: InstagramSubscriptionRow participant } && participant.CanCheckFollowing)
+        if (!IsTelegramParticipantChat &&
+            sender is Button { Tag: InstagramSubscriptionRow participant } && participant.CanCheckFollowing)
             ShowSubscriptionCheckDialog(participant, InstagramCheckDirections.FOLLOWING);
     }
 
     private void CheckRowFollowsMeButton_OnClick(object sender, RoutedEventArgs args)
     {
-        if (sender is not Button { Tag: InstagramSubscriptionRow participant } ||
+        if (IsTelegramParticipantChat ||
+            sender is not Button { Tag: InstagramSubscriptionRow participant } ||
             !participant.CanCheckFollowers) return;
         ShowSubscriptionCheckDialog(participant, InstagramCheckDirections.FOLLOWERS);
     }
@@ -1885,15 +1967,19 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
             try
             {
                 var store = new ChatParticipantHistoryStore(_reader.DatabasePath);
+                var parser = ChatParticipantHistoryRuleSelection.CreateConfiguredParser(chat)
+                    ?? throw new InvalidOperationException("Парсер списка для этого чата не настроен.");
                 var service = new ChatParticipantHistoryImportService(_participantHistoryReader,
-                    store, new Chat14ParticipantHistoryParser());
+                    store, parser);
                 void Post(Action action)
                 {
                     _ = dialog.Dispatcher.BeginInvoke(DispatcherPriority.Background, action);
                 }
 
                 var result = await service.RebuildAsync(chat,
-                    (url, token) => _instagramBrowser.ProfileOpensAsync(url, token),
+                    ChatParticipantHistoryRuleSelection.SupportsChat14(chat)
+                        ? (url, token) => _instagramBrowser.ProfileOpensAsync(url, token)
+                        : null,
                     cancellation.Token,
                     (pages, scanned, found) => Post(() =>
                         dialog.SetPageProgress(pages, scanned, found)),
@@ -2007,6 +2093,8 @@ public partial class WorkspaceView : UserControl, INotifyPropertyChanged
                     }, cancellation.Token,
                     profileUrl =>
                     {
+                        if (ChatParticipantHistoryRuleSelection.SupportsChat16Telegram(selected.Chat))
+                            return null;
                         var userName = InstagramActivityProfile.TryGetUserName(profileUrl);
                         var update = new ParticipantListSyncProgress(ParticipantListSyncStage.SAVE,
                             $"Проверяем страницу Instagram @{userName}…");
